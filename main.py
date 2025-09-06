@@ -198,7 +198,7 @@ if __name__ == "__main__":
                         help='Target loss value for training')
     parser.add_argument('--skewed-distribution', action='store_true',
                         help='Whether to use a skewed distribution for training data')
-    parser.add_argument('--device', type=str, default='cpu', help='Device to store the data on. Use cuda:0 in collab')
+    parser.add_argument('--device', type=str, default='mps', help='Device to store the data on. Use mps (Apple Silicon), cuda:0 (NVIDIA), or cpu')
     parser.add_argument('--target-logic-gates', type=str, nargs='+',
                         default=['AND'], choices=ALL_LOGIC_GATES.keys(),
                         help='The allowed target logic gates')
