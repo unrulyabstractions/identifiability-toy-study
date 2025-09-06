@@ -8,11 +8,11 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
-from mi_identifiability.circuit import find_circuits
-from mi_identifiability.mappings import find_minimal_mappings
-from mi_identifiability.logic_gates import ALL_LOGIC_GATES, generate_noisy_multi_gate_data, get_formula_dataset
-from mi_identifiability.neural_model import MLP
-from mi_identifiability.utils import setup_logging, set_seeds
+from identifiability_toy_study.mi_identifiability.circuit import find_circuits
+from identifiability_toy_study.mi_identifiability.mappings import find_minimal_mappings
+from identifiability_toy_study.mi_identifiability.logic_gates import ALL_LOGIC_GATES, generate_noisy_multi_gate_data, get_formula_dataset
+from identifiability_toy_study.mi_identifiability.neural_model import MLP
+from identifiability_toy_study.mi_identifiability.utils import setup_logging, set_seeds
 
 
 def run_experiment(logger, output_dir, run_dir, args):
@@ -30,7 +30,7 @@ def run_experiment(logger, output_dir, run_dir, args):
             logger.error(f'Previous run data {args.resume_from} not found, starting from scratch')
 
     all_logic_gates = [ALL_LOGIC_GATES[gate] for gate in args.target_logic_gates]
-    formula_dataset = {depth: get_formula_dataset(all_logic_gates, max_depth=depth + 1) for depth in args.depth}
+    formula_dataset = {depth: get_formula_dataset(all_logic_gates, max_depth=depth + 1, device=args.device) for depth in args.depth}
 
     for n_gates, seed_offset in product(args.n_gates, range(args.n_experiments)):
         gates = random.sample(all_logic_gates, k=n_gates)
@@ -46,6 +46,7 @@ def run_experiment(logger, output_dir, run_dir, args):
         print(f'Iteration # {seed_offset}')
         weights = None
         if args.skewed_distribution:
+            print('using skewed_distribution')
             weights = [random.random() for _ in range(2 ** n_inputs)]
 
         if n_gates > 1:
@@ -60,6 +61,7 @@ def run_experiment(logger, output_dir, run_dir, args):
                                                         noise_std=args.noise_std, device=args.device)
 
         for k, depth, loss_target, lr in product(args.size, args.depth, args.loss_target, args.learning_rate):
+            print(f'run  k:{k} depth:{depth} loss_target:{loss_target} lr:{lr}')
             set_seeds(args.seed + seed_offset)
 
             skip_exp = False
@@ -110,6 +112,7 @@ def run_experiment(logger, output_dir, run_dir, args):
 
             submodels = model.separate_into_k_mlps()
             for i, submodel in enumerate(submodels):
+                print(f'Submodel # {i}')
                 top_circuits, sparsities, _ = find_circuits(
                     submodel,
                     x_val,
@@ -178,9 +181,9 @@ if __name__ == "__main__":
                         help='Number of hidden layers in the neural networks')
     parser.add_argument('--n-repeats', type=int, default=10,
                         help='Number of times to repeat the data for circuit search')
-    parser.add_argument('--n-experiments', type=int, default=100,
+    parser.add_argument('--n-experiments', type=int, default=1,
                         help='Runs each experiment n times with different seeds')
-    parser.add_argument('--noise-std', type=float, default=0.1, help='Standard deviation of the Gaussian noise')
+    parser.add_argument('--noise-std', type=float, default=0.0, help='Standard deviation of the Gaussian noise')
     parser.add_argument('--n-samples-train', type=int, default=1000, help='Number of samples for training')
     parser.add_argument('--n-samples-val', type=int, default=50, help='Number of samples for validation')
     parser.add_argument('--n-gates', type=int, nargs='+', default=[1],
@@ -191,18 +194,18 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=1000, help='Number of epochs for training')
     parser.add_argument('--max-circuits', type=int, default=None, help='Maximum number of circuits used for grounding')
     parser.add_argument('--min-sparsity', type=float, default=0.0, help='Minimum sparsity for circuit search')
-    parser.add_argument('--loss-target', type=float, nargs='+', default=[0.01],
+    parser.add_argument('--loss-target', type=float, nargs='+', default=[0.001],
                         help='Target loss value for training')
     parser.add_argument('--skewed-distribution', action='store_true',
                         help='Whether to use a skewed distribution for training data')
-    parser.add_argument('--device', type=str, default='cuda:0', help='Device to store the data on')
+    parser.add_argument('--device', type=str, default='cpu', help='Device to store the data on. Use cuda:0 in collab')
     parser.add_argument('--target-logic-gates', type=str, nargs='+',
-                        default=['AND', 'OR', 'IMP', 'NAND', 'NOR', 'NIMP', 'XOR'], choices=ALL_LOGIC_GATES.keys(),
+                        default=['AND'], choices=ALL_LOGIC_GATES.keys(),
                         help='The allowed target logic gates')
-    parser.add_argument('--accuracy-threshold', type=float, default=0.99,
+    parser.add_argument('--accuracy-threshold', type=float, default=0.999,
                         help='The accuracy threshold for circuit search')
-    parser.add_argument('--val-frequency', type=int, default=10, help='Frequency of validation during training')
-    parser.add_argument('--verbose', action='store_true', help='Whether to display extra information')
+    parser.add_argument('--val-frequency', type=int, default=1, help='Frequency of validation during training')
+    parser.add_argument('--verbose', action='store_true', default=True, help='Whether to display extra information')
     parser.add_argument('--resume-from', type=str, default=None, help='Resume from a previous run')
 
     args = parser.parse_args()

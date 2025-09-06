@@ -1,44 +1,13 @@
-# MI-identifiability
+# Identifiability Toy Study
 
-Experiments from the paper can be reproduced with the following commands (some variability is to be expected due to various hardware configurations):
+This repository integrates and extends code from the following projects:
+- [MI-identifiability](https://github.com/MelouxM/MI-identifiability) by Maxime Méloux 
+- [spd](https://github.com/goodfire-ai/spd) by the Goodfire-AI team
+- [circuit-stability](https://github.com/alansun17904/circuit-stability) by Alan Sun
+- [eap-ig-faithfulness](https://github.com/hannamw/eap-ig-faithfulness) by Hannah W. 
 
-## Main results
+All of the above projects are licensed under MIT (see their LICENSE files).  
+My modifications and additional contributions are © 2025 Ian Rios-Sialer, released under the MIT License.
 
-### Basic setup (also see notebook)
-```bash
-main.py --verbose --val-frequency 1 --noise-std 0.0 --target-logic-gates XOR --n-experiments 100
-```
-
-### Multi-task training
-```bash
-main.py --verbose --val-frequency 1 --noise-std 0.0 --n-gates 1 2 3 4 5 6 --n-experiments 100
-```
-
-### Varying the target gate
-```bash
-main.py --verbose --val-frequency 1 --noise-std 0.0 --target-logic-gates XOR AND OR IMP --n-experiments 100
-```
-
-### Varying the network's size
-```bash
-main.py --verbose --val-frequency 1 --noise-std 0.0 --target-logic-gates XOR --n-experiments 100 --size 2 3 4 5
-```
-
-## Additional results
-
-### Effect of noisy training
-These results are to be compared with those of the basic setup.
-```bash
-main.py --verbose --val-frequency 1 --noise-std 0.1 --target-logic-gates XOR --n-experiments 100
-```
-
-### Effect of skewed distributions
-These results are to be compared with those of the basic setup.
-```bash
-main.py --verbose --val-frequency 1 --noise-std 0.0 --target-logic-gates XOR --n-experiments 100 --skewed-distribution
-```
-
-### Effect of target loss
-```bash
-main.py --verbose --val-frequency 1 --noise-std 0.0 --target-logic-gates XOR --n-experiments 100 --loss-target 0.1 0.01 0.001 0.0001 0.00001 0.000001
-```
+## Setup:
+pip install git+https://github.com/unrulyabstractions/identifiability-toy-study.git

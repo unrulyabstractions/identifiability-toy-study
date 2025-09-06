@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this work, please also cite the original projects it builds on."
+authors:
+  - family-names: "Méloux"
+    given-names: "Maxime"
+  - name: "Goodfire-AI Team"
+  - family-names: "Sun"
+    given-names: "Alan"
+  - family-names: "W."
+    given-names: "Hannah"
+  - family-names: "Rios-Sialer"
+    given-names: "Ian"
+title: "My Research Project (extensions of MI-identifiability, spd, circuit-stability, and eap-ig-faithfulness)"
+repository-code: "https://github.com/YOUR_USERNAME/my-research-repo"
