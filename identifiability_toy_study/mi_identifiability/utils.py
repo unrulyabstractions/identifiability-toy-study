@@ -9,30 +9,29 @@ import torch
 from matplotlib import pyplot as plt
 
 
-def setup_logging(output_dir=None, log_file=None):
+def setup_logging(log_path=None, debug=False):
     """
     Create a custom logger with a stream handler and a file handler
 
     Args:
-        output_dir: The directory to save the log file
-        log_file: The name of the log file
+        log_path: The path of the log file
 
     Returns:
         The logger
     """
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+    if debug:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
 
     console_handler = logging.StreamHandler()
-
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(funcName)s - %(message)s")
     console_handler.setFormatter(formatter)
 
     logger.addHandler(console_handler)
 
-    if log_file and output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-        log_path = os.path.join(output_dir, log_file)
+    if log_path:
         file_handler = logging.FileHandler(log_path)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
@@ -116,10 +115,9 @@ def set_seeds(seed):
 
     # Set the seed for PyTorch CPU and GPU (if available)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)  # for multi-GPU setups
 
     # Ensure deterministic behavior for PyTorch
+    torch.use_deterministic_algorithms(True)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -182,3 +180,44 @@ def powerset(iterable):
     """
     s = list(iterable)
     return chain.from_iterable(combinations(s, r) for r in range(len(s) + 1))
+
+
+
+from dataclasses import asdict, is_dataclass, dataclass, field
+from typing import Any
+from decimal import Decimal, ROUND_HALF_EVEN
+import hashlib, json, math
+
+def _qfloat(x: float, places: int = 8) -> float:
+    # stable decimal rounding: converts via str -> Decimal -> quantize
+    q = Decimal(1) / (Decimal(10) ** places)     # e.g. 1e-8
+    d = Decimal(str(x)).quantize(q, rounding=ROUND_HALF_EVEN)
+    # normalize -0.0 to 0.0 for stability
+    f = float(d)
+    return 0.0 if f == 0.0 else f
+
+def _canon(obj: Any, places: int = 8):
+    if isinstance(obj, float):
+        if math.isnan(obj):  # avoid NaN destabilizing hashes
+            return "NaN"
+        return _qfloat(obj, places)
+    if is_dataclass(obj):
+        return _canon(asdict(obj), places)
+    if isinstance(obj, dict):
+        return {k: _canon(v, places) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_canon(v, places) for v in obj]
+    return obj
+
+def deterministic_id_from_dataclass(data_class_obj: Any, places: int = 8, digest_bytes: int = 16) -> str:
+    canonical = _canon(data_class_obj, places)
+    payload = json.dumps(
+        canonical,
+        sort_keys=True,                  # stable key order
+        separators=(',', ':'),           # remove whitespace
+        ensure_ascii=False,
+        allow_nan=False
+    )
+    # fast, strong hash in the stdlib
+    h = hashlib.blake2b(payload.encode("utf-8"), digest_size=digest_bytes)
+    return h.hexdigest()

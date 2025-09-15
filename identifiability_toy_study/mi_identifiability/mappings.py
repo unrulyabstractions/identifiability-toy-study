@@ -7,7 +7,7 @@ from typing import Dict, List
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
-from matplotlib.colors import to_rgba, ListedColormap
+from matplotlib.colors import ListedColormap, to_rgba
 from tqdm import tqdm
 
 from .logic_gates import LogicTree
@@ -17,9 +17,15 @@ class Mapping(dict):
     """
     A mapping from high-level nodes (part of a formula) to sets of low-level neurons
     """
+
     _cmap = None
 
-    def __init__(self, base_dict: Dict[str, Dict[int, List[int]]], formula: LogicTree, layer_sizes):
+    def __init__(
+        self,
+        base_dict: Dict[str, Dict[int, List[int]]],
+        formula: LogicTree,
+        layer_sizes,
+    ):
         """
         Initialize the Mapping.
 
@@ -59,9 +65,9 @@ class Mapping(dict):
             A matplotlib colormap
         """
         if cls._cmap is None:
-            base_cmap = plt.get_cmap('tab20')
+            base_cmap = plt.get_cmap("tab20")
             colors = base_cmap(np.linspace(0, 1, base_cmap.N))
-            new_color = to_rgba('grey')
+            new_color = to_rgba("grey")
             colors = np.vstack([colors, new_color])
             cls._cmap = ListedColormap(colors)
         return cls._cmap
@@ -81,16 +87,20 @@ class Mapping(dict):
         for hl_node, ll_mapping in self.items():
             for layer, nodes in ll_mapping.items():
                 for node in nodes:
-                    colors[n_previous_nodes[layer] + node] = int(hl_node.split(' ')[-1]) % 20
+                    colors[n_previous_nodes[layer] + node] = (
+                        int(hl_node.split(" ")[-1]) % 20
+                    )
         colors[n_previous_nodes[-1]] = self.formula.id
 
         # Assign labels based on the high-level node
         labels = defaultdict(str)
         for i in range(self.layer_sizes[0]):
-            labels[f'(0,{i})'] = string.ascii_uppercase[i]
+            labels[f"(0,{i})"] = string.ascii_uppercase[i]
         cm = Mapping.colormap()
 
-        self.circuit.visualize(ax=ax, colors=[cm(i) for i in colors], display_idx=True, labels=labels)
+        self.circuit.visualize(
+            ax=ax, colors=[cm(i) for i in colors], display_idx=True, labels=labels
+        )
 
 
 def smaller_(map1, map2):
@@ -103,8 +113,9 @@ def smaller_(map1, map2):
     Returns:
         True if map1 is contained in map2, False otherwise
     """
-    return (map1 == map2 or set((k, v2) for k, v in map1.items() for v2 in v)
-            <= set((k, v2) for k, v in map2.items() for v2 in v))
+    return map1 == map2 or set((k, v2) for k, v in map1.items() for v2 in v) <= set(
+        (k, v2) for k, v in map2.items() for v2 in v
+    )
 
 
 def all_subsets_reversed(ss):
@@ -120,8 +131,20 @@ def all_subsets_reversed(ss):
     return chain(*map(lambda x: combinations(ss, x), range(len(ss), -1, -1)))
 
 
-def find_mappings(model, formula: LogicTree, nodes, explanations, mappings, sample_pairs, pos, intervened_formulas,
-                  use_tqdm=False, classif=False, distrib_layers=False, output_pos=None):
+def find_mappings(
+    model,
+    formula: LogicTree,
+    nodes,
+    explanations,
+    mappings,
+    sample_pairs,
+    pos,
+    intervened_formulas,
+    use_tqdm=False,
+    classif=False,
+    distrib_layers=False,
+    output_pos=None,
+):
     """
     Recursively finds all possible what-then-where explanations for the given model.
 
@@ -151,18 +174,22 @@ def find_mappings(model, formula: LogicTree, nodes, explanations, mappings, samp
     if output_pos is None:
         output_pos = 0
     elif classif:
-        raise NotImplementedError("Multiple outputs not implemented for classification models")
+        raise NotImplementedError(
+            "Multiple outputs not implemented for classification models"
+        )
 
     # Find the first unexplained high-level node in the formula
     cur_node, *nodes = nodes
     tree_node = formula.find_node(cur_node)
-    node_name = f"{tree_node} {tree_node.id}"  # Adding the id to guarantee unique node names
+    node_name = (
+        f"{tree_node} {tree_node.id}"  # Adding the id to guarantee unique node names
+    )
 
     # Remove input and output low-level nodes from possible mappings
     saved_map = []
     last_l = len(model.layer_sizes) - 1
     if not tree_node.children:
-        saved_map = [(0, ord(tree_node.op[-1]) - ord('A'))]
+        saved_map = [(0, ord(tree_node.op[-1]) - ord("A"))]
     elif cur_node == formula.id:
         saved_map = [(last_l, 0), (last_l, 1)] if classif else [(last_l, output_pos)]
     mappings2 = mappings
@@ -172,7 +199,13 @@ def find_mappings(model, formula: LogicTree, nodes, explanations, mappings, samp
     # Get each possible partition of the mapping subset
     subsets = all_subsets_reversed(mappings2)
     if use_tqdm:
-        subsets = tqdm(subsets, total=2 ** len(mappings2), position=pos, leave=False, desc=node_name)
+        subsets = tqdm(
+            subsets,
+            total=2 ** len(mappings2),
+            position=pos,
+            leave=False,
+            desc=node_name,
+        )
     for mapping_subset in subsets:
         with torch.no_grad():
             # Add the input/output_nodes if necessary
@@ -202,19 +235,33 @@ def find_mappings(model, formula: LogicTree, nodes, explanations, mappings, samp
                 a_l = model.get_states(s_in, subset_dict)
                 o_l = model(b_in, interventions=a_l)
 
-                if classif and o_h != np.argmax(o_l.cpu().detach()) or not classif and o_h != int(
-                        o_l[output_pos] > 0.5):
+                if (classif and o_h != np.argmax(o_l.cpu().detach())) or (
+                    not classif and o_h != int(o_l[output_pos] > 0.5)
+                ):
                     ok = False
                     break
 
             if ok:
                 # Valid explanation found, we keep going with the rest
-                yield from find_mappings(model, formula, nodes, explanations + [(node_name, dict(subset_dict))],
-                                         mappings2 - set(mapping_subset), sample_pairs, pos + 1, intervened_formulas,
-                                         use_tqdm, classif, distrib_layers, output_pos)
+                yield from find_mappings(
+                    model,
+                    formula,
+                    nodes,
+                    explanations + [(node_name, dict(subset_dict))],
+                    mappings2 - set(mapping_subset),
+                    sample_pairs,
+                    pos + 1,
+                    intervened_formulas,
+                    use_tqdm,
+                    classif,
+                    distrib_layers,
+                    output_pos,
+                )
 
 
-def find_minimal_mappings(model, formula: LogicTree, sample_pairs, intervened_trees, **kwargs):
+def find_minimal_mappings(
+    model, formula: LogicTree, sample_pairs, intervened_trees, **kwargs
+):
     """
     Finds all minimal (w.r.t. inclusion) what-then-where explanations for a given model and formula.
 
@@ -228,19 +275,39 @@ def find_minimal_mappings(model, formula: LogicTree, sample_pairs, intervened_tr
     Returns:
         A list of minimal what-then-where explanations (Mapping objects)
     """
-    all_mappings = set(reversed(list([(i + 1, y) for i, x in enumerate(model.layer_sizes[1:-1]) for y in range(x)])))
+    all_mappings = set(
+        reversed(
+            list(
+                [
+                    (i + 1, y)
+                    for i, x in enumerate(model.layer_sizes[1:-1])
+                    for y in range(x)
+                ]
+            )
+        )
+    )
     relevant_nodes = set()
     for node in formula.get_node_ids():
         found_node = formula.find_node(node)
         if found_node.children and formula.id != node:
             relevant_nodes.add(node)
 
-    relevant_nodes -= {node.children[0].id for node in formula.get_nodes() if len(node.children) == 1}
+    relevant_nodes -= {
+        node.children[0].id for node in formula.get_nodes() if len(node.children) == 1
+    }
 
     minimal_mappings = []
-    for explanation in find_mappings(model, formula, relevant_nodes, [], all_mappings,
-                                     sample_pairs, 0, intervened_trees, **kwargs):
-
+    for explanation in find_mappings(
+        model,
+        formula,
+        relevant_nodes,
+        [],
+        all_mappings,
+        sample_pairs,
+        0,
+        intervened_trees,
+        **kwargs,
+    ):
         mapping = Mapping(dict(explanation), formula, model.layer_sizes)
 
         if any(mapping < map2 for map2 in minimal_mappings):

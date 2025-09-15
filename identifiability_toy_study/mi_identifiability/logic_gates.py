@@ -2,8 +2,8 @@ import copy
 import itertools
 import string
 from collections import defaultdict, deque
+from collections.abc import Iterable, Mapping
 from itertools import product
-from typing import List, Iterable
 
 import networkx as nx
 import numpy as np
@@ -19,6 +19,7 @@ class LogicGate:
 
     The class attribute `inputs` stores all valid input combinations for a given number of inputs
     """
+
     inputs = {}
 
     def __init__(self, n_inputs, gate_fn, name):
@@ -38,10 +39,12 @@ class LogicGate:
             self.gate_fn = gate_fn
 
         if self.n_inputs not in LogicGate.inputs:
-            LogicGate.inputs[self.n_inputs] = np.array(list(product([0, 1], repeat=self.n_inputs)), dtype=np.float32)
+            LogicGate.inputs[self.n_inputs] = np.array(
+                list(product([0, 1], repeat=self.n_inputs)), dtype=np.float32
+            )
 
     def __repr__(self):
-        return f'LogicGate(n_inputs={self.n_inputs}, name={self.name})'
+        return f"LogicGate(n_inputs={self.n_inputs}, name={self.name})"
 
     def truth_table(self):
         """
@@ -53,7 +56,9 @@ class LogicGate:
         outputs = self.gate_fn(LogicGate.inputs[self.n_inputs])
         return dict(zip(map(tuple, LogicGate.inputs[self.n_inputs]), outputs))
 
-    def generate_noisy_data(self, n_repeats=200, noise_std=0.1, weights=None, device='cpu'):
+    def generate_noisy_data(
+        self, n_repeats=200, noise_std=0.1, weights=None, device="cpu"
+    ):
         """
         Generates noisy input and output data for the gate
 
@@ -86,12 +91,15 @@ class LogicGate:
             All possible input combinations
         """
         if weights is None:
-            weights = np.ones(2 ** n_inputs, dtype=np.float32)
+            weights = np.ones(2**n_inputs, dtype=np.float32)
 
         weights /= np.sum(weights)
 
-        x = np.random.choice(len(LogicGate.inputs[n_inputs]), size=n_repeats * len(LogicGate.inputs[n_inputs]),
-                             p=weights)
+        x = np.random.choice(
+            len(LogicGate.inputs[n_inputs]),
+            size=n_repeats * len(LogicGate.inputs[n_inputs]),
+            p=weights,
+        )
         return LogicGate.inputs[n_inputs][x]
 
     @staticmethod
@@ -109,7 +117,9 @@ class LogicGate:
             The noisy inputs and outputs
         """
         if noise_std == 0:
-            return torch.tensor(inputs, dtype=torch.float32), torch.tensor(outputs, dtype=torch.float32)
+            return torch.tensor(inputs, dtype=torch.float32), torch.tensor(
+                outputs, dtype=torch.float32
+            )
 
         # Generate noisy data by repeating the inputs and adding Gaussian noise
         x_noisy = np.repeat(inputs, n_repeats, axis=0)
@@ -119,7 +129,9 @@ class LogicGate:
         noise = np.random.normal(0, noise_std, x_noisy.shape).astype(np.float32)
         x_noisy += noise
 
-        return torch.tensor(x_noisy, dtype=torch.float32), torch.tensor(y_noisy, dtype=torch.float32)
+        return torch.tensor(x_noisy, dtype=torch.float32), torch.tensor(
+            y_noisy, dtype=torch.float32
+        )
 
     def print_truth_table(self, logger):
         """
@@ -141,8 +153,13 @@ class LogicGate:
             logger.info(f"{input_str} |   {int(output)}")
 
 
-def generate_noisy_multi_gate_data(logic_gates: List[LogicGate], n_repeats=200, noise_std=0.1, weights=None,
-                                   device='cpu'):
+def generate_noisy_multi_gate_data(
+    logic_gates: list[LogicGate],
+    n_repeats=200,
+    noise_std=0.1,
+    weights=None,
+    device="cpu",
+):
     """
     Generates noisy data for K logic gates. Each gate is expected to take the same number of inputs.
 
@@ -217,22 +234,22 @@ class LogicTree:
         if eq_ in string.ascii_uppercase:
             leaf = LogicTree(eq_, [])
             return leaf
-        if eq_[0] == '¬':
+        if eq_[0] == "¬":
             child = LogicTree.from_logic(eq_[2:-1])
-            node_ = LogicTree('¬', [child])
+            node_ = LogicTree("¬", [child])
             return node_
-        elif eq_[0] == '(':
+        elif eq_[0] == "(":
             idx = 1
             depth_ = 0
             while True:
-                if eq_[idx] == '(':
+                if eq_[idx] == "(":
                     depth_ += 1
-                elif eq_[idx] == ')':
+                elif eq_[idx] == ")":
                     depth_ -= 1
                 # OR, AND, IMP, EQV, XOR
-                elif eq_[idx] in '+*>=x' and not depth_:
+                elif eq_[idx] in "+*>=x" and not depth_:
                     left = LogicTree.from_logic(eq_[1:idx])
-                    right = LogicTree.from_logic(eq_[idx + 1:-1])
+                    right = LogicTree.from_logic(eq_[idx + 1 : -1])
                     node_ = LogicTree(eq_[idx], [left, right])
                     return node_
                 idx += 1
@@ -251,17 +268,17 @@ class LogicTree:
         if quotes:
             op = f"'{op}'"
         if self.children and self.id is not None:
-            return "Tree({}, {}, {})".format(op, self.children, self.id)
+            return f"Tree({op}, {self.children}, {self.id})"
         elif self.children:
-            return "Tree({}, {})".format(op, self.children)
+            return f"Tree({op}, {self.children})"
         elif self.id is not None:
-            return "Tree({}, {})".format(op, self.id)
-        return "Tree({})".format(op)
+            return f"Tree({op}, {self.id})"
+        return f"Tree({op})"
 
     def __str__(self):
-        """ Returns a string representation of the tree """
+        """Returns a string representation of the tree"""
         s = self._str()
-        if s.startswith('('):
+        if s.startswith("("):
             return s[1:-1]
         return s
 
@@ -281,10 +298,12 @@ class LogicTree:
         if len(self.children) == 1:
             if simplify:
                 return self.op + self.children[0]._str()
-            return '(' + self.op + self.children[0]._str() + ')'
+            return "(" + self.op + self.children[0]._str() + ")"
 
         if len(self.children) == 2:
-            return '(' + self.children[0]._str() + self.op + self.children[1]._str() + ')'
+            return (
+                "(" + self.children[0]._str() + self.op + self.children[1]._str() + ")"
+            )
 
     def add_missing_ids(self, cnt=None):
         """
@@ -390,10 +409,14 @@ class LogicTree:
         trees = dict()
         for node_list in self._get_unique_intervention_nodes():
             ref_node = node_list[0]
-            intervened_trees = [self.intervene(ref_node, value) for value in value_space_dict[ref_node]]
+            intervened_trees = [
+                self.intervene(ref_node, value) for value in value_space_dict[ref_node]
+            ]
             for node in node_list:
                 for value in value_space_dict[node]:
-                    trees[(node.id, value)] = intervened_trees[value if node.op == ref_node.op else 1 - value]
+                    trees[(node.id, value)] = intervened_trees[
+                        value if node.op == ref_node.op else 1 - value
+                    ]
         return trees
 
     def _get_unique_intervention_nodes(self):
@@ -426,7 +449,7 @@ class LogicTree:
         for i, child in enumerate(self.children):
             self.children[i] = child.negate(node_ids)
         if self.id in node_ids:
-            return LogicTree('¬', [self])
+            return LogicTree("¬", [self])
         return self
 
     def intervene(self, node_, value_):
@@ -441,11 +464,15 @@ class LogicTree:
             A copy of the tree with the intervention applied
         """
         tree_copy = copy.deepcopy(self)
-        if not node_.children:  # Leaf variable: intervene on all other leaves for the same variable
+        if (
+            not node_.children
+        ):  # Leaf variable: intervene on all other leaves for the same variable
             var = node_.op[-1]
             for leaf in tree_copy.get_leaf_nodes():
                 if leaf.op[-1] == var:
-                    tree_copy.do_intervene(leaf, value_ if leaf.op == node_.op else 1 - value_)
+                    tree_copy.do_intervene(
+                        leaf, value_ if leaf.op == node_.op else 1 - value_
+                    )
         else:
             tree_copy.do_intervene(node_, value_)
         return tree_copy
@@ -465,7 +492,7 @@ class LogicTree:
             for child in self.children:
                 child.do_intervene(node_, value_)
 
-    def sample(self, add_vars=None, device='cuda:'):
+    def sample(self, add_vars=None, device="cuda:"):
         """
         Gets all possible samples from the tree
 
@@ -484,9 +511,19 @@ class LogicTree:
 
         for assignments in itertools.product((0, 1), repeat=len(all_vars)):
             val = dict(zip(all_vars, assignments))
-            val.update(self.evaluate(dict(zip(all_vars, assignments)), return_dict=True))
-            samples_.append((val, torch.tensor([val[var] for var in sorted(all_vars)],
-                                               dtype=torch.float32, device=device)))
+            val.update(
+                self.evaluate(dict(zip(all_vars, assignments)), return_dict=True)
+            )
+            samples_.append(
+                (
+                    val,
+                    torch.tensor(
+                        [val[var] for var in sorted(all_vars)],
+                        dtype=torch.float32,
+                        device=device,
+                    ),
+                )
+            )
         return samples_
 
     def call(self, assignments):
@@ -536,7 +573,9 @@ class LogicTree:
 
         return node_vals if return_dict else node_vals[self.id]
 
-    def visualize(self, ax=None, display_ids=True, node_size='small', file_path=None, labels=None):
+    def visualize(
+        self, ax=None, display_ids=True, node_size="small", file_path=None, labels=None
+    ):
         """
         Visualize the tree
 
@@ -558,7 +597,9 @@ class LogicTree:
                 next_y = ycenter - width / 2 - child_width / 2
                 for child in children:
                     next_y += child_width
-                    child_positions = calculate_positions(child, horiz_loc - 1, next_y, child_width)
+                    child_positions = calculate_positions(
+                        child, horiz_loc - 1, next_y, child_width
+                    )
                     positions.update(child_positions)
 
                 topmost = min(positions[str(child.id)][1] for child in children)
@@ -583,27 +624,39 @@ class LogicTree:
                 queue.append(child)
 
         if labels is None:
-            labels = {str(node.id): OP_TO_STR.get(node.op, node.op) for node in self.get_nodes()}
+            labels = {
+                str(node.id): OP_TO_STR.get(node.op, node.op)
+                for node in self.get_nodes()
+            }
 
         if ax is None:
             plt.figure()
             ax = plt.gca()
 
-        colormap = plt.get_cmap('tab20')
+        colormap = plt.get_cmap("tab20")
         node_color = [colormap(int(i) % 20) for i in G.nodes]
-        nx.draw(G, pos, with_labels=display_ids, labels=labels, node_size=node_size, font_size=15,
-                node_color=node_color, edge_color='tab:blue', ax=ax)
+        nx.draw(
+            G,
+            pos,
+            with_labels=display_ids,
+            labels=labels,
+            node_size=node_size,
+            font_size=15,
+            node_color=node_color,
+            edge_color="tab:blue",
+            ax=ax,
+        )
 
         if ax is None:
             if file_path is None:
-                plt.axis('off')
+                plt.axis("off")
                 plt.show()
             else:
                 plt.tight_layout()
                 plt.savefig(file_path)
                 plt.close()
         else:
-            ax.axis('off')
+            ax.axis("off")
 
 
 def all_formulas(depth, variables):
@@ -626,13 +679,17 @@ def all_formulas(depth, variables):
         for i_ in range(depth):
             for formula2 in all_formulas(i_, variables):
                 if str(formula1) < str(formula2):
-                    yield LogicTree('*', [copy.deepcopy(formula1), copy.deepcopy(formula2)])
-                    yield LogicTree('+', [copy.deepcopy(formula1), copy.deepcopy(formula2)])
+                    yield LogicTree(
+                        "*", [copy.deepcopy(formula1), copy.deepcopy(formula2)]
+                    )
+                    yield LogicTree(
+                        "+", [copy.deepcopy(formula1), copy.deepcopy(formula2)]
+                    )
 
     return
 
 
-def get_formula_dataset(logic_gates, max_depth, device='cuda:0'):
+def get_formula_dataset(logic_gates, max_depth, device="cuda:0"):
     """
     Generates a dataset of all possible formulas of a certain depth, precomputing all corresponding samples
     and interventions.
@@ -679,8 +736,10 @@ def get_formula_dataset(logic_gates, max_depth, device='cuda:0'):
 
                 # Check whether the negated formula is equivalent to the searched gate
                 formula_ok = True
-                for assign_val in range(2 ** n_inputs):
-                    assign = dict(zip(variables, map(int, bin(assign_val)[2:].zfill(n_inputs))))
+                for assign_val in range(2**n_inputs):
+                    assign = dict(
+                        zip(variables, map(int, bin(assign_val)[2:].zfill(n_inputs)))
+                    )
                     val = neg_formula.evaluate(assign, return_dict=True)[neg_formula.id]
                     if val != truth_table[assign_val]:
                         formula_ok = False
@@ -691,18 +750,27 @@ def get_formula_dataset(logic_gates, max_depth, device='cuda:0'):
                         cnt += 1
                         seen.add(mod_formula)
 
-                        samples = neg_formula.sample(add_vars=set(string.ascii_uppercase[:n_inputs]), device=device)
-                        sample_pairs = [(samples[i], samples[j]) for i in range(len(samples)) for j in
-                                        range(i + 1, len(samples))]
+                        samples = neg_formula.sample(
+                            add_vars=set(string.ascii_uppercase[:n_inputs]),
+                            device=device,
+                        )
+                        sample_pairs = [
+                            (samples[i], samples[j])
+                            for i in range(len(samples))
+                            for j in range(i + 1, len(samples))
+                        ]
 
                         intervened_trees = neg_formula.get_intervened_trees()
 
-                        formula_dataset[gate.name].append((neg_formula, sample_pairs, intervened_trees))
+                        formula_dataset[gate.name].append(
+                            (neg_formula, sample_pairs, intervened_trees)
+                        )
                     break
     return formula_dataset
 
 
 # Various standard logic gate functions
+
 
 def xor_func(inputs, epsilon=0.5):
     inputs_bin = threshold(inputs, epsilon)
@@ -723,7 +791,9 @@ def implication_func(inputs, epsilon=0.5):
     inputs_bin = threshold(inputs, epsilon)
     A_not = 1 - inputs_bin[:, 0]  # Logical NOT: 1 - A
     B = inputs_bin[:, 1]
-    return or_func(np.stack([A_not, B], axis=1), epsilon)  # A -> B is equivalent to (not A) OR B
+    return or_func(
+        np.stack([A_not, B], axis=1), epsilon
+    )  # A -> B is equivalent to (not A) OR B
 
 
 def nand_func(inputs, epsilon=0.5):
@@ -792,9 +862,13 @@ def mux_func(inputs):
     """
     n_select_bits = inputs.shape[1] // 2
     # Convert the selection bits to indices
-    selected_indices = np.packbits(inputs[:, :n_select_bits], axis=-1)[:, 0] % (inputs.shape[1] - n_select_bits)
+    selected_indices = np.packbits(inputs[:, :n_select_bits], axis=-1)[:, 0] % (
+        inputs.shape[1] - n_select_bits
+    )
     # Select the corresponding data input values
-    return np.take_along_axis(inputs[:, n_select_bits:], selected_indices[:, None], axis=1).flatten()
+    return np.take_along_axis(
+        inputs[:, n_select_bits:], selected_indices[:, None], axis=1
+    ).flatten()
 
 
 def aoi_func(inputs):
@@ -861,19 +935,27 @@ def print_truth_table_multiple(gates, logger):
     n_inputs = len(list(gates[0].keys())[0])
 
     # Log the header
-    header = " | ".join([f"x{i}" for i in range(n_inputs)]) + " | " + " | ".join(
-        [f"Gate {i + 1}" for i in range(len(gates))])
+    header = (
+        " | ".join([f"x{i}" for i in range(n_inputs)])
+        + " | "
+        + " | ".join([f"Gate {i + 1}" for i in range(len(gates))])
+    )
     logger.info(header)
     logger.info("-" * len(header))
 
     # Generate all input combinations based on the number of inputs
     from itertools import product
+
     input_combinations = list(product([0, 1], repeat=n_inputs))
 
     # Log each row of the truth table for all gates
     for input_row in input_combinations:
-        input_str = " | ".join(map(str, map(int, input_row)))  # String for the input part
-        output_str = " | ".join([f"{int(gate[input_row])}" for gate in gates])  # Outputs for each gate
+        input_str = " | ".join(
+            map(str, map(int, input_row))
+        )  # String for the input part
+        output_str = " | ".join(
+            [f"{int(gate[input_row])}" for gate in gates]
+        )  # Outputs for each gate
         logger.info(f"{input_str} |   {output_str}")
 
 
@@ -889,15 +971,29 @@ def name_gate(truth_table):
     """
     n_inputs = len(list(truth_table.keys())[0])  # Determine the number of inputs
     tt_output = [val[1] for val in sorted(truth_table.items())]  # For ex. [0, 1, 1, 0]
-    gate_id = int(''.join(map(str, tt_output)), 2)  # For ex [0, 1, 1, 0] -> 0b0110 -> 6
+    gate_id = int("".join(map(str, tt_output)), 2)  # For ex [0, 1, 1, 0] -> 0b0110 -> 6
 
     gate_list = [
-        ['FALSE', 'TRUE'],  # 0 inputs
-        ['FALSE', 'IDENTITY', 'NOT', 'TRUE'],  # 1 input
+        ["FALSE", "TRUE"],  # 0 inputs
+        ["FALSE", "IDENTITY", "NOT", "TRUE"],  # 1 input
         [
-            'FALSE', 'AND', 'A_NIMPLY_B', 'A', 'B_NIMPLY_A', 'B', 'XOR', 'OR',
-            'NOR', 'XNOR', 'NOT_B', 'B_IMPLY_A', 'NOT_A', 'A_IMPLY_B', 'NAND', 'TRUE'
-        ]  # 2 inputs
+            "FALSE",
+            "AND",
+            "A_NIMPLY_B",
+            "A",
+            "B_NIMPLY_A",
+            "B",
+            "XOR",
+            "OR",
+            "NOR",
+            "XNOR",
+            "NOT_B",
+            "B_IMPLY_A",
+            "NOT_A",
+            "A_IMPLY_B",
+            "NAND",
+            "TRUE",
+        ],  # 2 inputs
     ]
 
     if n_inputs <= 2:
@@ -906,34 +1002,36 @@ def name_gate(truth_table):
     return f"{n_inputs}INPUTS"  # For more than 2 inputs, return a generic name
 
 
-ALL_LOGIC_GATES = {
-    'IMP': LogicGate(n_inputs=2, gate_fn=implication_func, name='IMP'),
-    'XOR': LogicGate(n_inputs=2, gate_fn=xor_func, name='XOR'),
-    'AND': LogicGate(n_inputs=2, gate_fn=and_func, name='AND'),
-    'OR': LogicGate(n_inputs=2, gate_fn=or_func, name='OR'),
-    'NAND': LogicGate(n_inputs=2, gate_fn=nand_func, name='NAND'),
-    'NOR': LogicGate(n_inputs=2, gate_fn=nor_func, name='NOR'),
-    'NIMP': LogicGate(n_inputs=2, gate_fn=not_implication_func, name='NIMP'),
-    'MAJORITY': LogicGate(n_inputs=3, gate_fn=majority_func, name='MAJORITY'),
-    'PARITY': LogicGate(n_inputs=3, gate_fn=parity_func, name='PARITY'),
-    'FULL_ADDER': LogicGate(n_inputs=3, gate_fn=full_adder_func, name='FULL_ADDER'),
-    'EXACT_2': LogicGate(n_inputs=3, gate_fn=lambda x: exactly_k_func(x, 2), name='EXACT_2'),
-}
-
 OP_TO_STR = {
-    '¬': 'NOT',
-    '+': 'OR',
-    '*': 'AND',
-    'x': 'XOR',
-    '=': 'EQV',
-    '>': 'IMP',
+    "¬": "NOT",
+    "+": "OR",
+    "*": "AND",
+    "x": "XOR",
+    "=": "EQV",
+    ">": "IMP",
 }
 
 OP_TO_TRUTH_TABLE = {
-    '¬': (1, 0),
-    '+': ((0, 1), (1, 1)),
-    '*': ((0, 0), (0, 1)),
-    'x': ((0, 1), (1, 0)),
-    '=': ((1, 0), (0, 1)),
-    '>': ((1, 1), (0, 1)),
+    "¬": (1, 0),
+    "+": ((0, 1), (1, 1)),
+    "*": ((0, 0), (0, 1)),
+    "x": ((0, 1), (1, 0)),
+    "=": ((1, 0), (0, 1)),
+    ">": ((1, 1), (0, 1)),
+}
+
+ALL_LOGIC_GATES: Mapping[str, LogicGate] = {
+    "IMP": LogicGate(n_inputs=2, gate_fn=implication_func, name="IMP"),
+    "XOR": LogicGate(n_inputs=2, gate_fn=xor_func, name="XOR"),
+    "AND": LogicGate(n_inputs=2, gate_fn=and_func, name="AND"),
+    "OR": LogicGate(n_inputs=2, gate_fn=or_func, name="OR"),
+    "NAND": LogicGate(n_inputs=2, gate_fn=nand_func, name="NAND"),
+    "NOR": LogicGate(n_inputs=2, gate_fn=nor_func, name="NOR"),
+    "NIMP": LogicGate(n_inputs=2, gate_fn=not_implication_func, name="NIMP"),
+    # "MAJORITY": LogicGate(n_inputs=3, gate_fn=majority_func, name="MAJORITY"),
+    # "PARITY": LogicGate(n_inputs=3, gate_fn=parity_func, name="PARITY"),
+    # "FULL_ADDER": LogicGate(n_inputs=3, gate_fn=full_adder_func, name="FULL_ADDER"),
+    # "EXACT_2": LogicGate(
+    #     n_inputs=3, gate_fn=lambda x: exactly_k_func(x, 2), name="EXACT_2"
+    # ),
 }

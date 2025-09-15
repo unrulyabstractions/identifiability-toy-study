@@ -72,9 +72,10 @@ include = ["identifiability_toy_study*"]
 [tool.ruff]
 line-length = 88
 target-version = "py39"
+extend-exclude = ["build",".venv","venv","dist"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = ["E","F","I","B","UP","C4","SIM","RUF"]
 ignore = ["E501"]
 
 [tool.black]
@@ -82,7 +83,14 @@ line-length = 88
 target-version = ['py39']
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "mypy>=1.17.1",
+    "ruff>=0.12.12",
+]

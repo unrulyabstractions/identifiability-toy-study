@@ -11,24 +11,24 @@ My modifications and additional contributions are © 2025 Ian Rios-Sialer, relea
 
 ## Installation
 
-### Local Development Setup
+### Local Development Setup (Recommended)
 
-For local development with modern Python package management:
+Using [uv](https://docs.astral.sh/uv/) - a fast Python package manager:
 
-1. **Install uv** (if not already installed):
+1. **Install uv** (one-time setup):
    ```bash
    curl -LsSf https://astral.sh/uv/install.sh | sh
    export PATH="$HOME/.local/bin:$PATH"
    ```
 
-2. **Clone and setup the repository**:
+2. **Clone and setup**:
    ```bash
    git clone https://github.com/unrulyabstractions/identifiability-toy-study.git
    cd identifiability-toy-study
    uv sync --dev
    ```
 
-This will create a virtual environment at `.venv` and install all dependencies including development tools.
+This creates a virtual environment and installs all dependencies automatically.
 
 ### Google Colab Setup
 
@@ -49,7 +49,9 @@ os.environ['PATH'] = f"/root/.local/bin:{os.environ['PATH']}"
 # when running main.py: --device cuda:0
 ```
 
-### Alternative: Direct pip install
+### Alternative: Standard pip install
+
+If you prefer traditional pip (slower but familiar):
 
 ```bash
 pip install git+https://github.com/unrulyabstractions/identifiability-toy-study.git
@@ -57,34 +59,38 @@ pip install git+https://github.com/unrulyabstractions/identifiability-toy-study.
 
 ## Usage
 
-### Running the Main Experiment
+### Running Experiments
 
-The main experiment script can be run with various parameters:
-
+**Basic usage** (if you used uv installation):
 ```bash
 # Show all available options
 uv run python main.py --help
 
-# Run a quick test experiment
+# Quick test run
 uv run python main.py --n-experiments 1 --epochs 100 --loss-target 0.1
 
-# Run with specific logic gates and parameters
+# Full experiment with multiple logic gates
 uv run python main.py \
   --target-logic-gates AND OR XOR \
   --n-experiments 5 \
   --epochs 1000 \
   --size 3 4 5 \
-  --depth 2 3 \
-  --learning-rate 0.001 0.01 \
-  --device cpu
-
-# For GPU acceleration
-# Apple Silicon Macs (recommended)
-uv run python main.py --device mps --epochs 2000
-
-# NVIDIA GPUs (Linux/Windows) or Google Colab
-uv run python main.py --device cuda:0 --epochs 2000
+  --device mps
 ```
+
+**For different hardware:**
+```bash
+# Apple Silicon Macs (default, fastest)
+uv run python main.py --device mps
+
+# NVIDIA GPUs or Google Colab
+uv run python main.py --device cuda:0
+
+# CPU only (any system)
+uv run python main.py --device cpu
+```
+
+**If you used pip install:** Replace `uv run python` with just `python` in the commands above.
 
 ### Key Parameters
 
@@ -99,24 +105,13 @@ uv run python main.py --device cuda:0 --epochs 2000
 
 Results are saved to `logs/run_TIMESTAMP/` with CSV output containing experimental data.
 
-### Development Tools
+### Development Commands
 
-The project includes several development tools:
+For contributors (requires uv installation):
 
 ```bash
-# Run tests
-uv run pytest
-
-# Code formatting and linting
-uv run ruff check --fix .
-uv run black .
-
-# Type checking
-uv run mypy identifiability_toy_study/
-
-# Start Jupyter Lab
-uv run jupyter lab
-
-# Quick sanity check (device availability, imports)
-make sanity
+make sanity    # Check device availability and imports
+make lint      # Check code style  
+make format    # Fix code formatting
+uv run jupyter lab  # Start Jupyter notebooks
 ```

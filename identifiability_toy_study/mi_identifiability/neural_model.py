@@ -1,29 +1,73 @@
+# neural_model.py
 import copy
 import itertools
+import random
 from collections import defaultdict
-from typing import Dict, Any
+from typing import Any
 
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import optim
 from torch.utils.data import DataLoader, TensorDataset
 
 ACTIVATION_FUNCTIONS = {
-    'leaky_relu': nn.LeakyReLU,
-    'relu': nn.ReLU,
-    'tanh': nn.Tanh,
-    'sigmoid': nn.Sigmoid
+    "leaky_relu": nn.LeakyReLU,
+    "relu": nn.ReLU,
+    "tanh": nn.Tanh,
+    "sigmoid": nn.Sigmoid,
 }
+
+
+def debug_device(logger, tensors, expected_device, context: str = ""):
+    """
+    Check if all tensors are on the expected device.
+
+    Args:
+        tensors: List of tensors or single tensor to check
+        expected_device: Expected device (e.g., 'mps', 'cuda:0', 'cpu')
+        context: Context description for logging
+        verbose: Whether to print device information
+    """
+    if not isinstance(tensors, (list, tuple)):
+        tensors = [tensors]
+
+    ok = True
+    for i, tensor in enumerate(tensors):
+        if tensor is not None and hasattr(tensor, "device"):
+            actual_device = str(tensor.device)
+            logger.info(
+                f"{context} - Tensor {i}: {actual_device} (expected: {expected_device})"
+            )
+            if (
+                expected_device not in actual_device
+                and actual_device != expected_device
+            ):
+                logger.info(
+                    f"WARNING: {context} - Tensor {i} on {actual_device}, expected {expected_device}"
+                )
+                ok = False
+    return ok
 
 
 class MLP(nn.Module):
     """
     A class implementing a simple multi-layer perceptron model.
     """
-    def __init__(self, hidden_sizes: list, input_size=2, output_size=1, activation='leaky_relu', device='cpu'):
+
+    def __init__(
+        self,
+        hidden_sizes: list,
+        input_size: int = 2,
+        output_size: int = 1,
+        activation: str = "leaky_relu",
+        device: str = "cpu",
+        debug: bool = False,
+        logger=None,
+    ):
         """
         Initialize the MLP model.
 
@@ -33,36 +77,57 @@ class MLP(nn.Module):
             output_size: The size of the output layer
             activation: The activation function to use
             device: The device to run the model on
+            debug: Whether to enable device consistency checking
         """
-        super(MLP, self).__init__()
+        super().__init__()
         self.input_size = input_size
         self.hidden_sizes = hidden_sizes
         self.output_size = output_size
         self.layer_sizes = [input_size] + hidden_sizes + [output_size]
         self.activation = activation
 
+        # Activation on all layers EXCEPT the last linear (final head outputs logits)
         self.layers = nn.ModuleList(
             nn.Sequential(
                 nn.Linear(in_size, out_size),
-                ACTIVATION_FUNCTIONS[activation]() if idx < len(self.layer_sizes) - 1 else nn.Identity()
-            ) for idx, (in_size, out_size) in enumerate(zip(self.layer_sizes, self.layer_sizes[1:]))
+                ACTIVATION_FUNCTIONS[activation]()
+                if idx < (len(self.layer_sizes) - 1)
+                else nn.Identity(),
+            )
+            for idx, (in_size, out_size) in enumerate(
+                zip(self.layer_sizes, self.layer_sizes[1:])
+            )
         )
 
         self.num_layers = len(self.layers)
         self.device = device
+        self.debug = debug
         self.to(device)
+
+        if self.debug and logger:
+            logger.info(f"checking_device: Model initialized on device: {device}")
+            for i, layer in enumerate(self.layers):
+                logger.info(
+                    f"checking_device: Layer {i} weights on: {layer[0].weight.device}"
+                )
+                logger.info(
+                    f"checking_device: Layer {i} bias on: {layer[0].bias.device}"
+                )
 
     def save_to_file(self, filepath):
         """
         Save the model's configuration and state_dict to a file.
         """
-        torch.save({
-            'input_size': self.input_size,
-            'hidden_sizes': self.hidden_sizes,
-            'output_size': self.output_size,
-            'activation': self.activation,
-            'state_dict': self.state_dict()
-        }, filepath)
+        torch.save(
+            {
+                "input_size": self.input_size,
+                "hidden_sizes": self.hidden_sizes,
+                "output_size": self.output_size,
+                "activation": self.activation,
+                "state_dict": self.state_dict(),
+            },
+            filepath,
+        )
 
     @classmethod
     def load_from_file(cls, filepath):
@@ -71,15 +136,15 @@ class MLP(nn.Module):
         """
         model_data = torch.load(filepath)
         model = cls(
-            model_data['hidden_sizes'],
-            input_size=model_data['input_size'],
-            output_size=model_data['output_size'],
-            activation=model_data['activation']
+            model_data["hidden_sizes"],
+            input_size=model_data["input_size"],
+            output_size=model_data["output_size"],
+            activation=model_data["activation"],
         )
-        model.load_state_dict(model_data['state_dict'])
+        model.load_state_dict(model_data["state_dict"])
         return model
 
-    def out_features(self, layer_id):
+    def out_features(self, layer_id: int) -> int:
         """
         Helper function to get the output size of a given layer
 
@@ -91,74 +156,83 @@ class MLP(nn.Module):
         """
         return self.layers[layer_id][0].out_features
 
-    def forward(self, x, circuit=None, interventions=None, return_activations=False):
+    def forward(
+        self, x, circuit=None, interventions=None, return_activations: bool = False
+    ):
         """
         Applies a forward pass through the model, optionally using only a subset of the model (circuit) and applying
         interventions.
 
         Args:
             x: The input tensor
-            circuit: The circuit to apply
-            interventions: The list of interventions to apply
-            return_activations: Whether to return the activations of each layer
+            circuit: The circuit to apply (with .edge_masks and optional .node_masks)
+            interventions: A dict whose keys are (layer_idx, indices) and values are tensors to assign
+            return_activations: Whether to return activations of each layer (including input at index 0)
 
         Returns:
-            The output of the model if return_activations is False, else the activations of each layer
+            output tensor or list of activations (if return_activations=True)
         """
         activations = [x.detach()] if return_activations else None
 
-        # Prepare the list of interventions, ordering it by layer
+        # Prepare interventions grouped by layer
         ordered_interventions = defaultdict(list)
         if interventions is not None:
             for (layer_idx, indices), values in interventions.items():
                 ordered_interventions[layer_idx].append((indices, values))
 
+        # Interventions on input (layer 0)
         if 0 in ordered_interventions:
             for indices, values in ordered_interventions[0]:
-                x[list(indices)] = values
-
-        original_weights = []  # Store original weights if a circuit is applied
+                v = (
+                    values
+                    if torch.is_tensor(values)
+                    else torch.as_tensor(values, dtype=x.dtype, device=x.device)
+                )
+                x[list(indices)] = v
 
         for i, layer in enumerate(self.layers):
-            if circuit:
-                # Store original weights before applying circuit edge masks
-                original_weights.append(layer[0].weight.data.clone())
-                layer[0].weight.data *= torch.tensor(
-                    circuit.edge_masks[i], dtype=torch.float32, device=self.device
-                )
-                if circuit.node_masks:
-                    x *= torch.tensor(
-                        circuit.node_masks[i], dtype=torch.float32, device=self.device
-                    )
+            lin, act = layer[0], layer[1]
 
-            # Forward pass
-            x = layer(x)
+            if circuit is not None:
+                # Mask weights functionally (never mutate params)
+                Wmask = torch.as_tensor(
+                    circuit.edge_masks[i], dtype=lin.weight.dtype, device=self.device
+                )
+                W = lin.weight * Wmask
+                if circuit.node_masks:
+                    x = x * torch.as_tensor(
+                        circuit.node_masks[i], dtype=x.dtype, device=self.device
+                    )
+                x = F.linear(x, W, lin.bias)
+                x = act(x)
+            else:
+                x = layer(x)
 
             if return_activations:
                 activations.append(x.detach())
 
-            # Apply interventions at the current layer
-            if interventions and i + 1 in ordered_interventions:
+            # Interventions on post-layer activations (layer index i+1)
+            if interventions is not None and (i + 1) in ordered_interventions:
                 for indices, values in ordered_interventions[i + 1]:
-                    x[list(indices)] = values
-
-        if circuit:
-            # Restore original weights
-            for i, layer in enumerate(self.layers):
-                layer[0].weight.data = original_weights[i]
+                    v = (
+                        values
+                        if torch.is_tensor(values)
+                        else torch.as_tensor(values, dtype=x.dtype, device=x.device)
+                    )
+                    x[list(indices)] = v
 
         return activations if return_activations else x
 
-    def get_states(self, x, states: Dict[Any, Any]) -> Dict[Any, torch.Tensor]:
+    def get_states(self, x, states: dict[Any, Any]) -> dict[Any, torch.Tensor]:
         """
         Runs an input through the model and returns selected hidden states.
 
         Args:
             x: The input tensor
-            states: A dictionary of tuples (layer, indices) to return
+            states: A dictionary whose keys are (layer, indices), values are index lists
 
         Returns:
-            A dictionary mapping each tuple (layer, indices) to the corresponding hidden states
+            A dictionary mapping (layer, indices) to the corresponding hidden states
         """
         activations = self(x, return_activations=True)
         return {
@@ -175,7 +249,6 @@ class MLP(nn.Module):
             circuit: The optional circuit to visualize
             activations: The optional activations to visualize
         """
-
         G = nx.DiGraph()
         pos = {}
         colors = {}
@@ -185,7 +258,7 @@ class MLP(nn.Module):
 
         # Set default values
         if circuit is None:
-            from .circuit import Circuit
+            from .circuit import Circuit  # late import to avoid circular deps
 
             circuit = Circuit.full(self.layer_sizes)
         node_masks = circuit.node_masks
@@ -216,13 +289,15 @@ class MLP(nn.Module):
                 if use_activation_values:
                     activation_value = layer_activations[0, node_idx].item()
                     node_labels[node_id] = f"{activation_value:.2f}"
-                    color_intensity = np.clip(activation_value, 0, 1)  # Normalize to [0, 1]
-                    node_color = plt.cm.YlOrRd(color_intensity) if active else 'grey'  # Use heatmap for activations
+                    color_intensity = float(
+                        np.clip(activation_value, 0, 1)
+                    )  # Normalize to [0, 1]
+                    node_color = plt.cm.YlOrRd(color_intensity) if active else "grey"
                 else:
-                    node_color = 'tab:blue' if active else 'grey'
+                    node_color = "tab:blue" if active else "grey"
                 colors[node_id] = node_color
 
-        # Add edges to the graph and create edge labels
+        # Add edges and labels
         for layer_idx, edge_mask in enumerate(edge_masks):
             for out_idx, row in enumerate(edge_mask):
                 for in_idx, active in enumerate(row):
@@ -233,42 +308,85 @@ class MLP(nn.Module):
                     weight = self.layers[layer_idx][0].weight[out_idx, in_idx].item()
                     edge_labels[(from_node_id, to_node_id)] = f"{weight:.2f}"
 
-        # Draw nodes with color corresponding to activation value
+        # Draw nodes
         node_colors = [colors[node] for node in G.nodes]
-        nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=1400, alpha=0.8)
+        nx.draw_networkx_nodes(
+            G, pos, node_color=node_colors, node_size=1400, alpha=0.8, ax=ax
+        )
 
         # Draw edges
-        active_edges = [(u, v) for u, v, attr in G.edges(data=True) if attr['active'] == 1]
-        inactive_edges = [(u, v) for u, v, attr in G.edges(data=True) if attr['active'] == 0]
-        nx.draw_networkx_edges(G, pos, node_size=1400, edgelist=active_edges,
-                               edge_color='tab:red' if use_activation_values else 'tab:blue', width=1, alpha=0.6,
-                               arrows=True, arrowstyle="-|>", connectionstyle='arc3,rad=0.1', ax=ax)
-        nx.draw_networkx_edges(G, pos, node_size=1400, edgelist=inactive_edges, edge_color='grey', width=1, alpha=0.5,
-                               style='dashed', arrows=True, arrowstyle="-|>", connectionstyle='arc3,rad=0.1', ax=ax)
+        active_edges = [
+            (u, v) for u, v, attr in G.edges(data=True) if attr["active"] == 1
+        ]
+        inactive_edges = [
+            (u, v) for u, v, attr in G.edges(data=True) if attr["active"] == 0
+        ]
+        nx.draw_networkx_edges(
+            G,
+            pos,
+            node_size=1400,
+            edgelist=active_edges,
+            edge_color="tab:red" if use_activation_values else "tab:blue",
+            width=1,
+            alpha=0.6,
+            arrows=True,
+            arrowstyle="-|>",
+            connectionstyle="arc3,rad=0.1",
+            ax=ax,
+        )
+        nx.draw_networkx_edges(
+            G,
+            pos,
+            node_size=1400,
+            edgelist=inactive_edges,
+            edge_color="grey",
+            width=1,
+            alpha=0.5,
+            style="dashed",
+            arrows=True,
+            arrowstyle="-|>",
+            connectionstyle="arc3,rad=0.1",
+            ax=ax,
+        )
 
-        # Draw node labels (activation values)
-        nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=15, font_color='black', alpha=0.8, ax=ax)
+        # Labels
+        nx.draw_networkx_labels(
+            G,
+            pos,
+            labels=node_labels,
+            font_size=15,
+            font_color="black",
+            alpha=0.8,
+            ax=ax,
+        )
+        nx.draw_networkx_edge_labels(
+            G,
+            pos,
+            edge_labels=edge_labels,
+            font_size=7,
+            alpha=0.7,
+            label_pos=0.6,
+            ax=ax,
+        )
 
-        # Draw edge labels (weights)
-        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7, alpha=0.7, label_pos=0.6, ax=ax)
-
-        if use_activation_values:
-            plt.title("Neural Network Execution Visualization")
-        else:
-            plt.title("Neural Network Visualization")
-        plt.axis('off')
+        plt.title(
+            "Neural Network Execution Visualization"
+            if use_activation_values
+            else "Neural Network Visualization"
+        )
+        plt.axis("off")
         plt.show()
 
-    def __getitem__(self, idx, in_place=False):
+    def __getitem__(self, idx, in_place: bool = False):
         """
         Overload the indexing operator to create a submodel
 
         Args:
             idx: The index or slice to use for the submodel
-            in_place: Whether to modify the original model weights in-place
+            in_place: Whether to share parameters (True) or copy (False)
 
         Returns:
-            A new submodel, with shared weights if in_place is True, or a copy otherwise
+            A new submodel when slicing. When idx is an int, returns the (copied) layer unless in_place=True.
         """
         if isinstance(idx, slice):
             # Handle negative indices in the slice
@@ -276,7 +394,6 @@ class MLP(nn.Module):
             stop_idx = idx.stop if idx.stop is not None else len(self.layers)
             step_idx = idx.step if idx.step is not None else 1
 
-            # Adjust negative indices
             if start_idx < 0:
                 start_idx += len(self.layers)
             if stop_idx < 0:
@@ -284,79 +401,97 @@ class MLP(nn.Module):
 
             # Extract the sliced layers
             sliced_layers = self.layers[start_idx:stop_idx:step_idx]
-            num_sliced_layers = len(sliced_layers)
 
-            # Calculate the input size for the submodel (first layer in the slice)
+            # Sizes for the new submodel
             input_size = self.layer_sizes[start_idx]
-
-            # Calculate the hidden sizes and output size for the submodel
-            smaller_hidden_sizes = [layer[0].out_features for layer in sliced_layers[:-1]]
+            smaller_hidden_sizes = [
+                layer[0].out_features for layer in sliced_layers[:-1]
+            ]
             output_size = sliced_layers[-1][0].out_features
 
-            # Create a new submodel with the correct architecture
+            # Create the submodel
             submodel = MLP(
                 hidden_sizes=smaller_hidden_sizes,
                 input_size=input_size,
                 output_size=output_size,
                 activation=self.activation,
                 device=self.device,
+                debug=self.debug,
             )
 
-            # Copy weights and biases from the original model
-            for i, layer in enumerate(sliced_layers):
-                layer_data = submodel.layers[i][0]
-                layer_data.weight.data = layer[0].weight.data
-                layer_data.bias.data = layer[0].bias.data
-                if not in_place:
-                    layer_data.weight.data = layer_data.weight.data.clone()
-                    layer_data.bias.data = layer_data.bias.data.clone()
+            # Copy or tie parameters
+            if in_place:
+                # Share Parameters (weight tying)
+                for i, layer in enumerate(sliced_layers):
+                    src = layer[0]  # original nn.Linear
+                    dst = submodel.layers[i][0]  # submodel nn.Linear
+                    dst.weight = src.weight
+                    dst.bias = src.bias
+            else:
+                with torch.no_grad():
+                    for i, layer in enumerate(sliced_layers):
+                        src = layer[0]
+                        dst = submodel.layers[i][0]
+                        dst.weight.copy_(src.weight.detach())
+                        dst.bias.copy_(src.bias.detach())
 
             return submodel
         else:
-            # Handle single index
+            # Single index: return the layer
             if in_place:
                 return self.layers[idx]
             return copy.deepcopy(self.layers[idx])
 
-    def do_train(self, x, y, x_val, y_val, batch_size, learning_rate, epochs, loss_target=0.001, val_frequency=10,
-                 early_stopping_steps=3, logger=None):
+    def do_train(
+        self,
+        x,
+        y,
+        x_val,
+        y_val,
+        batch_size,
+        learning_rate,
+        epochs,
+        loss_target: float = 0.001,
+        val_frequency: int = 10,
+        early_stopping_steps: int = 3,
+        logger=None,
+    ):
         """
         Train the model using the given data and hyperparameters.
-
-        Args:
-            x: The training input tensor
-            y: The training target tensor
-            x_val: The validation input tensor
-            y_val: The validation target tensorearly_stopping_steps
-            batch_size: The batch size for training
-            learning_rate: The learning rate for training
-            epochs: The number of epochs to train
-            loss_target: The target loss value to stop training
-            val_frequency: The frequency of validation during training
-            early_stopping_steps: The number of epochs without improvement to stop training
-            logger: The logger to log training progress
-
-        Returns:
-            The average loss after training
         """
-        # Create a DataLoader for the training dataset
-        dataset = TensorDataset(x, y)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        if self.debug and logger:
+            debug_device(
+                logger, [x, y, x_val, y_val], str(self.device), "Training data"
+            )
 
-        # Define loss function and optimizer
+        # Deterministic worker seeding plays well with your global set_seeds(...)
+        def seed_worker(worker_id):
+            worker_seed = torch.initial_seed() % 2**32
+            random.seed(worker_seed)
+            np.random.seed(worker_seed)
+
+        # DataLoader
+        dataset = TensorDataset(x, y)
+        dataloader = DataLoader(
+            dataset, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker
+        )
+
+        # Loss and optimizer
         criterion = nn.MSELoss()
         optimizer = optim.AdamW(self.parameters(), lr=learning_rate)
 
-        best_loss = float('inf')
+        best_loss = float("inf")
         bad_epochs = 0
-
-        val_acc = 0
+        val_acc = 0.0
 
         # Training loop
         for epoch in range(epochs):
             self.train()
             epoch_loss = []
             for inputs, targets in dataloader:
+                inputs = inputs.to(self.device)
+                targets = targets.to(self.device)
+
                 optimizer.zero_grad()
                 outputs = self(inputs)
                 loss = criterion(outputs, targets)
@@ -364,7 +499,7 @@ class MLP(nn.Module):
                 optimizer.step()
                 epoch_loss.append(loss.item())
 
-            avg_loss = np.mean(epoch_loss)
+            avg_loss = float(np.mean(epoch_loss))
 
             if avg_loss < best_loss:
                 best_loss = avg_loss
@@ -376,28 +511,36 @@ class MLP(nn.Module):
             if avg_loss < loss_target or bad_epochs >= early_stopping_steps:
                 break
 
-            # Print training progress
+            # Progress / validation
             if (epoch + 1) % val_frequency == 0 and logger is not None:
                 self.eval()
                 with torch.no_grad():
-                    train_outputs = self(x)
+                    train_outputs = self(x.to(self.device))
                     train_predictions = torch.round(train_outputs)
-                    correct_predictions_train = train_predictions.eq(y).all(dim=1)
+                    correct_predictions_train = train_predictions.eq(
+                        y.to(self.device)
+                    ).all(dim=1)
                     train_acc = correct_predictions_train.sum().item() / y.size(0)
 
-                    val_outputs = self(x_val)
-                    val_loss = criterion(val_outputs, y_val).item()
+                    val_outputs = self(x_val.to(self.device))
+                    val_loss = criterion(val_outputs, y_val.to(self.device)).item()
                     val_predictions = torch.round(val_outputs)
-                    correct_predictions_val = val_predictions.eq(y_val).all(dim=1)
+                    correct_predictions_val = val_predictions.eq(
+                        y_val.to(self.device)
+                    ).all(dim=1)
                     val_acc = correct_predictions_val.sum().item() / y_val.size(0)
 
-                    logger.info(f'Epoch [{epoch + 1}/{epochs}], '
-                                f'Train Loss: {avg_loss:.4f}, Train Accuracy: {train_acc:.4f}')
-                    logger.info(f'Val Loss: {val_loss:.4f}, Val Accuracy: {val_acc:.4f}, Bad Epochs: {bad_epochs}')
+                    logger.info(
+                        f"Epoch [{epoch + 1}/{epochs}], "
+                        f"Train Loss: {avg_loss:.4f}, Train Accuracy: {train_acc:.4f}"
+                    )
+                    logger.info(
+                        f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_acc:.4f}, Bad Epochs: {bad_epochs}"
+                    )
 
         return avg_loss
 
-    def do_eval(self, x_test, y_test):
+    def do_eval(self, x_test, y_test, logger=None):
         """
         Performs evaluation on the given test data
 
@@ -408,11 +551,16 @@ class MLP(nn.Module):
         Returns:
             The accuracy of the model on the test data
         """
+        if self.debug and logger:
+            debug_device(logger, [x_test, y_test], str(self.device), "Evaluation data")
+
         self.eval()
         with torch.no_grad():
-            val_outputs = self(x_test)
+            val_outputs = self(x_test.to(self.device))
             val_predictions = torch.round(val_outputs)
-            correct_predictions_val = val_predictions.eq(y_test).all(dim=1)
+            correct_predictions_val = val_predictions.eq(y_test.to(self.device)).all(
+                dim=1
+            )
             acc = correct_predictions_val.sum().item() / y_test.size(0)
         return acc
 
@@ -423,18 +571,34 @@ class MLP(nn.Module):
         Returns:
             A list of K MLP models, each for a single output.
         """
+        # Full clones (independent parameters) using the slice constructor
         separate_models = [self[:] for _ in range(self.output_size)]
 
-        last_layer = self.layers[-1]
-        last_layer_weights = last_layer[0].weight.data
-        last_layer_biases = last_layer[0].bias.data
+        # Original final linear
+        last_linear = self.layers[-1][0]
+        in_features = last_linear.in_features
+        W, b = last_linear.weight, last_linear.bias
 
-        for i, model in enumerate(separate_models):
-            model.layers[-1][0] = nn.Linear(self.hidden_sizes[-1], 1)
-            model.layers[-1][0].weight.data = last_layer_weights[i:i + 1, :].clone()
-            model.layers[-1][0].bias.data = last_layer_biases[i:i + 1].clone()
-            model.output_size = 1
-            model.layer_sizes = model.layer_sizes[:-1] + [1]
+        # Preserve device/dtype in the new heads
+        p = next(self.parameters())
+        device, dtype = p.device, p.dtype
+
+        with torch.no_grad():
+            for i, model in enumerate(separate_models):
+                new_linear = nn.Linear(in_features, 1, bias=True).to(
+                    device=device, dtype=dtype
+                )
+                new_linear.weight.copy_(W[i : i + 1].detach())  # [1, H]
+                new_linear.bias.copy_(b[i : i + 1].detach())  # [1]
+
+                if isinstance(model.layers[-1], nn.Sequential):
+                    model.layers[-1][0] = new_linear
+                else:
+                    model.layers[-1] = nn.Sequential(new_linear)
+
+                # Update metadata
+                model.output_size = 1
+                model.layer_sizes = model.layer_sizes[:-1] + [1]
 
         return separate_models
 
@@ -443,13 +607,14 @@ class MLP(nn.Module):
         Generate all valid node masks in the neural network.
 
         Returns:
-            A list of all valid node masks
+            A list of all valid node masks (cartesian product across layers)
         """
-        # Generate all valid masks for each layer
         all_masks_per_layer = []
-
         for size in self.layer_sizes[1:]:
-            masks = [np.array([int(x) for x in format(i, f'0{size}b')]) for i in range(2 ** size)]
+            masks = [
+                np.array([int(x) for x in format(i, f"0{size}b")])
+                for i in range(2**size)
+            ]
             all_masks_per_layer.append(masks)
 
         # Generate combinations of masks for all layers

@@ -11,7 +11,7 @@ from matplotlib.cm import ScalarMappable
 from torch import nn
 from tqdm import tqdm
 
-from .grounding import enumerate_tts, compute_local_tts, Grounding
+from .grounding import Grounding, compute_local_tts, enumerate_tts
 from .logic_gates import name_gate
 from .neural_model import MLP
 from .utils import get_node_size
@@ -38,7 +38,7 @@ class Circuit:
         self.edge_masks = edge_masks
 
     def __repr__(self):
-        return f'Circuit(node_masks={self.node_masks}, edge_masks={self.edge_masks})'
+        return f"Circuit(node_masks={self.node_masks}, edge_masks={self.edge_masks})"
 
     @staticmethod
     def full(layer_sizes):
@@ -52,7 +52,9 @@ class Circuit:
             A full circuit of the given layer sizes
         """
         node_masks = [np.ones(x) for x in layer_sizes]
-        edge_masks = [np.ones((y, x)) for x, y in zip(layer_sizes[:-1], layer_sizes[1:])]
+        edge_masks = [
+            np.ones((y, x)) for x, y in zip(layer_sizes[:-1], layer_sizes[1:])
+        ]
         return Circuit(node_masks, edge_masks)
 
     def save_to_file(self, filepath):
@@ -64,11 +66,11 @@ class Circuit:
         """
         # Convert the list of numpy arrays to a dictionary for saving
         data_to_save = {
-            f'node_mask_{i}': mask for i, mask in enumerate(self.node_masks)
+            f"node_mask_{i}": mask for i, mask in enumerate(self.node_masks)
         }
-        data_to_save.update({
-            f'edge_mask_{i}': mask for i, mask in enumerate(self.edge_masks)
-        })
+        data_to_save.update(
+            {f"edge_mask_{i}": mask for i, mask in enumerate(self.edge_masks)}
+        )
 
         # Save as .npz file
         np.savez(filepath, **data_to_save)
@@ -88,8 +90,13 @@ class Circuit:
         loaded_data = np.load(filepath)
 
         # Extract node_masks and edge_masks from the loaded data
-        node_masks = [loaded_data[f'node_mask_{i}'] for i in range(len(loaded_data.files) // 2 + 1)]
-        edge_masks = [loaded_data[f'edge_mask_{i}'] for i in range(len(loaded_data.files) // 2)]
+        node_masks = [
+            loaded_data[f"node_mask_{i}"]
+            for i in range(len(loaded_data.files) // 2 + 1)
+        ]
+        edge_masks = [
+            loaded_data[f"edge_mask_{i}"] for i in range(len(loaded_data.files) // 2)
+        ]
 
         # Create a new Circuit instance and return it
         return cls(node_masks, edge_masks)
@@ -104,38 +111,53 @@ class Circuit:
         if len(self.node_masks) != model.num_layers + 1:
             raise ValueError(
                 "The number of node masks in the circuit does not match the number of layers "
-                "plus the input layer in the model.")
+                "plus the input layer in the model."
+            )
 
         if len(self.edge_masks) != model.num_layers:
             raise ValueError(
-                "The number of edge masks in the circuit does not match the number of layers in the model.")
+                "The number of edge masks in the circuit does not match the number of layers in the model."
+            )
 
         for i, layer in enumerate(model.layers):
             linear_layer = layer[0]
 
             node_mask_size = self.node_masks[i + 1].shape[0]
             if node_mask_size != linear_layer.out_features:
-                raise ValueError(f"Node mask at layer {i + 1} does not match the size of the model's layer.")
+                raise ValueError(
+                    f"Node mask at layer {i + 1} does not match the size of the model's layer."
+                )
 
             edge_mask_size = self.edge_masks[i].shape
             weight_size = linear_layer.weight.shape
 
             if edge_mask_size != weight_size:
-                raise ValueError(f"Edge mask at layer {i} does not match the size of the model's weight matrix.")
+                raise ValueError(
+                    f"Edge mask at layer {i} does not match the size of the model's weight matrix."
+                )
 
             for out_idx in range(weight_size[0]):  # Rows (output neurons of this layer)
-                for in_idx in range(weight_size[1]):  # Columns (input neurons of this layer)
+                for in_idx in range(
+                    weight_size[1]
+                ):  # Columns (input neurons of this layer)
                     if self.edge_masks[i][out_idx, in_idx] == 1:
-                        if self.node_masks[i][in_idx] == 0 or self.node_masks[i + 1][out_idx] == 0:
-                            raise ValueError(f"Active edge from node {in_idx} to node {out_idx} "
-                                             f"at layer {i} connects to an inactive node.")
+                        if (
+                            self.node_masks[i][in_idx] == 0
+                            or self.node_masks[i + 1][out_idx] == 0
+                        ):
+                            raise ValueError(
+                                f"Active edge from node {in_idx} to node {out_idx} "
+                                f"at layer {i} connects to an inactive node."
+                            )
 
             self._validate_node_connectivity(i)
 
         # Check for an active path from inputs to outputs
         active_path_exists = self._check_active_path()
         if not active_path_exists:
-            raise ValueError("No active path exists from the input to the output in the circuit.")
+            raise ValueError(
+                "No active path exists from the input to the output in the circuit."
+            )
 
     def _validate_node_connectivity(self, layer_idx):
         """
@@ -151,7 +173,9 @@ class Circuit:
             for node_idx in range(incoming_edges.shape[0]):
                 if self.node_masks[layer_idx][node_idx] == 1:  # Active node
                     if not any(incoming_edges[node_idx, :] == 1):
-                        raise ValueError(f"Active node {node_idx} in layer {layer_idx} has no incoming edges.")
+                        raise ValueError(
+                            f"Active node {node_idx} in layer {layer_idx} has no incoming edges."
+                        )
 
         if layer_idx < len(self.edge_masks):
             # Check outgoing edges for nodes in layer_idx
@@ -159,19 +183,26 @@ class Circuit:
             for node_idx in range(outgoing_edges.shape[1]):
                 if self.node_masks[layer_idx][node_idx] == 1:  # Active node
                     if not any(outgoing_edges[:, node_idx] == 1):
-                        raise ValueError(f"Active node {node_idx} in layer {layer_idx} has no outgoing edges.")
+                        raise ValueError(
+                            f"Active node {node_idx} in layer {layer_idx} has no outgoing edges."
+                        )
 
     def _check_active_path(self):
         """
         Checks if there's an active path from input to output.
         """
         # Start with active nodes in the input layer
-        active_nodes = set(i for i, active in enumerate(self.node_masks[0]) if active == 1)
+        active_nodes = set(
+            i for i, active in enumerate(self.node_masks[0]) if active == 1
+        )
 
         for i in range(len(self.edge_masks)):
             next_active_nodes = set()
             for j in range(self.edge_masks[i].shape[0]):
-                if any(self.edge_masks[i][j, k] == 1 and k in active_nodes for k in range(self.edge_masks[i].shape[1])):
+                if any(
+                    self.edge_masks[i][j, k] == 1 and k in active_nodes
+                    for k in range(self.edge_masks[i].shape[1])
+                ):
                     next_active_nodes.add(j)
             active_nodes = next_active_nodes
 
@@ -188,15 +219,21 @@ class Circuit:
         Returns:
             bool: True if the current circuit is included in the other, False otherwise.
         """
-        if len(self.node_masks) != len(other.node_masks) or len(self.edge_masks) != len(other.edge_masks):
+        if len(self.node_masks) != len(other.node_masks) or len(self.edge_masks) != len(
+            other.edge_masks
+        ):
             return False
 
-        for i, (node_mask, other_node_mask) in enumerate(zip(self.node_masks, other.node_masks)):
+        for i, (node_mask, other_node_mask) in enumerate(
+            zip(self.node_masks, other.node_masks)
+        ):
             # if a node is included in self but not in other, return False
             if np.any(np.logical_and(node_mask == 1, other_node_mask == 0)):
                 return False
 
-        for i, (edge_mask, other_edge_mask) in enumerate(zip(self.edge_masks, other.edge_masks)):
+        for i, (edge_mask, other_edge_mask) in enumerate(
+            zip(self.edge_masks, other.edge_masks)
+        ):
             # if an edge is included in self but not in other, return False
             if np.any(np.logical_and(edge_mask == 1, other_edge_mask == 0)):
                 return False
@@ -268,7 +305,7 @@ class Circuit:
 
                 neuron_info = tuple([layer_id, node_id])
                 for tt in enumerate_tts(mapping):
-                    tt['neuron_info'] = neuron_info
+                    tt["neuron_info"] = neuron_info
                     global_tts[neuron_info].append(tt)
 
         # Create initial groundings
@@ -277,9 +314,9 @@ class Circuit:
         initial_groundings = [list(i_g) for i_g in initial_groundings]
         for i_g in initial_groundings:
             for tt_i in i_g:
-                tt_i['local_tt'] = tt_i['tt']
-                tt_i['gate_name'] = name_gate(tt_i['local_tt'])
-                tt_i['par_n'] = "inputs"
+                tt_i["local_tt"] = tt_i["tt"]
+                tt_i["gate_name"] = name_gate(tt_i["local_tt"])
+                tt_i["par_n"] = "inputs"
 
         partial_groundings = initial_groundings
         for neuron_info, neuron_val in global_tts.items():
@@ -291,15 +328,19 @@ class Circuit:
             prev_nodes = np.where(self.node_masks[current_layer - 1])[0]
 
             # Parents
-            par_n = [(current_layer - 1, par) for par in prev_nodes if edge_mask[node_id, par]]
+            par_n = [
+                (current_layer - 1, par)
+                for par in prev_nodes
+                if edge_mask[node_id, par]
+            ]
 
             # Iterate over all partially constructed groundings so far
             new_partial_groundings = []
             for p_g in partial_groundings:
-                parents_tts = [val['tt'] for val in p_g if val['neuron_info'] in par_n]
+                parents_tts = [val["tt"] for val in p_g if val["neuron_info"] in par_n]
 
                 for possible_current_tt in neuron_val:
-                    node_tt = possible_current_tt['tt']
+                    node_tt = possible_current_tt["tt"]
 
                     local_tts = compute_local_tts(node_tt, parents_tts, global_inputs)
 
@@ -309,9 +350,9 @@ class Circuit:
                     for l_tt in local_tts:
                         new_pg = copy.deepcopy(p_g)
                         new_neuron_val = copy.deepcopy(possible_current_tt)
-                        new_neuron_val['local_tt'] = l_tt
-                        new_neuron_val['gate_name'] = name_gate(l_tt)
-                        new_neuron_val['par_n'] = par_n
+                        new_neuron_val["local_tt"] = l_tt
+                        new_neuron_val["gate_name"] = name_gate(l_tt)
+                        new_neuron_val["par_n"] = par_n
                         new_pg.append(new_neuron_val)
                         new_partial_groundings.append(new_pg)
 
@@ -319,7 +360,15 @@ class Circuit:
 
         return [Grounding(grounding, self) for grounding in partial_groundings]
 
-    def visualize(self, ax=None, display_idx=False, node_size='small', file_path=None, labels=None, colors=None):
+    def visualize(
+        self,
+        ax=None,
+        display_idx=False,
+        node_size="small",
+        file_path=None,
+        labels=None,
+        colors=None,
+    ):
         node_size = get_node_size(node_size)
         """
         Visualize the circuit.
@@ -352,43 +401,99 @@ class Circuit:
         for layer_idx, edge_mask in enumerate(self.edge_masks):
             for out_idx, row in enumerate(edge_mask):
                 for in_idx, active in enumerate(row):
-                    G.add_edge(f"({layer_idx},{in_idx})", f"({layer_idx + 1},{out_idx})", active=active)
+                    G.add_edge(
+                        f"({layer_idx},{in_idx})",
+                        f"({layer_idx + 1},{out_idx})",
+                        active=active,
+                    )
 
         # Draw nodes
-        active_nodes = [node for node, attr in G.nodes(data=True) if attr['active'] == 1]
-        inactive_nodes = [node for node, attr in G.nodes(data=True) if attr['active'] == 0]
-        node_color = 'tab:blue' if colors is None else colors
-        nx.draw_networkx_nodes(G, pos, nodelist=active_nodes, node_color=node_color, node_size=node_size, alpha=0.8,
-                               ax=ax)
-        nx.draw_networkx_nodes(G, pos, nodelist=inactive_nodes, node_color='grey', node_size=node_size, alpha=0.4,
-                               ax=ax)
+        active_nodes = [
+            node for node, attr in G.nodes(data=True) if attr["active"] == 1
+        ]
+        inactive_nodes = [
+            node for node, attr in G.nodes(data=True) if attr["active"] == 0
+        ]
+        node_color = "tab:blue" if colors is None else colors
+        nx.draw_networkx_nodes(
+            G,
+            pos,
+            nodelist=active_nodes,
+            node_color=node_color,
+            node_size=node_size,
+            alpha=0.8,
+            ax=ax,
+        )
+        nx.draw_networkx_nodes(
+            G,
+            pos,
+            nodelist=inactive_nodes,
+            node_color="grey",
+            node_size=node_size,
+            alpha=0.4,
+            ax=ax,
+        )
 
         # Draw edges
-        active_edges = [(u, v) for u, v, attr in G.edges(data=True) if attr['active'] == 1]
-        inactive_edges = [(u, v) for u, v, attr in G.edges(data=True) if attr['active'] == 0]
-        nx.draw_networkx_edges(G, pos, node_size=node_size, edgelist=active_edges, edge_color='tab:blue', width=2,
-                               alpha=0.8, arrows=True, arrowstyle="-|>", connectionstyle='arc3,rad=0.1', ax=ax)
-        nx.draw_networkx_edges(G, pos, node_size=node_size, edgelist=inactive_edges, edge_color='grey', width=1,
-                               alpha=0.5, style='dashed', arrows=True, arrowstyle="-|>", connectionstyle='arc3,rad=0.1',
-                               ax=ax)
+        active_edges = [
+            (u, v) for u, v, attr in G.edges(data=True) if attr["active"] == 1
+        ]
+        inactive_edges = [
+            (u, v) for u, v, attr in G.edges(data=True) if attr["active"] == 0
+        ]
+        nx.draw_networkx_edges(
+            G,
+            pos,
+            node_size=node_size,
+            edgelist=active_edges,
+            edge_color="tab:blue",
+            width=2,
+            alpha=0.8,
+            arrows=True,
+            arrowstyle="-|>",
+            connectionstyle="arc3,rad=0.1",
+            ax=ax,
+        )
+        nx.draw_networkx_edges(
+            G,
+            pos,
+            node_size=node_size,
+            edgelist=inactive_edges,
+            edge_color="grey",
+            width=1,
+            alpha=0.5,
+            style="dashed",
+            arrows=True,
+            arrowstyle="-|>",
+            connectionstyle="arc3,rad=0.1",
+            ax=ax,
+        )
 
         # Draw labels
         if display_idx:
-            nx.draw_networkx_labels(G, pos, labels=labels, font_size=15, font_color='black', alpha=0.9, ax=ax)
+            nx.draw_networkx_labels(
+                G,
+                pos,
+                labels=labels,
+                font_size=15,
+                font_color="black",
+                alpha=0.9,
+                ax=ax,
+            )
 
         if ax is None:
             if file_path is None:
-                plt.axis('off')
+                plt.axis("off")
                 plt.show()
             else:
                 plt.tight_layout()
                 plt.savefig(file_path)
                 plt.close()
         else:
-            ax.axis('off')
+            ax.axis("off")
 
 
-def visualize_circuit_heatmap(circuits, ax=None, sizes='small', file_path=None):
+def visualize_circuit_heatmap(circuits, ax=None, sizes="small", file_path=None):
     """
     Visualize a list of circuits as a heatmap.
 
@@ -448,15 +553,31 @@ def visualize_circuit_heatmap(circuits, ax=None, sizes='small', file_path=None):
 
     cmap = plt.cm.inferno
 
-    node_colors = [cmap(node_activation_count[node] / max_node_activation) for node in G.nodes()]
-    edge_colors = [cmap(edge_activation_count[edge] / max_edge_activation) for edge in G.edges()]
+    node_colors = [
+        cmap(node_activation_count[node] / max_node_activation) for node in G.nodes()
+    ]
+    edge_colors = [
+        cmap(edge_activation_count[edge] / max_edge_activation) for edge in G.edges()
+    ]
 
     # Draw nodes with heatmap colors
-    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=node_size, alpha=0.9, ax=ax)
+    nx.draw_networkx_nodes(
+        G, pos, node_color=node_colors, node_size=node_size, alpha=0.9, ax=ax
+    )
 
     # Draw edges with heatmap colors
-    nx.draw_networkx_edges(G, pos, edgelist=G.edges(), edge_color=edge_colors, width=2, alpha=0.9, arrows=True,
-                           arrowstyle="-|>", connectionstyle='arc3,rad=0.1', ax=ax)
+    nx.draw_networkx_edges(
+        G,
+        pos,
+        edgelist=G.edges(),
+        edge_color=edge_colors,
+        width=2,
+        alpha=0.9,
+        arrows=True,
+        arrowstyle="-|>",
+        connectionstyle="arc3,rad=0.1",
+        ax=ax,
+    )
 
     # Draw labels for node indices (optional, but can be useful)
     # nx.draw_networkx_labels(G, pos, font_size=12, font_color='black', alpha=0.9, ax=ax)
@@ -465,17 +586,17 @@ def visualize_circuit_heatmap(circuits, ax=None, sizes='small', file_path=None):
     sm = ScalarMappable(cmap=cmap)
     sm.set_array([])  # Required for the colorbar
     cbar = plt.colorbar(sm, ax=ax if ax else plt.gca(), fraction=0.03, pad=0.04)
-    cbar.set_label('Activation Frequency', rotation=270, labelpad=15)
+    cbar.set_label("Activation Frequency", rotation=270, labelpad=15)
 
     # Show or save the figure
     if file_path:
-        plt.savefig(file_path, bbox_inches='tight')
+        plt.savefig(file_path, bbox_inches="tight")
     else:
         if ax is None:
-            plt.axis('off')
+            plt.axis("off")
             plt.show()
         else:
-            ax.axis('off')
+            ax.axis("off")
 
 
 def compute_jaccard_index(mask1, mask2):
@@ -526,7 +647,9 @@ def _enumerate_edge_mask_per_layer(in_mask, out_mask):
 
     all_masks = []
     # Generate all possible combinations for the remaining active edges
-    for mask in itertools.product(*[range(2)] * len(active_out_nodes) * len(active_in_nodes)):
+    for mask in itertools.product(
+        *[range(2)] * len(active_out_nodes) * len(active_in_nodes)
+    ):
         mask_array = np.array(mask).reshape(len(active_out_nodes), len(active_in_nodes))
 
         # Check that each row and column has at least one `1`
@@ -544,7 +667,9 @@ def _enumerate_edge_mask_per_layer(in_mask, out_mask):
     return all_masks
 
 
-def enumerate_all_valid_circuit(model, min_sparsity=None, use_tqdm=False):
+def enumerate_all_valid_circuit(
+    model, min_sparsity=None, use_tqdm=True
+) -> list[Circuit]:
     """
     Generates all valid circuits for the given model.
 
@@ -568,7 +693,9 @@ def enumerate_all_valid_circuit(model, min_sparsity=None, use_tqdm=False):
 
     all_circuits = []
     if use_tqdm:
-        all_valid_node_masks_with_inputs = tqdm(all_valid_node_masks_with_inputs, desc="Enumerating circuits")
+        all_valid_node_masks_with_inputs = tqdm(
+            all_valid_node_masks_with_inputs, desc="Enumerating circuits"
+        )
     for node_masks in all_valid_node_masks_with_inputs:
         if min_sparsity:
             combined_node_mask = np.concatenate(node_masks[1:-1], axis=None)
@@ -576,7 +703,10 @@ def enumerate_all_valid_circuit(model, min_sparsity=None, use_tqdm=False):
             if node_sparsity <= min_sparsity:
                 continue
 
-        all_masks_per_layer = [_enumerate_edge_mask_per_layer(x, y) for x, y in zip(node_masks, node_masks[1:])]
+        all_masks_per_layer = [
+            _enumerate_edge_mask_per_layer(x, y)
+            for x, y in zip(node_masks, node_masks[1:])
+        ]
         for v_e_m in itertools.product(*all_masks_per_layer):
             circuit = Circuit(node_masks=node_masks, edge_masks=v_e_m)
             all_circuits.append(circuit)
@@ -603,7 +733,9 @@ def analyze_circuits(circuits, top_n=10):
     pair_indices = list(itertools.combinations(range(n), 2))
     pair_similarities = []
 
-    for i, j in tqdm(pair_indices, total=len(pair_indices), desc="Comparing circuits pairs"):
+    for i, j in tqdm(
+        pair_indices, total=len(pair_indices), desc="Comparing circuits pairs"
+    ):
         if i == j:
             continue
 
@@ -618,7 +750,9 @@ def analyze_circuits(circuits, top_n=10):
         pair_similarities.append(((i, j), jaccard_sim))
 
     fraction_included_pairs = included_count / total_count if total_count > 0 else 0
-    average_jaccard_similarity = np.mean(jaccard_similarities) if jaccard_similarities else 0
+    average_jaccard_similarity = (
+        np.mean(jaccard_similarities) if jaccard_similarities else 0
+    )
 
     # Sort pairs by Jaccard similarity and get the top_n with lowest similarity
     top_n_pairs = sorted(pair_similarities, key=lambda x: x[1])[:top_n]
@@ -626,7 +760,9 @@ def analyze_circuits(circuits, top_n=10):
     return fraction_included_pairs, average_jaccard_similarity, top_n_pairs
 
 
-def find_circuits(model: MLP, x, y, accuracy_threshold, min_sparsity=None, use_tqdm=False):
+def find_circuits(
+    model: MLP, x, y, accuracy_threshold, min_sparsity=None, use_tqdm=True
+):
     """
     Find all valid circuits in a model.
 
@@ -645,7 +781,9 @@ def find_circuits(model: MLP, x, y, accuracy_threshold, min_sparsity=None, use_t
     model_predictions = model(x)
     bit_model_pred = torch.round(model_predictions)
 
-    all_sks = enumerate_all_valid_circuit(model, min_sparsity=min_sparsity, use_tqdm=use_tqdm)
+    all_sks = enumerate_all_valid_circuit(
+        model, min_sparsity=min_sparsity, use_tqdm=use_tqdm
+    )
 
     # Initialize a list to collect data for DataFrame
     data = []
@@ -676,7 +814,9 @@ def find_circuits(model: MLP, x, y, accuracy_threshold, min_sparsity=None, use_t
         similarity_bit_preds = same_predictions / total_predictions
 
         # Compute circuit sparsity
-        sk_sparsity_node_sparsity, sk_edge_sparsity, sk_combined_sparsity = circuit.sparsity()
+        sk_sparsity_node_sparsity, sk_edge_sparsity, sk_combined_sparsity = (
+            circuit.sparsity()
+        )
         if sk_sparsity_node_sparsity > max_sparsity_node:
             max_sparsity_node = sk_sparsity_node_sparsity
         if sk_edge_sparsity > max_sparsity_edge:
@@ -689,14 +829,16 @@ def find_circuits(model: MLP, x, y, accuracy_threshold, min_sparsity=None, use_t
             sparsities.append(sk_sparsity_node_sparsity)
 
         # Collect the data
-        data.append({
-            'circuit_idx': i,
-            'accuracy': accuracy,
-            'logit_similarity': logit_similarity,
-            'similarity_bit_preds': similarity_bit_preds,
-            'sk_sparsity': sk_combined_sparsity,
-            'sk_sparsity_node_sparsity': sk_sparsity_node_sparsity,
-            'sk_edge_sparsity': sk_edge_sparsity,
-        })
+        data.append(
+            {
+                "circuit_idx": i,
+                "accuracy": accuracy,
+                "logit_similarity": logit_similarity,
+                "similarity_bit_preds": similarity_bit_preds,
+                "sk_sparsity": sk_combined_sparsity,
+                "sk_sparsity_node_sparsity": sk_sparsity_node_sparsity,
+                "sk_edge_sparsity": sk_edge_sparsity,
+            }
+        )
 
     return top_sks, sparsities, pd.DataFrame(data)
