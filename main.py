@@ -2,15 +2,18 @@ import argparse
 import datetime
 import json
 import os
+from dataclasses import asdict
 from pathlib import Path
 
+from identifiability_toy_study.common.schemas import (
+    ExperimentConfig,
+    ExperimentResult,
+)
+from identifiability_toy_study.common.utils import setup_logging
 from identifiability_toy_study.experiment import run_experiment
-from identifiability_toy_study.mi_identifiability.logic_gates import ALL_LOGIC_GATES
-from identifiability_toy_study.mi_identifiability.utils import setup_logging
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-
     parser.add_argument(
         "--device",
         type=str,
@@ -23,104 +26,6 @@ if __name__ == "__main__":
         action="store_true",
         help="Train instead of loading mlp model",
     )
-
-    parser.add_argument(
-        "--n-samples-train",
-        type=int,
-        default=2048,
-        help="Number of samples for training",
-    )
-    parser.add_argument(
-        "--n-samples-val",
-        type=int,
-        default=128,
-        help="Number of samples for validation",
-    )
-    parser.add_argument(
-        "--n-samples-test", type=int, default=128, help="Number of samples for testing"
-    )
-
-    parser.add_argument(
-        "--loss-target",
-        type=float,
-        nargs="+",
-        default=[0.001],
-        help="Target loss value for training",
-    )
-    parser.add_argument(
-        "--accuracy-threshold",
-        type=float,
-        default=0.99,
-        help="The accuracy threshold for circuit search",
-    )
-    parser.add_argument(
-        "--val-frequency",
-        type=int,
-        default=1,
-        help="Frequency of validation during training",
-    )
-
-    parser.add_argument(
-        "--min-sparsity",
-        type=float,
-        default=0.0,
-        help="Minimum sparsity for circuit search",
-    )
-
-    # Params for MLP architecture
-
-    # Params for Training
-    parser.add_argument("--seed", type=int, default=0, help="Starting random seed")
-    parser.add_argument(
-        "--batch-size", type=int, default=2048, help="Batch size for training"
-    )
-    parser.add_argument(
-        "--learning-rate",
-        type=float,
-        nargs="+",
-        default=[0.001],
-        help="Learning rate for training",
-    )
-    parser.add_argument(
-        "--epochs", type=int, default=1000, help="Number of epochs for training"
-    )
-
-    # Params for Task Difficulty
-    parser.add_argument(
-        "--noise-std",
-        type=float,
-        default=0.0,
-        help="Standard deviation of the Gaussian noise",
-    )
-    parser.add_argument(
-        "--skewed-distribution",
-        action="store_true",
-        help="Whether to use a skewed distribution for training data",
-    )
-
-    # Params for Multiple Trials
-    parser.add_argument(
-        "--n-experiments",
-        type=int,
-        default=1,
-        help="Runs each experiment n times with different seeds",
-    )
-    parser.add_argument(
-        "--n-gates",
-        type=int,
-        nargs="+",
-        default=[1],
-        help="Number of logic gates used as target functions when n-experiments > 1",
-    )
-    parser.add_argument(
-        "--target-logic-gates",
-        type=str,
-        nargs="+",
-        default=["XOR"],
-        choices=ALL_LOGIC_GATES.keys(),
-        help="The allowed target logic gates",
-    )
-
     args = parser.parse_args()
 
     # We identify run by time
@@ -138,13 +43,19 @@ if __name__ == "__main__":
     log_path = os.path.join(run_dir, "log.txt")
     results_path = os.path.join(run_dir, "results.json")
 
-    # Run Experiment with many trials
+    # Logger
     logger = setup_logging(log_path, args.debug)
-    result = run_experiment(args, logger=logger, model_dir=model_dir)
+
+    # Run Experiment with many trials
+    cfg = ExperimentConfig(
+        from_scratch=args.from_scratch, model_dir=model_dir, debug=args.debug
+    )
+    result: ExperimentResult = run_experiment(cfg, logger=logger)
 
     # Save results
     with open(results_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=4, ensure_ascii=False)
+        json.dump(asdict(result), f, indent=4, ensure_ascii=False)
 
+    # Print in console
     logger.info(f"\n\n\n run_{timestamp} \n")
-    logger.info(json.dumps(result, indent=4))
+    logger.info(json.dumps(asdict(result), indent=4))

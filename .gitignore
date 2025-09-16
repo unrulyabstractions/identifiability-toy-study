@@ -169,3 +169,39 @@ checkpoints/
 outputs/
 runs/
 artifacts/
+
+# Jupyter notebook outputs
+*.ipynb_checkpoints/
+*.nbconvert.*
+
+# PyTorch model files
+*.pt
+*.pth
+*.ckpt
+
+# Common data science files
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.mat
+
+# Weights & Biases
+wandb/
+
+# Claude Code settings (local only)
+.claude/
+
+# Results and experiments
+results/
+experiments/*/results/
+experiments/*/logs/
+experiments/*/wandb/
+
+# Common temporary directories
+tmp/
+temp/
+*.tmp
+*.temp

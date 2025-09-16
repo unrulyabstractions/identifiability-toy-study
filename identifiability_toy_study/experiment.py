@@ -1,98 +1,69 @@
+import copy
 import random
-from dataclasses import asdict
 from itertools import product
 
-from identifiability_toy_study.mi_identifiability.utils import (
-    set_seeds,
+from .common.helpers import (
+    generate_trial_data,
 )
-
-from .study_core import (
-    DataParams,
-    IdentifiabilityConstraints,
-    ModelParams,
-    TrainParams,
+from .common.schemas import (
+    ExperimentConfig,
+    ExperimentResult,
     TrialSetup,
 )
-from .study_utils import (
-    generate_trial_data,
+from .common.utils import (
+    set_seeds,
 )
 from .trial import (
     run_trial,
 )
 
 
-def run_experiment(
-    args,
-    logger=None,
-    model_dir: str = "",
-):
-    logger and logger.info("Configuration in use:")
-    logger and logger.info(args)
+def run_experiment(cfg: ExperimentConfig, logger=None) -> ExperimentResult:
+    logger and logger.info(f"\n\n ExperimentConfig: \n {cfg} \n\n")
 
-    experiment_result = {}
+    experiment_result = ExperimentResult(config=cfg)
 
-    for n_gates, seed_offset in product(args.n_gates, range(args.n_experiments)):
-        logic_gates = random.sample(args.target_logic_gates, k=n_gates)
-        seed = args.seed + seed_offset
+    for n_gates, seed_offset in product(cfg.num_gates_per_run, range(cfg.num_runs)):
+        logic_gates = random.sample(cfg.target_logic_gates, k=n_gates)
+        seed = cfg.base_trial.seed + seed_offset
         set_seeds(seed)
 
-        data_params = DataParams(
-            n_samples_train=args.n_samples_train,
-            n_samples_val=args.n_samples_val,
-            n_samples_test=args.n_samples_test,
-            noise_std=args.noise_std,
-            skewed_distribution=args.skewed_distribution,
+        data_params = copy.deepcopy(cfg.base_trial.data_params)
+        trial_data = generate_trial_data(
+            data_params, logic_gates, cfg.device, logger=logger, debug=cfg.debug
         )
-        data = generate_trial_data(data_params, logic_gates, args.device)
-        if args.debug:
-            logger and logger.info(
-                f"checking_device: x_train: {data.train.x.device}, y_train: {data.train.x.device}"
-            )
-            logger and logger.info(
-                f"checking_device: x_val: {data.val.x.device}, y_val: {data.val.x.device}"
-            )
-            logger and logger.info(
-                f"checking_device: x_test: {data.test.x.device}, y_test: {data.test.x.device}"
-            )
 
-        WIDTHS = [ModelParams([]).width]
-        DEPTHS = [ModelParams([]).depth]
         for width, depth, loss_target, lr in product(
-            WIDTHS, DEPTHS, args.loss_target, args.learning_rate
+            cfg.widths, cfg.depths, cfg.loss_targets, cfg.learning_rates
         ):
-            setup = TrialSetup(
+            # Each trial should have its independent set of params
+            model_params = copy.deepcopy(cfg.base_trial.model_params)
+            train_params = copy.deepcopy(cfg.base_trial.train_params)
+            iden_constraints = copy.deepcopy(cfg.base_trial.iden_constraints)
+
+            train_params.learning_rate = lr
+            train_params.loss_target = loss_target
+            model_params.width = width
+            model_params.depth = depth
+            model_params.logic_gates = logic_gates
+
+            trial_setup = TrialSetup(
                 seed=seed,
-                model_params=ModelParams(
-                    width=width, depth=depth, logic_gates=logic_gates
-                ),
-                train_params=TrainParams(
-                    learning_rate=lr,
-                    loss_target=loss_target,
-                    batch_size=args.batch_size,
-                    epochs=args.epochs,
-                    acc_target=args.accuracy_threshold,
-                    val_frequency=args.val_frequency,
-                ),
                 data_params=data_params,
-                iden_constraints=IdentifiabilityConstraints(
-                    min_sparsity=args.min_sparsity,
-                    acc_threshold=args.accuracy_threshold,
-                    is_perfect_circuit=True,
-                    is_causal_abstraction=False,
-                    non_transport_stable=False,
-                    param_decomp=False,
-                ),
+                model_params=model_params,
+                train_params=train_params,
+                iden_constraints=iden_constraints,
             )
-            result = run_trial(
-                setup,
-                data,
-                device=args.device,
+            trial_result = run_trial(
+                trial_setup,
+                trial_data,
+                device=cfg.device,
                 logger=logger,
-                debug=args.debug,
-                model_dir=model_dir,
-                try_load_model=(not args.from_scratch),
+                debug=cfg.debug,
+                model_dir=cfg.model_dir,
+                try_load_model=(not cfg.from_scratch),
                 try_save_model=True,
             )
-            experiment_result[result.trial_id] = asdict(result)
+            experiment_result.trials[trial_result.trial_id] = trial_result
 
     return experiment_result
