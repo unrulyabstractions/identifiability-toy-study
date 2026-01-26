@@ -715,13 +715,16 @@ class MLP(nn.Module):
 
         layer_sizes = self.layer_sizes[1:]  # Skip input layer
         for i, layer_size in enumerate(layer_sizes):
-            is_output_layer = (i == len(layer_sizes) - 1)
+            is_output_layer = i == len(layer_sizes) - 1
             if fix_output and is_output_layer:
                 # Output layer: only all-ones mask
                 all_masks_per_layer.append([np.ones(layer_size, dtype=int)])
             else:
                 # Hidden layers: all 2^w combinations
-                layer_masks = [np.array(mask, dtype=int) for mask in itertools.product([0, 1], repeat=layer_size)]
+                layer_masks = [
+                    np.array(mask, dtype=int)
+                    for mask in itertools.product([0, 1], repeat=layer_size)
+                ]
                 all_masks_per_layer.append(layer_masks)
 
         # Combine masks across all layers: product of 2^w for each hidden layer = 2^(w*d)

@@ -1,7 +1,7 @@
 import copy
 import itertools
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -54,8 +54,12 @@ class CircuitStructure:
             edge_sparsity=data["edge_sparsity"],
             in_patches=[PatchShape.from_dict(p) for p in data["in_patches"]],
             out_patches=[PatchShape.from_dict(p) for p in data["out_patches"]],
-            in_circuit=PatchShape.from_dict(data["in_circuit"]) if data["in_circuit"] else None,
-            out_circuit=PatchShape.from_dict(data["out_circuit"]) if data["out_circuit"] else None,
+            in_circuit=PatchShape.from_dict(data["in_circuit"])
+            if data["in_circuit"]
+            else None,
+            out_circuit=PatchShape.from_dict(data["out_circuit"])
+            if data["out_circuit"]
+            else None,
             input_size=data["input_size"],
             output_size=data["output_size"],
             width=data["width"],
@@ -877,6 +881,7 @@ def enumerate_all_valid_circuit(
 
     if use_tqdm:
         from .subcircuit import count_node_patterns
+
         total = count_node_patterns(layer_widths)
         patterns = tqdm(patterns, total=total, desc="Enumerating node patterns")
 
@@ -905,8 +910,7 @@ def enumerate_edge_variants(circuit: Circuit) -> list[Circuit]:
 
     # Convert circuit to NodePattern
     layer_masks = tuple(
-        sum(int(b) << i for i, b in enumerate(mask))
-        for mask in circuit.node_masks
+        sum(int(b) << i for i, b in enumerate(mask)) for mask in circuit.node_masks
     )
     layer_widths = tuple(len(mask) for mask in circuit.node_masks)
     pattern = NodePattern(layer_masks=layer_masks, layer_widths=layer_widths)
