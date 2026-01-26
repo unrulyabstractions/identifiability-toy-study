@@ -22,16 +22,15 @@
 Look at visualize_experiment for the main entry point.
 """
 
-import os
-from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import multiprocessing as mp
+import os
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from pathlib import Path
 
 # Configure matplotlib backend BEFORE importing pyplot (critical for batch rendering)
 import matplotlib
-matplotlib.use('Agg')
 
-from .profiler import profile
+matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -39,20 +38,20 @@ import numpy as np
 import torch
 
 from .common.circuit import Circuit
-from .common.neural_model import MLP, DecomposedMLP
+from .common.neural_model import DecomposedMLP
 from .common.schemas import (
     ExperimentResult,
     FaithfulnessMetrics,
-    InterventionSample,
     ProfilingData,
     RobustnessMetrics,
 )
+from .profiler import profile
 
 # Configure matplotlib for performance
-plt.rcParams['path.simplify'] = True
-plt.rcParams['path.simplify_threshold'] = 1.0
-plt.rcParams['agg.path.chunksize'] = 10000
-plt.rcParams['text.usetex'] = False
+plt.rcParams["path.simplify"] = True
+plt.rcParams["path.simplify_threshold"] = 1.0
+plt.rcParams["agg.path.chunksize"] = 10000
+plt.rcParams["text.usetex"] = False
 
 
 # ------------------ CONSTANTS ------------------
@@ -76,6 +75,7 @@ JITTER = {"correct": 1.05, "incorrect": -0.05, "gate_correct": 1.05, "sc_correct
 
 
 # ------------------ LAYOUT CACHE ------------------
+
 
 class GraphLayoutCache:
     """Cache graph layouts by structure to avoid recomputation.
@@ -109,6 +109,7 @@ class GraphLayoutCache:
     def clear(self):
         self._cache.clear()
 
+
 # Global singleton
 _layout_cache = GraphLayoutCache()
 
@@ -132,9 +133,12 @@ def _text_color_for_background(bg_color: tuple) -> str:
 
 def _symmetric_range(activations: list) -> tuple[float, float]:
     """Color range centered at 0."""
-    all_vals = [act[0].detach().cpu().numpy() if isinstance(act, torch.Tensor)
-                else np.array(act[0] if isinstance(act[0], list) else act)
-                for act in activations]
+    all_vals = [
+        act[0].detach().cpu().numpy()
+        if isinstance(act, torch.Tensor)
+        else np.array(act[0] if isinstance(act[0], list) else act)
+        for act in activations
+    ]
     vmin, vmax = min(v.min() for v in all_vals), max(v.max() for v in all_vals)
     abs_max = max(abs(vmin), abs(vmax), 0.1)
     return -abs_max, abs_max
@@ -170,14 +174,23 @@ def _get_spd_component_weights(decomposed: DecomposedMLP) -> np.ndarray | None:
 # ------------------ CIRCUIT GRAPH ------------------
 
 
-def _build_graph_fast(activations, circuit, weights_per_layer, vmin, vmax, cached_pos=None):
+def _build_graph_fast(
+    activations, circuit, weights_per_layer, vmin, vmax, cached_pos=None
+):
     """Build networkx graph with optional cached positions."""
     G = nx.DiGraph()
     node_colors_dict = {}  # Dict keyed by node name for proper lookup
     labels, text_colors = {}, {}
 
     # Get layer sizes from activations
-    layer_sizes = tuple(act.shape[-1] if isinstance(act, torch.Tensor) else len(act[0]) if isinstance(act[0], list) else act.shape[-1] for act in activations)
+    layer_sizes = tuple(
+        act.shape[-1]
+        if isinstance(act, torch.Tensor)
+        else len(act[0])
+        if isinstance(act[0], list)
+        else act.shape[-1]
+        for act in activations
+    )
 
     # Use cached positions if available
     if cached_pos is None:
@@ -188,7 +201,13 @@ def _build_graph_fast(activations, circuit, weights_per_layer, vmin, vmax, cache
     # Batch add all nodes first
     all_nodes = []
     for layer_idx, layer_act in enumerate(activations):
-        n = layer_act.shape[-1] if isinstance(layer_act, torch.Tensor) else len(layer_act[0]) if isinstance(layer_act[0], list) else layer_act.shape[-1]
+        n = (
+            layer_act.shape[-1]
+            if isinstance(layer_act, torch.Tensor)
+            else len(layer_act[0])
+            if isinstance(layer_act[0], list)
+            else layer_act.shape[-1]
+        )
         for node_idx in range(n):
             name = f"({layer_idx},{node_idx})"
             all_nodes.append(name)
@@ -196,18 +215,30 @@ def _build_graph_fast(activations, circuit, weights_per_layer, vmin, vmax, cache
 
     # Build node colors and labels
     for layer_idx, layer_act in enumerate(activations):
-        n = layer_act.shape[-1] if isinstance(layer_act, torch.Tensor) else len(layer_act[0]) if isinstance(layer_act[0], list) else layer_act.shape[-1]
+        n = (
+            layer_act.shape[-1]
+            if isinstance(layer_act, torch.Tensor)
+            else len(layer_act[0])
+            if isinstance(layer_act[0], list)
+            else layer_act.shape[-1]
+        )
         for node_idx in range(n):
             name = f"({layer_idx},{node_idx})"
 
             if isinstance(layer_act, torch.Tensor):
                 val = layer_act[0, node_idx].item()
             else:
-                val = layer_act[0][node_idx] if isinstance(layer_act[0], list) else layer_act[0, node_idx]
+                val = (
+                    layer_act[0][node_idx]
+                    if isinstance(layer_act[0], list)
+                    else layer_act[0, node_idx]
+                )
             labels[name] = f"{val:.2f}"
 
             # Handle case where circuit has more outputs than activations
-            if layer_idx < len(circuit.node_masks) and node_idx < len(circuit.node_masks[layer_idx]):
+            if layer_idx < len(circuit.node_masks) and node_idx < len(
+                circuit.node_masks[layer_idx]
+            ):
                 active = circuit.node_masks[layer_idx][node_idx] == 1
             else:
                 active = True
@@ -230,8 +261,16 @@ def _build_graph_fast(activations, circuit, weights_per_layer, vmin, vmax, cache
             continue  # Skip edges to layers beyond activations
 
         w = weights_per_layer[layer_idx]
-        out_limit = activations[layer_idx + 1].shape[-1] if isinstance(activations[layer_idx + 1], torch.Tensor) else len(activations[layer_idx + 1][0])
-        in_limit = activations[layer_idx].shape[-1] if isinstance(activations[layer_idx], torch.Tensor) else len(activations[layer_idx][0])
+        out_limit = (
+            activations[layer_idx + 1].shape[-1]
+            if isinstance(activations[layer_idx + 1], torch.Tensor)
+            else len(activations[layer_idx + 1][0])
+        )
+        in_limit = (
+            activations[layer_idx].shape[-1]
+            if isinstance(activations[layer_idx], torch.Tensor)
+            else len(activations[layer_idx][0])
+        )
 
         for out_idx, row in enumerate(mask):
             if out_idx >= out_limit:
@@ -240,7 +279,11 @@ def _build_graph_fast(activations, circuit, weights_per_layer, vmin, vmax, cache
                 if in_idx >= in_limit:
                     continue  # Skip inputs beyond activation size
                 e = (f"({layer_idx},{in_idx})", f"({layer_idx + 1},{out_idx})")
-                weight_val = w[out_idx, in_idx] if out_idx < w.shape[0] and in_idx < w.shape[1] else 0.0
+                weight_val = (
+                    w[out_idx, in_idx]
+                    if out_idx < w.shape[0] and in_idx < w.shape[1]
+                    else 0.0
+                )
                 all_edges.append((e[0], e[1], {"active": active, "weight": weight_val}))
                 if active == 1:
                     edge_labels[e] = f"{weight_val:.2f}"
@@ -271,7 +314,8 @@ def _draw_graph(
 
     # Draw all nodes at once
     nx.draw_networkx_nodes(
-        G, pos,
+        G,
+        pos,
         node_color=node_colors,
         node_size=900,
         edgecolors="black",
@@ -282,7 +326,8 @@ def _draw_graph(
     # Draw active edges
     if active:
         nx.draw_networkx_edges(
-            G, pos,
+            G,
+            pos,
             edgelist=active,
             edge_color="#333333",
             width=active_widths,
@@ -296,7 +341,8 @@ def _draw_graph(
     # Draw inactive edges
     if inactive:
         nx.draw_networkx_edges(
-            G, pos,
+            G,
+            pos,
             edgelist=inactive,
             edge_color="#cccccc",
             width=0.5,
@@ -310,7 +356,8 @@ def _draw_graph(
     # Draw labels
     for node, (x, y) in pos.items():
         ax.text(
-            x, y,
+            x,
+            y,
             labels.get(node, ""),
             ha="center",
             va="center",
@@ -321,7 +368,8 @@ def _draw_graph(
 
     if edge_labels:
         nx.draw_networkx_edge_labels(
-            G, pos,
+            G,
+            pos,
             edge_labels=edge_labels,
             font_size=6,
             font_color="#666666",
@@ -336,7 +384,15 @@ def _draw_graph(
 
 
 def _draw_graph_with_output_highlight(
-    ax, G, pos, node_colors, labels, text_colors, edge_labels, edge_weights, output_correct
+    ax,
+    G,
+    pos,
+    node_colors,
+    labels,
+    text_colors,
+    edge_labels,
+    edge_weights,
+    output_correct,
 ):
     """Draw graph with highlighted output node border (green=correct, red=incorrect)."""
     active = [(u, v) for u, v, d in G.edges(data=True) if d["active"] == 1]
@@ -358,7 +414,8 @@ def _draw_graph_with_output_highlight(
     if other_nodes:
         other_colors = [node_colors[list(G.nodes()).index(n)] for n in other_nodes]
         nx.draw_networkx_nodes(
-            G, pos,
+            G,
+            pos,
             nodelist=other_nodes,
             node_color=other_colors,
             node_size=900,
@@ -372,7 +429,8 @@ def _draw_graph_with_output_highlight(
         output_colors = [node_colors[list(G.nodes()).index(n)] for n in output_nodes]
         border_color = "green" if output_correct else "red"
         nx.draw_networkx_nodes(
-            G, pos,
+            G,
+            pos,
             nodelist=output_nodes,
             node_color=output_colors,
             node_size=900,
@@ -384,7 +442,8 @@ def _draw_graph_with_output_highlight(
     # Draw edges
     if active:
         nx.draw_networkx_edges(
-            G, pos,
+            G,
+            pos,
             edgelist=active,
             edge_color="#333333",
             width=active_widths,
@@ -396,7 +455,8 @@ def _draw_graph_with_output_highlight(
         )
     if inactive:
         nx.draw_networkx_edges(
-            G, pos,
+            G,
+            pos,
             edgelist=inactive,
             edge_color="#cccccc",
             width=0.5,
@@ -410,7 +470,8 @@ def _draw_graph_with_output_highlight(
     # Draw labels
     for node, (x, y) in pos.items():
         ax.text(
-            x, y,
+            x,
+            y,
             labels.get(node, ""),
             ha="center",
             va="center",
@@ -424,12 +485,16 @@ def _draw_graph_with_output_highlight(
 def _draw_circuit_from_data(ax, activations, circuit, weights, title):
     """Draw a single circuit using pre-computed activations (no model run)."""
     vmin, vmax = _symmetric_range(activations)
-    G, pos, colors, node_labels, text_colors, edge_labels, edge_weights = _build_graph_fast(
-        activations, circuit, weights, vmin, vmax
+    G, pos, colors, node_labels, text_colors, edge_labels, edge_weights = (
+        _build_graph_fast(activations, circuit, weights, vmin, vmax)
     )
     _draw_graph(ax, G, pos, colors, node_labels, text_colors, edge_labels, edge_weights)
 
-    output = activations[-1][0, 0].item() if isinstance(activations[-1], torch.Tensor) else activations[-1][0][0]
+    output = (
+        activations[-1][0, 0].item()
+        if isinstance(activations[-1], torch.Tensor)
+        else activations[-1][0][0]
+    )
     ax.set_title(f"{title} -> {output:.3f}", fontsize=10, fontweight="bold")
 
 
@@ -517,9 +582,15 @@ def _bin_samples_by_magnitude(
         if not bin_samples:
             continue
         bin_centers.append((bin_edges[i] + bin_edges[i + 1]) / 2)
-        gate_accs.append(sum(1 for s in bin_samples if s.gate_correct) / len(bin_samples))
-        sc_accs.append(sum(1 for s in bin_samples if s.subcircuit_correct) / len(bin_samples))
-        bit_agrees.append(sum(1 for s in bin_samples if s.agreement_bit) / len(bin_samples))
+        gate_accs.append(
+            sum(1 for s in bin_samples if s.gate_correct) / len(bin_samples)
+        )
+        sc_accs.append(
+            sum(1 for s in bin_samples if s.subcircuit_correct) / len(bin_samples)
+        )
+        bit_agrees.append(
+            sum(1 for s in bin_samples if s.agreement_bit) / len(bin_samples)
+        )
         mse_means.append(sum(s.mse for s in bin_samples) / len(bin_samples))
 
     return bin_centers, gate_accs, sc_accs, bit_agrees, mse_means
@@ -527,8 +598,17 @@ def _bin_samples_by_magnitude(
 
 def _generate_robustness_circuit_figure(args):
     """Worker function for parallel robustness circuit generation."""
-    (samples, circuit_dict, full_circuit_dict, weights, base_key, category,
-     gt, output_path, n_samples) = args
+    (
+        samples,
+        circuit_dict,
+        full_circuit_dict,
+        weights,
+        base_key,
+        category,
+        gt,
+        output_path,
+        n_samples,
+    ) = args
 
     # Reconstruct circuits from dicts
     circuit = Circuit.from_dict(circuit_dict)
@@ -539,39 +619,60 @@ def _generate_robustness_circuit_figure(args):
         axes = axes.reshape(1, -1)
 
     for i, sample in enumerate(samples):
-        if not sample['agreement_bit']:
+        if not sample["agreement_bit"]:
             for col in range(2):
                 axes[i, col].set_facecolor("#FFEEEE")
 
         # Convert stored list activations back to tensors
-        sc_acts = [torch.tensor(a).unsqueeze(0) for a in sample['subcircuit_activations']]
-        full_acts = [torch.tensor(a).unsqueeze(0) for a in sample['gate_activations']]
+        sc_acts = [
+            torch.tensor(a).unsqueeze(0) for a in sample["subcircuit_activations"]
+        ]
+        full_acts = [torch.tensor(a).unsqueeze(0) for a in sample["gate_activations"]]
 
         # Left: subcircuit
         vmin, vmax = _symmetric_range(sc_acts)
-        G, pos, colors, labels, text_colors, edge_labels, edge_w = (
-            _build_graph_fast(sc_acts, circuit, weights, vmin, vmax)
+        G, pos, colors, labels, text_colors, edge_labels, edge_w = _build_graph_fast(
+            sc_acts, circuit, weights, vmin, vmax
         )
         _draw_graph_with_output_highlight(
-            axes[i, 0], G, pos, colors, labels, text_colors,
-            edge_labels, edge_w, sample['subcircuit_correct']
+            axes[i, 0],
+            G,
+            pos,
+            colors,
+            labels,
+            text_colors,
+            edge_labels,
+            edge_w,
+            sample["subcircuit_correct"],
         )
 
         # Right: full model
         vmin, vmax = _symmetric_range(full_acts)
-        G, pos, colors, labels, text_colors, edge_labels, edge_w = (
-            _build_graph_fast(full_acts, full_circuit, weights, vmin, vmax)
+        G, pos, colors, labels, text_colors, edge_labels, edge_w = _build_graph_fast(
+            full_acts, full_circuit, weights, vmin, vmax
         )
         _draw_graph_with_output_highlight(
-            axes[i, 1], G, pos, colors, labels, text_colors,
-            edge_labels, edge_w, sample['gate_correct']
+            axes[i, 1],
+            G,
+            pos,
+            colors,
+            labels,
+            text_colors,
+            edge_labels,
+            edge_w,
+            sample["gate_correct"],
         )
 
-        if not sample['agreement_bit']:
+        if not sample["agreement_bit"]:
             axes[i, 0].text(
-                0.02, 0.98, "⚠ DISAGREE", transform=axes[i, 0].transAxes,
-                fontsize=8, color="red", fontweight="bold",
-                verticalalignment="top"
+                0.02,
+                0.98,
+                "⚠ DISAGREE",
+                transform=axes[i, 0].transAxes,
+                fontsize=8,
+                color="red",
+                fontweight="bold",
+                verticalalignment="top",
             )
 
     axes[0, 0].set_title("Subcircuit", fontsize=10, fontweight="bold")
@@ -583,7 +684,9 @@ def _generate_robustness_circuit_figure(args):
         "ood_positive": "ood: scale > 1",
         "ood_negative": "ood: scale < 0",
     }.get(category, category)
-    fig.suptitle(f"({base_str}) → {gt}  [{category_label}]", fontsize=14, fontweight="bold")
+    fig.suptitle(
+        f"({base_str}) → {gt}  [{category_label}]", fontsize=14, fontweight="bold"
+    )
     plt.tight_layout()
 
     plt.savefig(output_path, dpi=100)  # Lower DPI for faster generation
@@ -616,7 +719,8 @@ def visualize_robustness_circuit_samples(
 
     # Group samples by base input
     samples_by_base: dict[str, dict[str, list]] = {
-        k: {"noise": [], "ood_positive": [], "ood_negative": []} for k in base_to_key.values()
+        k: {"noise": [], "ood_positive": [], "ood_negative": []}
+        for k in base_to_key.values()
     }
 
     for sample in robustness.noise_samples:
@@ -643,8 +747,14 @@ def visualize_robustness_circuit_samples(
             if not all_samples:
                 continue
 
-            sort_key = (lambda s: abs(s.noise_magnitude)) if category == "ood_negative" else (lambda s: s.noise_magnitude)
-            disagree = sorted([s for s in all_samples if not s.agreement_bit], key=sort_key)
+            sort_key = (
+                (lambda s: abs(s.noise_magnitude))
+                if category == "ood_negative"
+                else (lambda s: s.noise_magnitude)
+            )
+            disagree = sorted(
+                [s for s in all_samples if not s.agreement_bit], key=sort_key
+            )
             agree = sorted([s for s in all_samples if s.agreement_bit], key=sort_key)
 
             if len(disagree) >= n_samples_per_grid:
@@ -654,7 +764,9 @@ def visualize_robustness_circuit_samples(
                 samples = list(disagree)
                 remaining = n_samples_per_grid - len(samples)
                 if remaining > 0 and agree:
-                    a_idx = np.linspace(0, len(agree) - 1, min(remaining, len(agree)), dtype=int)
+                    a_idx = np.linspace(
+                        0, len(agree) - 1, min(remaining, len(agree)), dtype=int
+                    )
                     samples.extend([agree[i] for i in a_idx])
 
             samples = sorted(samples, key=sort_key)
@@ -667,24 +779,38 @@ def visualize_robustness_circuit_samples(
             output_path = os.path.join(circuit_viz_dir, filename)
 
             # Convert samples to dicts for pickling
-            sample_dicts = [{
-                'subcircuit_activations': s.subcircuit_activations,
-                'gate_activations': s.gate_activations,
-                'subcircuit_correct': s.subcircuit_correct,
-                'gate_correct': s.gate_correct,
-                'agreement_bit': s.agreement_bit,
-            } for s in samples]
+            sample_dicts = [
+                {
+                    "subcircuit_activations": s.subcircuit_activations,
+                    "gate_activations": s.gate_activations,
+                    "subcircuit_correct": s.subcircuit_correct,
+                    "gate_correct": s.gate_correct,
+                    "agreement_bit": s.agreement_bit,
+                }
+                for s in samples
+            ]
 
-            tasks.append((
-                sample_dicts, circuit_dict, full_circuit_dict, weights,
-                base_key, category, gt, output_path, n_samples
-            ))
+            tasks.append(
+                (
+                    sample_dicts,
+                    circuit_dict,
+                    full_circuit_dict,
+                    weights,
+                    base_key,
+                    category,
+                    gt,
+                    output_path,
+                    n_samples,
+                )
+            )
             paths[filename] = output_path
 
     # Execute in parallel
     if tasks:
         n_workers = min(len(tasks), mp.cpu_count())
-        print(f"[VIZ] Generating {len(tasks)} robustness circuit figures with {n_workers} workers")
+        print(
+            f"[VIZ] Generating {len(tasks)} robustness circuit figures with {n_workers} workers"
+        )
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             list(executor.map(_generate_robustness_circuit_figure, tasks))
 
@@ -712,7 +838,9 @@ def visualize_robustness_summary(
     ax.bar(categories, values, color=colors, alpha=0.8)
     ax.set_ylim(0, 1.1)
     ax.set_ylabel("Rate")
-    ax.set_title(f"Noise Summary (MSE: {robustness.noise_mse_mean:.4f})", fontweight="bold")
+    ax.set_title(
+        f"Noise Summary (MSE: {robustness.noise_mse_mean:.4f})", fontweight="bold"
+    )
     ax.axhline(y=1.0, color="green", linestyle="--", alpha=0.5)
     for i, v in enumerate(values):
         ax.text(i, v + 0.02, f"{v:.1%}", ha="center", fontsize=9)
@@ -746,8 +874,10 @@ def visualize_robustness_summary(
         robustness.ood_subcircuit_accuracy,
         robustness.ood_agreement_bit,
     ]
-    ax.bar(x - width/2, noise_vals, width, label="Noise", color="steelblue", alpha=0.8)
-    ax.bar(x + width/2, ood_vals, width, label="OOD", color="coral", alpha=0.8)
+    ax.bar(
+        x - width / 2, noise_vals, width, label="Noise", color="steelblue", alpha=0.8
+    )
+    ax.bar(x + width / 2, ood_vals, width, label="OOD", color="coral", alpha=0.8)
     ax.set_xticks(x)
     ax.set_xticklabels(["Gate Acc", "SC Acc", "Agreement"])
     ax.set_ylim(0, 1.1)
@@ -760,7 +890,9 @@ def visualize_robustness_summary(
     ax = axes[1, 1]
     score = robustness.overall_robustness
     ax.pie([score, 1 - score], colors=["green", "#e0e0e0"], startangle=90)
-    ax.text(0, 0, f"{score:.1%}", ha="center", va="center", fontsize=24, fontweight="bold")
+    ax.text(
+        0, 0, f"{score:.1%}", ha="center", va="center", fontsize=24, fontweight="bold"
+    )
     ax.set_title("Overall Robustness", fontweight="bold")
 
     fig.suptitle(f"{prefix}Robustness Analysis", fontsize=14, fontweight="bold")
@@ -785,8 +917,10 @@ def visualize_robustness_curves(
     # Per-input breakdown for noise samples
     with profile("robust_curves.per_input"):
         base_to_key = {
-            (0.0, 0.0): "0_0", (0.0, 1.0): "0_1",
-            (1.0, 0.0): "1_0", (1.0, 1.0): "1_1",
+            (0.0, 0.0): "0_0",
+            (0.0, 1.0): "0_1",
+            (1.0, 0.0): "1_0",
+            (1.0, 1.0): "1_1",
         }
 
         samples_by_base = {k: [] for k in base_to_key.values()}
@@ -802,11 +936,17 @@ def visualize_robustness_curves(
             ax = axes[i]
             samples = samples_by_base.get(key, [])
             if samples:
-                bin_centers, gate_acc, sc_acc, bit_agree, mse = _bin_samples_by_magnitude(samples)
+                bin_centers, gate_acc, sc_acc, bit_agree, mse = (
+                    _bin_samples_by_magnitude(samples)
+                )
                 if bin_centers:
-                    ax.plot(bin_centers, gate_acc, "o-", label="Gate Acc", color="steelblue")
+                    ax.plot(
+                        bin_centers, gate_acc, "o-", label="Gate Acc", color="steelblue"
+                    )
                     ax.plot(bin_centers, sc_acc, "s-", label="SC Acc", color="coral")
-                    ax.plot(bin_centers, bit_agree, "^-", label="Agreement", color="purple")
+                    ax.plot(
+                        bin_centers, bit_agree, "^-", label="Agreement", color="purple"
+                    )
             ax.set_xlabel("Noise Magnitude")
             ax.set_ylabel("Rate")
             ax.set_ylim(0, 1.1)
@@ -814,7 +954,9 @@ def visualize_robustness_curves(
             ax.set_title(f"Input: ({key.replace('_', ', ')})", fontweight="bold")
             ax.grid(alpha=0.3)
 
-        fig.suptitle(f"{prefix}Noise Robustness by Input", fontsize=14, fontweight="bold")
+        fig.suptitle(
+            f"{prefix}Noise Robustness by Input", fontsize=14, fontweight="bold"
+        )
         plt.tight_layout()
         path = os.path.join(output_dir, "noise_by_input.png")
         plt.savefig(path, dpi=150, bbox_inches="tight")
@@ -873,19 +1015,31 @@ def visualize_robustness_curves(
 
 def _generate_faithfulness_circuit_figure(args):
     """Worker function for parallel faithfulness circuit generation."""
-    (effect_dict, circuit_dict, weights, out_circuit_nodes, output_path, fig_type, index) = args
+    (
+        effect_dict,
+        circuit_dict,
+        weights,
+        out_circuit_nodes,
+        output_path,
+        fig_type,
+        index,
+    ) = args
 
     circuit = Circuit.from_dict(circuit_dict)
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
-    clean_acts = [torch.tensor(a).unsqueeze(0) for a in effect_dict['clean_activations']]
-    corrupt_acts = [torch.tensor(a).unsqueeze(0) for a in effect_dict['corrupted_activations']]
+    clean_acts = [
+        torch.tensor(a).unsqueeze(0) for a in effect_dict["clean_activations"]
+    ]
+    corrupt_acts = [
+        torch.tensor(a).unsqueeze(0) for a in effect_dict["corrupted_activations"]
+    ]
 
     all_acts = clean_acts + corrupt_acts
     vmin, vmax = _symmetric_range(all_acts)
 
-    def draw_cf_circuit(ax, acts, patched_nodes, title, output_correct):
+    def draw_cf_circuit(ax, acts, patched_nodes, title, output_correct, weights_per_layer):
         G = nx.DiGraph()
         layer_sizes = tuple(a.shape[-1] for a in acts)
         pos = _layout_cache.get_positions(layer_sizes)
@@ -914,61 +1068,160 @@ def _generate_faithfulness_circuit_figure(args):
                 node_colors.append(color)
                 text_colors[name] = _text_color_for_background(color)
 
-        # Add edges
+        # Add edges with weights
         edges = []
+        edge_labels = {}
+        edge_weights = {}
         for layer_idx, mask in enumerate(circuit.edge_masks):
+            w = weights_per_layer[layer_idx] if layer_idx < len(weights_per_layer) else None
             for out_idx, row in enumerate(mask):
                 for in_idx, active in enumerate(row):
                     if active:
                         e = (f"({layer_idx},{in_idx})", f"({layer_idx + 1},{out_idx})")
                         edges.append(e)
+                        # Get weight value if available
+                        if w is not None and out_idx < w.shape[0] and in_idx < w.shape[1]:
+                            weight_val = w[out_idx, in_idx]
+                            edge_labels[e] = f"{weight_val:.2f}"
+                            edge_weights[e] = abs(weight_val)
         G.add_edges_from(edges)
+
+        # Compute edge widths (linear scale: min 0.5, max 3)
+        if edge_weights:
+            max_w = max(edge_weights.values()) if edge_weights.values() else 1.0
+            max_w = max(max_w, 0.01)
+            edge_widths = [0.5 + 2.5 * (edge_weights.get(e, 0) / max_w) for e in edges]
+        else:
+            edge_widths = [1.0] * len(edges)
 
         # Draw
         max_layer = max(int(n.split(",")[0][1:]) for n in G.nodes())
         output_nodes = [n for n in G.nodes() if n.startswith(f"({max_layer},")]
         patched_list = [n for n in G.nodes() if n in patched_nodes]
-        regular_nodes = [n for n in G.nodes() if n not in output_nodes and n not in patched_list]
+        regular_nodes = [
+            n for n in G.nodes() if n not in output_nodes and n not in patched_list
+        ]
 
         if regular_nodes:
             reg_colors = [node_colors[list(G.nodes()).index(n)] for n in regular_nodes]
-            nx.draw_networkx_nodes(G, pos, nodelist=regular_nodes, node_color=reg_colors,
-                                  node_size=500, ax=ax, edgecolors="black", linewidths=1)
+            nx.draw_networkx_nodes(
+                G,
+                pos,
+                nodelist=regular_nodes,
+                node_color=reg_colors,
+                node_size=500,
+                ax=ax,
+                edgecolors="black",
+                linewidths=1,
+            )
 
         if patched_list:
             p_colors = [node_colors[list(G.nodes()).index(n)] for n in patched_list]
-            nx.draw_networkx_nodes(G, pos, nodelist=patched_list, node_color=p_colors,
-                                  node_size=500, ax=ax, edgecolors="#9C27B0", linewidths=4)
+            nx.draw_networkx_nodes(
+                G,
+                pos,
+                nodelist=patched_list,
+                node_color=p_colors,
+                node_size=500,
+                ax=ax,
+                edgecolors="#9C27B0",
+                linewidths=4,
+            )
 
         if output_nodes:
             out_colors = [node_colors[list(G.nodes()).index(n)] for n in output_nodes]
             border = "green" if output_correct else "red"
-            nx.draw_networkx_nodes(G, pos, nodelist=output_nodes, node_color=out_colors,
-                                  node_size=500, ax=ax, edgecolors=border, linewidths=4)
+            nx.draw_networkx_nodes(
+                G,
+                pos,
+                nodelist=output_nodes,
+                node_color=out_colors,
+                node_size=500,
+                ax=ax,
+                edgecolors=border,
+                linewidths=4,
+            )
 
-        nx.draw_networkx_edges(G, pos, edge_color="black", width=1.0, ax=ax)
+        # Draw edges with variable thickness
+        if edges:
+            nx.draw_networkx_edges(
+                G,
+                pos,
+                edgelist=edges,
+                edge_color="#333333",
+                width=edge_widths,
+                arrows=True,
+                arrowstyle="-|>",
+                arrowsize=10,
+                connectionstyle="arc3,rad=0.1",
+                ax=ax,
+            )
 
         for node, (x, y) in pos.items():
-            ax.text(x, y, labels[node], ha="center", va="center", fontsize=6,
-                   fontweight="bold", color=text_colors[node])
+            ax.text(
+                x,
+                y,
+                labels[node],
+                ha="center",
+                va="center",
+                fontsize=6,
+                fontweight="bold",
+                color=text_colors[node],
+            )
+
+        # Draw edge labels
+        if edge_labels:
+            nx.draw_networkx_edge_labels(
+                G,
+                pos,
+                edge_labels=edge_labels,
+                font_size=5,
+                font_color="#666666",
+                alpha=0.8,
+                label_pos=0.3,
+                bbox=dict(
+                    boxstyle="round,pad=0.1", facecolor="white", alpha=0.7, edgecolor="none"
+                ),
+                ax=ax,
+            )
 
         ax.set_title(title, fontsize=9, fontweight="bold")
         ax.axis("off")
 
     # Draw three circuits
-    draw_cf_circuit(axes[0], clean_acts, set(),
-                   f"Clean → {effect_dict['expected_clean_output']:.2f}", True)
-    draw_cf_circuit(axes[1], corrupt_acts, set(),
-                   f"Corrupted → {effect_dict['expected_corrupted_output']:.2f}", True)
-    draw_cf_circuit(axes[2], clean_acts, out_circuit_nodes,
-                   f"Clean+Patch → {effect_dict['actual_output']:.2f}",
-                   not effect_dict['output_changed_to_corrupted'])
+    draw_cf_circuit(
+        axes[0],
+        clean_acts,
+        set(),
+        f"Clean → {effect_dict['expected_clean_output']:.2f}",
+        True,
+        weights,
+    )
+    draw_cf_circuit(
+        axes[1],
+        corrupt_acts,
+        set(),
+        f"Corrupted → {effect_dict['expected_corrupted_output']:.2f}",
+        True,
+        weights,
+    )
+    draw_cf_circuit(
+        axes[2],
+        clean_acts,
+        out_circuit_nodes,
+        f"Clean+Patch → {effect_dict['actual_output']:.2f}",
+        not effect_dict["output_changed_to_corrupted"],
+        weights,
+    )
 
-    clean_str = ",".join(f"{v:.0f}" for v in effect_dict['clean_input'])
-    corrupt_str = ",".join(f"{v:.0f}" for v in effect_dict['corrupted_input'])
-    fig.suptitle(f"{fig_type} Counterfactual #{index} | ({clean_str})→({corrupt_str}) | "
-                f"Faith: {effect_dict['faithfulness_score']:.2f}",
-                fontsize=11, fontweight="bold")
+    clean_str = ",".join(f"{v:.0f}" for v in effect_dict["clean_input"])
+    corrupt_str = ",".join(f"{v:.0f}" for v in effect_dict["corrupted_input"])
+    fig.suptitle(
+        f"{fig_type} Counterfactual #{index} | ({clean_str})→({corrupt_str}) | "
+        f"Faith: {effect_dict['faithfulness_score']:.2f}",
+        fontsize=11,
+        fontweight="bold",
+    )
     plt.tight_layout()
 
     plt.savefig(output_path, dpi=100)  # Lower DPI for faster generation
@@ -1018,18 +1271,28 @@ def visualize_faithfulness_circuit_samples(
                 continue
 
             effect_dict = {
-                'clean_activations': effect.clean_activations,
-                'corrupted_activations': effect.corrupted_activations,
-                'expected_clean_output': effect.expected_clean_output,
-                'expected_corrupted_output': effect.expected_corrupted_output,
-                'actual_output': effect.actual_output,
-                'output_changed_to_corrupted': effect.output_changed_to_corrupted,
-                'faithfulness_score': effect.faithfulness_score,
-                'clean_input': effect.clean_input,
-                'corrupted_input': effect.corrupted_input,
+                "clean_activations": effect.clean_activations,
+                "corrupted_activations": effect.corrupted_activations,
+                "expected_clean_output": effect.expected_clean_output,
+                "expected_corrupted_output": effect.expected_corrupted_output,
+                "actual_output": effect.actual_output,
+                "output_changed_to_corrupted": effect.output_changed_to_corrupted,
+                "faithfulness_score": effect.faithfulness_score,
+                "clean_input": effect.clean_input,
+                "corrupted_input": effect.corrupted_input,
             }
             output_path = os.path.join(cf_dir, f"out_cf_{i}.png")
-            tasks.append((effect_dict, circuit_dict, weights, out_circuit_nodes, output_path, "Out-Circuit", i))
+            tasks.append(
+                (
+                    effect_dict,
+                    circuit_dict,
+                    weights,
+                    out_circuit_nodes,
+                    output_path,
+                    "Out-Circuit",
+                    i,
+                )
+            )
 
         paths["counterfactual_out"] = cf_dir
 
@@ -1043,25 +1306,37 @@ def visualize_faithfulness_circuit_samples(
                 continue
 
             effect_dict = {
-                'clean_activations': effect.clean_activations,
-                'corrupted_activations': effect.corrupted_activations,
-                'expected_clean_output': effect.expected_clean_output,
-                'expected_corrupted_output': effect.expected_corrupted_output,
-                'actual_output': effect.actual_output,
-                'output_changed_to_corrupted': effect.output_changed_to_corrupted,
-                'faithfulness_score': effect.faithfulness_score,
-                'clean_input': effect.clean_input,
-                'corrupted_input': effect.corrupted_input,
+                "clean_activations": effect.clean_activations,
+                "corrupted_activations": effect.corrupted_activations,
+                "expected_clean_output": effect.expected_clean_output,
+                "expected_corrupted_output": effect.expected_corrupted_output,
+                "actual_output": effect.actual_output,
+                "output_changed_to_corrupted": effect.output_changed_to_corrupted,
+                "faithfulness_score": effect.faithfulness_score,
+                "clean_input": effect.clean_input,
+                "corrupted_input": effect.corrupted_input,
             }
             output_path = os.path.join(cf_dir, f"in_cf_{i}.png")
-            tasks.append((effect_dict, circuit_dict, weights, in_circuit_nodes, output_path, "In-Circuit", i))
+            tasks.append(
+                (
+                    effect_dict,
+                    circuit_dict,
+                    weights,
+                    in_circuit_nodes,
+                    output_path,
+                    "In-Circuit",
+                    i,
+                )
+            )
 
         paths["counterfactual_in"] = cf_dir
 
     # Execute in parallel
     if tasks:
         n_workers = min(len(tasks), mp.cpu_count())
-        print(f"[VIZ] Generating {len(tasks)} faithfulness circuit figures with {n_workers} workers")
+        print(
+            f"[VIZ] Generating {len(tasks)} faithfulness circuit figures with {n_workers} workers"
+        )
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             list(executor.map(_generate_faithfulness_circuit_figure, tasks))
 
@@ -1080,19 +1355,27 @@ def visualize_faithfulness_circuit_samples(
 
             # Format patch label
             import re
+
             layer_match = re.search(r"layers=\((\d+),?\)", patch_key)
             indices_match = re.search(r"indices=\(([^)]*)\)", patch_key)
             patch_layer = int(layer_match.group(1)) if layer_match else 0
             patch_indices = []
             if indices_match and indices_match.group(1).strip():
-                patch_indices = [int(x.strip()) for x in indices_match.group(1).split(",") if x.strip()]
+                patch_indices = [
+                    int(x.strip())
+                    for x in indices_match.group(1).split(",")
+                    if x.strip()
+                ]
             patch_label = f"L{patch_layer}_{'_'.join(map(str, patch_indices))}"
 
             # Select samples
             disagree = [s for s in samples if not s.bit_agreement]
             agree = [s for s in samples if s.bit_agreement]
-            selected = (disagree[:n_samples_per_grid] if len(disagree) >= n_samples_per_grid
-                       else disagree + agree[:n_samples_per_grid - len(disagree)])
+            selected = (
+                disagree[:n_samples_per_grid]
+                if len(disagree) >= n_samples_per_grid
+                else disagree + agree[: n_samples_per_grid - len(disagree)]
+            )
 
             if not selected:
                 continue
@@ -1111,14 +1394,16 @@ def visualize_faithfulness_circuit_samples(
                 iv_val = iv[0] if iv else 0.0
 
                 # Simple drawing without full activation visualization
-                for col, (label, output) in enumerate([
-                    ("Subcircuit", sample.subcircuit_output),
-                    ("Full", sample.gate_output)
-                ]):
+                for col, (label, output) in enumerate(
+                    [
+                        ("Subcircuit", sample.subcircuit_output),
+                        ("Full", sample.gate_output),
+                    ]
+                ):
                     ax = axes[i, col]
                     circ = circuit if col == 0 else full_circuit
 
-                    # Draw simple circuit structure
+                    # Draw circuit structure with edge weights
                     G = nx.DiGraph()
                     pos = _layout_cache.get_positions(tuple(layer_sizes))
 
@@ -1126,11 +1411,29 @@ def visualize_faithfulness_circuit_samples(
                         for node_idx in range(n_nodes):
                             G.add_node(f"({layer_idx},{node_idx})")
 
+                    edges = []
+                    edge_labels = {}
+                    edge_weights = {}
                     for layer_idx, mask in enumerate(circ.edge_masks):
+                        w = weights[layer_idx] if layer_idx < len(weights) else None
                         for out_idx, row in enumerate(mask):
                             for in_idx, active in enumerate(row):
                                 if active:
-                                    G.add_edge(f"({layer_idx},{in_idx})", f"({layer_idx + 1},{out_idx})")
+                                    e = (f"({layer_idx},{in_idx})", f"({layer_idx + 1},{out_idx})")
+                                    edges.append(e)
+                                    G.add_edge(e[0], e[1])
+                                    if w is not None and out_idx < w.shape[0] and in_idx < w.shape[1]:
+                                        weight_val = w[out_idx, in_idx]
+                                        edge_labels[e] = f"{weight_val:.2f}"
+                                        edge_weights[e] = abs(weight_val)
+
+                    # Compute edge widths
+                    if edge_weights:
+                        max_w = max(edge_weights.values()) if edge_weights.values() else 1.0
+                        max_w = max(max_w, 0.01)
+                        edge_widths = [0.5 + 2.5 * (edge_weights.get(e, 0) / max_w) for e in edges]
+                    else:
+                        edge_widths = [1.0] * len(edges)
 
                     # Color patched nodes
                     patched = {f"({patch_layer},{idx})" for idx in patch_indices}
@@ -1141,21 +1444,45 @@ def visualize_faithfulness_circuit_samples(
                         else:
                             node_colors.append("lightblue")
 
-                    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=400, ax=ax)
-                    nx.draw_networkx_edges(G, pos, edge_color="black", width=1.0, ax=ax)
+                    nx.draw_networkx_nodes(
+                        G, pos, node_color=node_colors, node_size=400, ax=ax
+                    )
+                    if edges:
+                        nx.draw_networkx_edges(
+                            G, pos, edgelist=edges, edge_color="#333333",
+                            width=edge_widths, arrows=True, arrowstyle="-|>",
+                            arrowsize=8, connectionstyle="arc3,rad=0.1", ax=ax
+                        )
+                    if edge_labels:
+                        nx.draw_networkx_edge_labels(
+                            G, pos, edge_labels=edge_labels, font_size=5,
+                            font_color="#666666", alpha=0.8, label_pos=0.3,
+                            bbox=dict(boxstyle="round,pad=0.1", facecolor="white",
+                                      alpha=0.7, edgecolor="none"), ax=ax
+                        )
 
                     border_color = "green" if sample.bit_agreement else "red"
-                    ax.text(0.5, -0.05, f"IV:{iv_val:.2f} → {output:.2f}",
-                           transform=ax.transAxes, ha="center", fontsize=9,
-                           fontweight="bold", color=border_color)
+                    ax.text(
+                        0.5,
+                        -0.05,
+                        f"IV:{iv_val:.2f} → {output:.2f}",
+                        transform=ax.transAxes,
+                        ha="center",
+                        fontsize=9,
+                        fontweight="bold",
+                        color=border_color,
+                    )
                     ax.axis("off")
 
             axes[0, 0].set_title("Subcircuit", fontsize=10, fontweight="bold")
             axes[0, 1].set_title("Full Model", fontsize=10, fontweight="bold")
 
             n_agree = sum(1 for s in selected if s.bit_agreement)
-            fig.suptitle(f"{patch_label} | {circuit_type} | agree: {n_agree}/{n_samples}",
-                        fontsize=11, fontweight="bold")
+            fig.suptitle(
+                f"{patch_label} | {circuit_type} | agree: {n_agree}/{n_samples}",
+                fontsize=11,
+                fontweight="bold",
+            )
             plt.tight_layout()
 
             path = os.path.join(out_dir, f"{patch_label}.png")
@@ -1167,14 +1494,16 @@ def visualize_faithfulness_circuit_samples(
 
     if faithfulness.in_circuit_stats:
         paths["in_circuit"] = visualize_patch_circuits(
-            faithfulness.in_circuit_stats, "in_circuit",
-            os.path.join(circuit_viz_dir, "in_circuit")
+            faithfulness.in_circuit_stats,
+            "in_circuit",
+            os.path.join(circuit_viz_dir, "in_circuit"),
         )
 
     if faithfulness.out_circuit_stats:
         paths["out_circuit"] = visualize_patch_circuits(
-            faithfulness.out_circuit_stats, "out_circuit",
-            os.path.join(circuit_viz_dir, "out_circuit")
+            faithfulness.out_circuit_stats,
+            "out_circuit",
+            os.path.join(circuit_viz_dir, "out_circuit"),
         )
 
     return paths
@@ -1222,9 +1551,15 @@ def visualize_faithfulness_summary(
     ax = axes[1, 0]
     if faithfulness.counterfactual_effects:
         scores = [e.faithfulness_score for e in faithfulness.counterfactual_effects]
-        ax.hist(scores, bins=10, color=COLORS["faithfulness"], alpha=0.8, edgecolor="black")
-        ax.axvline(x=faithfulness.mean_faithfulness_score, color="red", linestyle="--",
-                  label=f"Mean: {faithfulness.mean_faithfulness_score:.2f}")
+        ax.hist(
+            scores, bins=10, color=COLORS["faithfulness"], alpha=0.8, edgecolor="black"
+        )
+        ax.axvline(
+            x=faithfulness.mean_faithfulness_score,
+            color="red",
+            linestyle="--",
+            label=f"Mean: {faithfulness.mean_faithfulness_score:.2f}",
+        )
         ax.set_xlabel("Faithfulness Score")
         ax.set_ylabel("Count")
         ax.legend()
@@ -1234,7 +1569,9 @@ def visualize_faithfulness_summary(
     ax = axes[1, 1]
     score = faithfulness.overall_faithfulness
     ax.pie([score, 1 - score], colors=["green", "#e0e0e0"], startangle=90)
-    ax.text(0, 0, f"{score:.1%}", ha="center", va="center", fontsize=24, fontweight="bold")
+    ax.text(
+        0, 0, f"{score:.1%}", ha="center", va="center", fontsize=24, fontweight="bold"
+    )
     ax.set_title("Overall Faithfulness", fontweight="bold")
 
     fig.suptitle(f"{prefix}Faithfulness Analysis", fontsize=14, fontweight="bold")
@@ -1272,23 +1609,48 @@ def visualize_faithfulness_stats(
         x = np.arange(len(patch_names))
         ax.bar(x, means, yerr=stds, color=color, alpha=0.8, capsize=3)
         ax.set_xticks(x)
-        ax.set_xticklabels([p.split("indices=")[1].split(")")[0] if "indices=" in p else p[:15]
-                          for p in patch_names], rotation=45, ha="right", fontsize=8)
+        ax.set_xticklabels(
+            [
+                p.split("indices=")[1].split(")")[0] if "indices=" in p else p[:15]
+                for p in patch_names
+            ],
+            rotation=45,
+            ha="right",
+            fontsize=8,
+        )
         ax.set_ylim(0, 1.1)
         ax.set_ylabel("Bit Similarity")
         ax.set_title(title, fontweight="bold")
         ax.axhline(y=1.0, color="green", linestyle="--", alpha=0.5)
 
-    plot_patch_stats(axes[0, 0], faithfulness.in_circuit_stats,
-                    "In-Circuit Patches (In-Dist)", COLORS["in_circuit"])
-    plot_patch_stats(axes[0, 1], faithfulness.out_circuit_stats,
-                    "Out-Circuit Patches (In-Dist)", COLORS["out_circuit"])
-    plot_patch_stats(axes[1, 0], faithfulness.in_circuit_stats_ood,
-                    "In-Circuit Patches (OOD)", "#81C784")
-    plot_patch_stats(axes[1, 1], faithfulness.out_circuit_stats_ood,
-                    "Out-Circuit Patches (OOD)", "#EF9A9A")
+    plot_patch_stats(
+        axes[0, 0],
+        faithfulness.in_circuit_stats,
+        "In-Circuit Patches (In-Dist)",
+        COLORS["in_circuit"],
+    )
+    plot_patch_stats(
+        axes[0, 1],
+        faithfulness.out_circuit_stats,
+        "Out-Circuit Patches (In-Dist)",
+        COLORS["out_circuit"],
+    )
+    plot_patch_stats(
+        axes[1, 0],
+        faithfulness.in_circuit_stats_ood,
+        "In-Circuit Patches (OOD)",
+        "#81C784",
+    )
+    plot_patch_stats(
+        axes[1, 1],
+        faithfulness.out_circuit_stats_ood,
+        "Out-Circuit Patches (OOD)",
+        "#EF9A9A",
+    )
 
-    fig.suptitle(f"{prefix}Patch Intervention Statistics", fontsize=14, fontweight="bold")
+    fig.suptitle(
+        f"{prefix}Patch Intervention Statistics", fontsize=14, fontweight="bold"
+    )
     plt.tight_layout()
 
     path = os.path.join(output_dir, "patch_stats.png")
@@ -1297,18 +1659,30 @@ def visualize_faithfulness_stats(
     paths["patch_stats"] = path
 
     # Counterfactual analysis
-    if faithfulness.out_counterfactual_effects or faithfulness.in_counterfactual_effects:
+    if (
+        faithfulness.out_counterfactual_effects
+        or faithfulness.in_counterfactual_effects
+    ):
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
         # Sufficiency (out-circuit)
         ax = axes[0]
         if faithfulness.out_counterfactual_effects:
-            scores = [e.faithfulness_score for e in faithfulness.out_counterfactual_effects]
-            changed = [e.output_changed_to_corrupted for e in faithfulness.out_counterfactual_effects]
+            scores = [
+                e.faithfulness_score for e in faithfulness.out_counterfactual_effects
+            ]
+            changed = [
+                e.output_changed_to_corrupted
+                for e in faithfulness.out_counterfactual_effects
+            ]
             colors = ["red" if c else "green" for c in changed]
             ax.bar(range(len(scores)), scores, color=colors, alpha=0.8)
-            ax.axhline(y=np.mean(scores), color="blue", linestyle="--",
-                      label=f"Mean: {np.mean(scores):.2f}")
+            ax.axhline(
+                y=np.mean(scores),
+                color="blue",
+                linestyle="--",
+                label=f"Mean: {np.mean(scores):.2f}",
+            )
             ax.set_xlabel("Counterfactual Pair")
             ax.set_ylabel("Sufficiency Score")
             ax.legend()
@@ -1317,12 +1691,21 @@ def visualize_faithfulness_stats(
         # Necessity (in-circuit)
         ax = axes[1]
         if faithfulness.in_counterfactual_effects:
-            scores = [e.faithfulness_score for e in faithfulness.in_counterfactual_effects]
-            changed = [e.output_changed_to_corrupted for e in faithfulness.in_counterfactual_effects]
+            scores = [
+                e.faithfulness_score for e in faithfulness.in_counterfactual_effects
+            ]
+            changed = [
+                e.output_changed_to_corrupted
+                for e in faithfulness.in_counterfactual_effects
+            ]
             colors = ["red" if c else "green" for c in changed]
             ax.bar(range(len(scores)), scores, color=colors, alpha=0.8)
-            ax.axhline(y=np.mean(scores), color="blue", linestyle="--",
-                      label=f"Mean: {np.mean(scores):.2f}")
+            ax.axhline(
+                y=np.mean(scores),
+                color="blue",
+                linestyle="--",
+                label=f"Mean: {np.mean(scores):.2f}",
+            )
             ax.set_xlabel("Counterfactual Pair")
             ax.set_ylabel("Necessity Score")
             ax.legend()
@@ -1365,8 +1748,12 @@ def visualize_spd_components(
 
     ax.set_xlabel("Component Index")
     ax.set_ylabel("Normalized Weight")
-    ax.set_title(f"{gate_name} - SPD Component Importance" if gate_name else "SPD Component Importance",
-                fontweight="bold")
+    ax.set_title(
+        f"{gate_name} - SPD Component Importance"
+        if gate_name
+        else "SPD Component Importance",
+        fontweight="bold",
+    )
     ax.set_xticks(x)
 
     plt.tight_layout()
@@ -1438,7 +1825,11 @@ def visualize_profiling_phases(
     for i, event in enumerate(events):
         if event.status.startswith("STARTED_"):
             phase = event.status.replace("STARTED_", "")
-            end_status = f"ENDED_{phase}" if f"ENDED_{phase}" in [e.status for e in events] else f"FINISHED_{phase}"
+            end_status = (
+                f"ENDED_{phase}"
+                if f"ENDED_{phase}" in [e.status for e in events]
+                else f"FINISHED_{phase}"
+            )
             for j in range(i + 1, len(events)):
                 if events[j].status == end_status:
                     duration = (events[j].timestamp_ms - event.timestamp_ms) / 1000.0
@@ -1457,8 +1848,13 @@ def visualize_profiling_phases(
     ax.set_title("Phase Durations", fontweight="bold")
 
     for bar, d in zip(bars, durations):
-        ax.text(bar.get_width() + 0.1, bar.get_y() + bar.get_height()/2,
-               f"{d:.2f}s", va="center", fontsize=9)
+        ax.text(
+            bar.get_width() + 0.1,
+            bar.get_y() + bar.get_height() / 2,
+            f"{d:.2f}s",
+            va="center",
+            fontsize=9,
+        )
 
     plt.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
@@ -1495,14 +1891,20 @@ def visualize_profiling_summary(
     # Right: Text summary
     ax = axes[1]
     ax.axis("off")
-    total_time = (profiling.events[-1].timestamp_ms - profiling.events[0].timestamp_ms) / 1000.0 if len(profiling.events) > 1 else 0
+    total_time = (
+        (profiling.events[-1].timestamp_ms - profiling.events[0].timestamp_ms) / 1000.0
+        if len(profiling.events) > 1
+        else 0
+    )
     summary_text = f"""
     Total Events: {len(profiling.events)}
     Total Time: {total_time:.2f}s
     Unique Phases: {len(phase_counts)}
     """
     ax.text(
-        0.1, 0.5, summary_text.strip(),
+        0.1,
+        0.5,
+        summary_text.strip(),
         transform=ax.transAxes,
         fontsize=12,
         verticalalignment="center",
@@ -1547,9 +1949,15 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
             viz_paths[trial_id]["profiling"] = {}
 
             with ThreadPoolExecutor(max_workers=3) as executor:
-                timeline_future = executor.submit(visualize_profiling_timeline, trial.profiling, profiling_dir)
-                phases_future = executor.submit(visualize_profiling_phases, trial.profiling, profiling_dir)
-                summary_future = executor.submit(visualize_profiling_summary, trial.profiling, profiling_dir)
+                timeline_future = executor.submit(
+                    visualize_profiling_timeline, trial.profiling, profiling_dir
+                )
+                phases_future = executor.submit(
+                    visualize_profiling_phases, trial.profiling, profiling_dir
+                )
+                summary_future = executor.submit(
+                    visualize_profiling_summary, trial.profiling, profiling_dir
+                )
 
             if path := timeline_future.result():
                 viz_paths[trial_id]["profiling"]["timeline"] = path
@@ -1624,7 +2032,9 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
             if not best_indices:
                 continue
 
-            print(f"[VIZ] Gate {gname}: {len(best_indices)} best subcircuits to visualize")
+            print(
+                f"[VIZ] Gate {gname}: {len(best_indices)} best subcircuits to visualize"
+            )
             bests_robust = trial.metrics.per_gate_bests_robust.get(gname, [])
             decomposed_indices = trial.decomposed_subcircuit_indices.get(gname, [])
 
@@ -1660,8 +2070,12 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                 faithfulness_data = bests_faith[i] if has_faith else None
 
                 # Create directories upfront
-                robustness_dir = os.path.join(folder, "robustness") if has_robust else None
-                faithfulness_dir = os.path.join(folder, "faithfulness") if has_faith else None
+                robustness_dir = (
+                    os.path.join(folder, "robustness") if has_robust else None
+                )
+                faithfulness_dir = (
+                    os.path.join(folder, "faithfulness") if has_faith else None
+                )
                 if robustness_dir:
                     os.makedirs(robustness_dir, exist_ok=True)
                     viz_paths[trial_id][gname][sc_idx]["robustness"] = {}
@@ -1674,30 +2088,50 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     futures = {}
                     if has_robust:
                         futures["robust_summary"] = executor.submit(
-                            visualize_robustness_summary, robustness_data, robustness_dir, sc_label
+                            visualize_robustness_summary,
+                            robustness_data,
+                            robustness_dir,
+                            sc_label,
                         )
                         futures["robust_curves"] = executor.submit(
-                            visualize_robustness_curves, robustness_data, robustness_dir, sc_label
+                            visualize_robustness_curves,
+                            robustness_data,
+                            robustness_dir,
+                            sc_label,
                         )
                     if has_faith:
                         futures["faith_summary"] = executor.submit(
-                            visualize_faithfulness_summary, faithfulness_data, faithfulness_dir, sc_label
+                            visualize_faithfulness_summary,
+                            faithfulness_data,
+                            faithfulness_dir,
+                            sc_label,
                         )
                         futures["faith_stats"] = executor.submit(
-                            visualize_faithfulness_stats, faithfulness_data, faithfulness_dir, sc_label
+                            visualize_faithfulness_stats,
+                            faithfulness_data,
+                            faithfulness_dir,
+                            sc_label,
                         )
 
                 # Collect quick visualization results
                 if has_robust:
                     with profile("robust_summary"):
-                        viz_paths[trial_id][gname][sc_idx]["robustness"]["summary"] = futures["robust_summary"].result()
+                        viz_paths[trial_id][gname][sc_idx]["robustness"]["summary"] = (
+                            futures["robust_summary"].result()
+                        )
                     with profile("robust_curves"):
-                        viz_paths[trial_id][gname][sc_idx]["robustness"]["stats"] = futures["robust_curves"].result()
+                        viz_paths[trial_id][gname][sc_idx]["robustness"]["stats"] = (
+                            futures["robust_curves"].result()
+                        )
                 if has_faith:
                     with profile("faith_summary"):
-                        viz_paths[trial_id][gname][sc_idx]["faithfulness"]["summary"] = futures["faith_summary"].result()
+                        viz_paths[trial_id][gname][sc_idx]["faithfulness"][
+                            "summary"
+                        ] = futures["faith_summary"].result()
                     with profile("faith_stats"):
-                        viz_paths[trial_id][gname][sc_idx]["faithfulness"]["stats"] = futures["faith_stats"].result()
+                        viz_paths[trial_id][gname][sc_idx]["faithfulness"]["stats"] = (
+                            futures["faith_stats"].result()
+                        )
 
                 # Run expensive circuit visualizations sequentially (they use ProcessPoolExecutor internally)
                 if has_robust:
@@ -1705,14 +2139,18 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                         circuit_paths = visualize_robustness_circuit_samples(
                             robustness_data, circuit, layer_weights, robustness_dir
                         )
-                    viz_paths[trial_id][gname][sc_idx]["robustness"]["circuit_viz"] = circuit_paths
+                    viz_paths[trial_id][gname][sc_idx]["robustness"]["circuit_viz"] = (
+                        circuit_paths
+                    )
 
                 if has_faith:
                     with profile("faith_circuit_viz"):
                         circuit_paths = visualize_faithfulness_circuit_samples(
                             faithfulness_data, circuit, layer_weights, faithfulness_dir
                         )
-                    viz_paths[trial_id][gname][sc_idx]["faithfulness"]["circuit_viz"] = circuit_paths
+                    viz_paths[trial_id][gname][sc_idx]["faithfulness"][
+                        "circuit_viz"
+                    ] = circuit_paths
 
                 # SPD
                 if gname in trial.decomposed_subcircuits:
