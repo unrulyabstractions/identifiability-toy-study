@@ -89,11 +89,12 @@ if __name__ == "__main__":
     )
 
     result: ExperimentResult = run_experiment(cfg, logger=logger)
+    save_results(result, run_dir=run_dir)  # Save before just in case viz crashes
 
     if not args.no_viz:
         result.viz_paths = visualize_experiment(result, run_dir=run_dir)
-
-    save_results(result, run_dir=run_dir)
+        # Save again but with viz_paths
+        save_results(result, run_dir=run_dir)
 
     # Print summary
     logger.info(f"\n\n\n run_{timestamp} \n")

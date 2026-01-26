@@ -77,7 +77,10 @@ def update_status_fx(trial_result: TrialResult, logger=None, device: str = "cpu"
             # Find matching start event
             phase_prefix = status.split("_", 1)[1]  # e.g., "MLP_TRAINING" or "GATE:0"
             for prev_event in reversed(trial_result.profiling.events[:-1]):
-                if prev_event.status.startswith("STARTED_") and phase_prefix in prev_event.status:
+                if (
+                    prev_event.status.startswith("STARTED_")
+                    and phase_prefix in prev_event.status
+                ):
                     phase_name = phase_prefix
                     phase_duration = timestamp_ms - prev_event.timestamp_ms
                     trial_result.profiling.phase_durations_ms[phase_name] = round(
@@ -206,13 +209,9 @@ def train_model(
         batch_size=train_params.batch_size,
         learning_rate=train_params.learning_rate,
         epochs=train_params.epochs,
-        loss_target=train_params.loss_target,
         val_frequency=train_params.val_frequency,
         logger=logger,
     )
 
     val_acc = calculate_match_rate(torch.round(model(data.val.x)), data.val.y).item()
-    if val_acc < train_params.acc_target or avg_loss > train_params.loss_target:
-        return None, avg_loss, val_acc
-
     return model, avg_loss, val_acc

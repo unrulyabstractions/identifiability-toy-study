@@ -5,35 +5,32 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "identifiability-toy-study"
 version = "1.0.1"
-description = "Research extensions combining MI-identifiability (Méloux), spd (Goodfire-AI), circuit-stability (Alan Sun), and eap-ig-faithfulness (Hannah W.)."
+description = "Research extensions combining MI-identifiability (Méloux), spd (Goodfire-AI), circuit-stability (Alan Sun), eap-ig-faithfulness (Hannah W.), and SubspacePartition (Huang et al.)."
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
     {name = "Ian Rios-Sialer", email = "ian@unrulyabstractions.com"}
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.13"
 keywords = ["machine-learning", "interpretability", "circuit-analysis"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
     # Core dependencies for mi_identifiability
-    "tqdm~=4.66.5",
-    "matplotlib~=3.8.3",
-    "numpy~=1.26.4",
-    "scipy~=1.12.0",
-    "pandas~=2.2.1",
-    "torch~=2.4.1",
+    "tqdm>=4.66.5",
+    "matplotlib>=3.9.0",
+    "numpy>=2.0.0",
+    "scipy>=1.14.1",
+    "pandas>=2.2.1",
+    "torch>=2.6",
     "networkx~=3.2.1",
-    "torchvision~=0.19.1",
+    "torchvision>=0.23,<0.24",
     # Additional dependencies for spd module
     "pydantic>=2.0.0",
     "datasets",
@@ -45,11 +42,20 @@ dependencies = [
     "plotly",
     "scikit-learn",
     "seaborn",
+    # Additional dependencies for SubspacePartition module
+    "transformer-lens",
+    "easydict",
+    "faiss-cpu",
+    "streamlit",
+    # SPD package (local submodule)
+    "spd",
 ]
+
+[tool.uv.sources]
+spd = { path = "identifiability_toy_study/spd", editable = true }
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
     "black",
     "flake8",
     "mypy",
