@@ -205,7 +205,7 @@ class CounterfactualEffect(SchemaClass):
 class FaithfulnessConfig(SchemaClass):
     """Configuration for faithfulness analysis."""
 
-    n_interventions_per_patch: int = 10  # Reduced from 100
+    n_interventions_per_patch: int = 10
     n_counterfactual_pairs: int = 10
 
 
