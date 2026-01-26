@@ -70,7 +70,7 @@ class SPDConfig(SchemaClass):
     n_components: int = 10
 
     # Training - optimized for M4 Max with 48GB (MPS)
-    steps: int = 1000  # Fast iteration with larger batches
+    steps: int = 100  # Reduced from 1000 for faster iteration
     batch_size: int = 4096  # Large batch for MPS throughput
     eval_batch_size: int = 4096
     n_eval_steps: int = 10
@@ -103,7 +103,7 @@ class TrainParams(SchemaClass):
 class IdentifiabilityConstraints(SchemaClass):
     # Max deviation from bit_similarity=1.0 to be considered "best"
     # 0.01 = only 99%+ similar, 0.1 = 90%+ similar, 0.2 = 80%+ similar
-    epsilon: float = 0.01  # More lenient to get more best circuits
+    epsilon: float = 0.001  # More lenient to get more best circuits
 
 
 @dataclass
@@ -125,7 +125,11 @@ class GateMetrics(SchemaClass):
 
 @dataclass
 class InterventionSample(SchemaClass):
-    """Result of a single intervention test (like RobustnessSample for faithfulness)."""
+    """Result of a single intervention test (like RobustnessSample for faithfulness).
+
+    NOTE: Activations are pre-computed here so visualization code
+    NEVER needs to run models. Visualization is READ-ONLY.
+    """
 
     # Patch info
     patch_key: str  # String representation of PatchShape
@@ -143,6 +147,10 @@ class InterventionSample(SchemaClass):
     logit_similarity: float  # 1 - MSE between outputs
     bit_agreement: bool  # round(gate_output) == round(subcircuit_output)
     mse: float  # (gate_output - subcircuit_output)^2
+
+    # Pre-computed activations for visualization (NO model runs during viz!)
+    gate_activations: list[list[float]] = field(default_factory=list)
+    subcircuit_activations: list[list[float]] = field(default_factory=list)
 
 
 @dataclass
@@ -163,9 +171,18 @@ class PatchStatistics(SchemaClass):
 
 @dataclass
 class CounterfactualEffect(SchemaClass):
-    """Result of a single counterfactual test."""
+    """Result of a single counterfactual test.
 
-    faithfulness_score: float  # (y_sc - y_corrupted) / (y_clean - y_corrupted)
+    NOTE: Activations are pre-computed here so visualization code
+    NEVER needs to run models. Visualization is READ-ONLY.
+    """
+
+    faithfulness_score: float  # Score depends on score_type
+
+    # Score type: "sufficiency" or "necessity"
+    # - sufficiency: (y_clean - y_sc) / (y_clean - y_corrupted) - tests if subcircuit alone is sufficient
+    # - necessity: (y_sc - y_corrupted) / (y_clean - y_corrupted) - tests if subcircuit is necessary
+    score_type: str = "sufficiency"
 
     # Clean/corrupted input info
     clean_input: list[float] = field(default_factory=list)  # e.g., [0, 1]
@@ -181,12 +198,16 @@ class CounterfactualEffect(SchemaClass):
     # Did patching change output toward corrupted?
     output_changed_to_corrupted: bool = False  # round(actual) == round(corrupted)
 
+    # Pre-computed activations for visualization (NO model runs during viz!)
+    clean_activations: list[list[float]] = field(default_factory=list)
+    corrupted_activations: list[list[float]] = field(default_factory=list)
+
 
 @dataclass
 class FaithfulnessConfig(SchemaClass):
     """Configuration for faithfulness analysis."""
 
-    n_interventions_per_patch: int = 100
+    n_interventions_per_patch: int = 10  # Reduced from 100
     n_counterfactual_pairs: int = 10
 
 
@@ -198,9 +219,17 @@ class FaithfulnessMetrics(SchemaClass):
     in_circuit_stats: dict[str, PatchStatistics] = field(default_factory=dict)
     out_circuit_stats: dict[str, PatchStatistics] = field(default_factory=dict)
 
-    # Aggregate statistics
+    # OOD (out-of-distribution) intervention statistics
+    in_circuit_stats_ood: dict[str, PatchStatistics] = field(default_factory=dict)
+    out_circuit_stats_ood: dict[str, PatchStatistics] = field(default_factory=dict)
+
+    # Aggregate statistics (in-distribution)
     mean_in_circuit_similarity: float = 0.0
     mean_out_circuit_similarity: float = 0.0
+
+    # Aggregate statistics (out-of-distribution)
+    mean_in_circuit_similarity_ood: float = 0.0
+    mean_out_circuit_similarity_ood: float = 0.0
 
     # Counterfactual analysis results - separate for in-circuit and out-circuit
     # Out-circuit: patch out-of-circuit neurons with corrupted values (tests sufficiency)
@@ -220,7 +249,11 @@ class FaithfulnessMetrics(SchemaClass):
 
 @dataclass
 class RobustnessSample(SchemaClass):
-    """Result of a single robustness test on one input."""
+    """Result of a single robustness test on one input.
+
+    NOTE: Activations are pre-computed here so visualization code
+    NEVER needs to run models. Visualization is READ-ONLY.
+    """
 
     input_values: list[float]  # The perturbed input [x0, x1]
     base_input: list[float]  # The original binary input [0, 1]
@@ -238,6 +271,11 @@ class RobustnessSample(SchemaClass):
     # Agreement between models
     agreement_bit: bool  # round(gate_output) == round(subcircuit_output)
     mse: float  # (gate_output - subcircuit_output)^2
+
+    # Pre-computed activations for visualization (NO model runs during viz!)
+    # Each is a list of lists: [[layer0_acts], [layer1_acts], ...]
+    gate_activations: list[list[float]] = field(default_factory=list)
+    subcircuit_activations: list[list[float]] = field(default_factory=list)
 
 
 @dataclass
@@ -400,7 +438,9 @@ class ExperimentConfig(SchemaClass):
     target_logic_gates: list[str] = field(
         default_factory=lambda: [*ModelParams().logic_gates]
     )
-    num_gates_per_run: list[int] = field(default_factory=lambda: [1])
+    num_gates_per_run: list[int] | None = (
+        None  # None = use all gates from target_logic_gates
+    )
     num_runs: int = 1
 
     def __str__(self) -> str:

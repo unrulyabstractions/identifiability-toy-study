@@ -1,0 +1,81 @@
+"""Simple global profiler for timing code sections.
+
+Usage:
+    from identifiability_toy_study.profiler import profile, print_profile
+
+    with profile("section_name"):
+        # code to time
+        pass
+
+    # Or as decorator:
+    @profile("function_name")
+    def my_function():
+        pass
+
+    # Print results at end:
+    print_profile()
+"""
+
+import time
+from contextlib import contextmanager
+from collections import defaultdict
+
+# Global state
+_times: dict[str, float] = defaultdict(float)
+_counts: dict[str, int] = defaultdict(int)
+_enabled = True
+
+
+def reset():
+    """Reset all timing data."""
+    global _times, _counts
+    _times.clear()
+    _counts.clear()
+
+
+def enable():
+    """Enable profiling."""
+    global _enabled
+    _enabled = True
+
+
+def disable():
+    """Disable profiling."""
+    global _enabled
+    _enabled = False
+
+
+@contextmanager
+def profile(name: str):
+    """Context manager to time a code section."""
+    if not _enabled:
+        yield
+        return
+
+    t0 = time.time()
+    try:
+        yield
+    finally:
+        elapsed = time.time() - t0
+        _times[name] += elapsed
+        _counts[name] += 1
+
+
+def print_profile(min_ms: float = 1.0):
+    """Print profiling results sorted by total time."""
+    if not _times:
+        print("[PROFILE] No timing data")
+        return
+
+    total = sum(_times.values())
+    print(f"\n[PROFILE] Total: {total*1000:.0f}ms")
+    print("-" * 60)
+
+    for name, t in sorted(_times.items(), key=lambda x: -x[1]):
+        ms = t * 1000
+        if ms < min_ms:
+            continue
+        count = _counts[name]
+        avg = ms / count if count > 0 else 0
+        pct = (t / total * 100) if total > 0 else 0
+        print(f"  {name}: {ms:.0f}ms ({count} calls, avg {avg:.0f}ms) [{pct:.1f}%]")

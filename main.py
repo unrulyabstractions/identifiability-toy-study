@@ -15,6 +15,7 @@ from identifiability_toy_study.persistence import (
     load_results,
     save_results,
 )
+from identifiability_toy_study.profiler import print_profile
 from identifiability_toy_study.visualization import visualize_experiment
 
 if __name__ == "__main__":
@@ -36,6 +37,11 @@ if __name__ == "__main__":
         "--analysis-only",
         action="store_true",
         help="Re-run visualization on existing runs without training",
+    )
+    parser.add_argument(
+        "--no-viz",
+        action="store_true",
+        help="Skip visualization step",
     )
     args = parser.parse_args()
 
@@ -83,10 +89,16 @@ if __name__ == "__main__":
     )
 
     result: ExperimentResult = run_experiment(cfg, logger=logger)
-    result.viz_paths = visualize_experiment(result, run_dir=run_dir)
+
+    if not args.no_viz:
+        result.viz_paths = visualize_experiment(result, run_dir=run_dir)
+
     save_results(result, run_dir=run_dir)
 
     # Print summary
     logger.info(f"\n\n\n run_{timestamp} \n")
     summary = result.print_summary()
     logger.info(summary)
+
+    # Print profiling
+    print_profile()

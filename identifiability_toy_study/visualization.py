@@ -1,13 +1,31 @@
 """Visualization for circuits and SPD decompositions.
 
-IMPORTANT: This module does NOT run any models. All visualizations use
-pre-computed data stored in tensors.pt and results.json.
+##############################################################################
+#                                                                            #
+#   ██████╗ ███████╗ █████╗ ██████╗     ██████╗ ███╗   ██╗██╗  ██╗   ██╗██╗  #
+#   ██╔══██╗██╔════╝██╔══██╗██╔══██╗   ██╔═══██╗████╗  ██║██║  ╚██╗ ██╔╝██║  #
+#   ██████╔╝█████╗  ███████║██║  ██║   ██║   ██║██╔██╗ ██║██║   ╚████╔╝ ██║  #
+#   ██╔══██╗██╔══╝  ██╔══██║██║  ██║   ██║   ██║██║╚██╗██║██║    ╚██╔╝  ╚═╝  #
+#   ██║  ██║███████╗██║  ██║██████╔╝   ╚██████╔╝██║ ╚████║███████╗██║   ██╗  #
+#   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝     ╚═════╝ ╚═╝  ╚═══╝╚══════╝╚═╝   ╚═╝  #
+#                                                                            #
+#   THIS MODULE DOES NOT RUN ANY MODELS!                                     #
+#   ALL DATA MUST BE PRE-COMPUTED IN trial.py OR causal_analysis.py          #
+#                                                                            #
+#   If you need activations, add them to the relevant schema class and       #
+#   compute them during analysis, NOT during visualization.                  #
+#                                                                            #
+#   Running models here causes ~5000 forward passes and kills performance!   #
+#                                                                            #
+##############################################################################
 
 Look at visualize_experiment for the main entry point.
 """
 
 import os
 from pathlib import Path
+
+from .profiler import profile
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -557,12 +575,13 @@ def visualize_robustness_curves(
     prefix = f"{gate_name} - " if gate_name else ""
 
     # Aggregate plots (all inputs)
-    paths = _plot_robustness_set(
-        robustness.noise_samples,
-        robustness.ood_samples,
-        stats_dir,
-        prefix,
-    )
+    with profile("robust_curves.aggregate"):
+        paths = _plot_robustness_set(
+            robustness.noise_samples,
+            robustness.ood_samples,
+            stats_dir,
+            prefix,
+        )
 
     # Per-input plots
     per_input_dir = os.path.join(stats_dir, "per_input")
@@ -572,16 +591,17 @@ def visualize_robustness_curves(
     ood_by_input = _group_samples_by_input(robustness.ood_samples)
 
     paths["per_input"] = {}
-    for input_key in ["0_0", "0_1", "1_0", "1_1"]:
-        input_paths = _plot_robustness_set(
-            noise_by_input.get(input_key, []),
-            ood_by_input.get(input_key, []),
-            per_input_dir,
-            prefix,
-            input_label=input_key,
-        )
-        if input_paths:
-            paths["per_input"][input_key] = input_paths
+    with profile("robust_curves.per_input"):
+        for input_key in ["0_0", "0_1", "1_0", "1_1"]:
+            input_paths = _plot_robustness_set(
+                noise_by_input.get(input_key, []),
+                ood_by_input.get(input_key, []),
+                per_input_dir,
+                prefix,
+                input_label=input_key,
+            )
+            if input_paths:
+                paths["per_input"][input_key] = input_paths
 
     return paths
 
@@ -650,8 +670,6 @@ def _draw_graph_with_output_highlight(
 
 def visualize_robustness_circuit_samples(
     robustness: RobustnessMetrics,
-    subcircuit_model: MLP,
-    gate_model: MLP,
     circuit: Circuit,
     layer_weights: list[torch.Tensor],
     output_dir: str,
@@ -664,6 +682,10 @@ def visualize_robustness_circuit_samples(
     Each row shows: [subcircuit | full circuit] for one sample.
     Samples are balanced between correct/incorrect and sorted by noise magnitude.
     Output nodes have thick border: green=correct, red=incorrect.
+
+    *** DO NOT RUN MODELS HERE! ***
+    All activations are pre-computed in RobustnessSample.gate_activations
+    and RobustnessSample.subcircuit_activations during causal_analysis.py.
     """
     circuit_viz_dir = os.path.join(output_dir, "circuit_viz")
     os.makedirs(circuit_viz_dir, exist_ok=True)
@@ -747,18 +769,17 @@ def visualize_robustness_circuit_samples(
             gt = int(all_samples[0].ground_truth)
 
             for i, sample in enumerate(samples):
-                input_tensor = torch.tensor(
-                    [sample.input_values], dtype=torch.float32
-                )
-
                 # Highlight disagreeing rows with red background
                 if not sample.agreement_bit:
                     for col in range(2):
                         axes[i, col].set_facecolor("#FFEEEE")
 
-                # Left: subcircuit
-                with torch.no_grad():
-                    sc_acts = subcircuit_model(input_tensor, return_activations=True)
+                # *** NO MODEL RUNS HERE! Use pre-computed activations ***
+                # Convert stored list activations back to tensors
+                sc_acts = [torch.tensor(a).unsqueeze(0) for a in sample.subcircuit_activations]
+                full_acts = [torch.tensor(a).unsqueeze(0) for a in sample.gate_activations]
+
+                # Left: subcircuit (using pre-computed activations)
                 vmin, vmax = _symmetric_range(sc_acts)
                 G, pos, colors, labels, text_colors, edge_labels, edge_w = (
                     _build_graph(sc_acts, circuit, weights, vmin, vmax)
@@ -768,9 +789,7 @@ def visualize_robustness_circuit_samples(
                     edge_labels, edge_w, sample.subcircuit_correct
                 )
 
-                # Right: full model
-                with torch.no_grad():
-                    full_acts = gate_model(input_tensor, return_activations=True)
+                # Right: full model (using pre-computed activations)
                 vmin, vmax = _symmetric_range(full_acts)
                 G, pos, colors, labels, text_colors, edge_labels, edge_w = (
                     _build_graph(full_acts, full_circuit, weights, vmin, vmax)
@@ -1481,22 +1500,10 @@ def _draw_graph_with_intervention_highlight(
     ax.axis("off")
 
 
-def _apply_intervention_to_activations(
-    model: MLP,
-    input_tensor: torch.Tensor,
-    patch_layer: int,
-    patch_indices: list[int],
-    intervention_values: list[float],
-) -> list[torch.Tensor]:
-    """Run model with intervention applied at specified layer/indices."""
-    with torch.no_grad():
-        acts = model(input_tensor, return_activations=True)
-        # Apply intervention to the patched layer
-        if 0 <= patch_layer < len(acts):
-            for j, idx in enumerate(patch_indices):
-                if j < len(intervention_values) and idx < acts[patch_layer].shape[-1]:
-                    acts[patch_layer][0, idx] = intervention_values[j]
-    return acts
+# DELETED: _apply_intervention_to_activations
+# This function was removed because it ran model forward passes.
+# All activations must be pre-computed in causal_analysis.py.
+# If you need activations, add them to the relevant schema class.
 
 
 def _find_changed_nodes(acts1: list[torch.Tensor], acts2: list[torch.Tensor], threshold: float = 0.1) -> set:
@@ -1565,8 +1572,6 @@ def _draw_graph_with_changed_highlight(
 
 def visualize_faithfulness_circuit_samples(
     faithfulness: FaithfulnessMetrics,
-    subcircuit_model: MLP,
-    gate_model: MLP,
     circuit: Circuit,
     layer_weights: list[torch.Tensor],
     output_dir: str,
@@ -1574,6 +1579,11 @@ def visualize_faithfulness_circuit_samples(
 ) -> dict[str, str]:
     """
     Visualize circuit diagrams showing interventions.
+
+    *** DO NOT RUN MODELS HERE! ***
+    All activations are pre-computed in:
+    - InterventionSample.gate_activations/subcircuit_activations
+    - CounterfactualEffect.clean_activations/corrupted_activations
 
     For in_circuit/out_circuit:
     - Each row: [Subcircuit + intervention | Full + same intervention]
@@ -1862,12 +1872,9 @@ def visualize_faithfulness_circuit_samples(
         for i, effect in enumerate(faithfulness.out_counterfactual_effects[:6]):
             fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
-            clean_input = torch.tensor([effect.clean_input], dtype=torch.float32)
-            corrupt_input = torch.tensor([effect.corrupted_input], dtype=torch.float32)
-
-            with torch.no_grad():
-                clean_acts = gate_model(clean_input, return_activations=True)
-                corrupt_acts = gate_model(corrupt_input, return_activations=True)
+            # *** NO MODEL RUNS HERE! Use pre-computed activations ***
+            clean_acts = [torch.tensor(a).unsqueeze(0) for a in effect.clean_activations]
+            corrupt_acts = [torch.tensor(a).unsqueeze(0) for a in effect.corrupted_activations]
 
             all_acts = clean_acts + corrupt_acts
             vmin, vmax = _symmetric_range(all_acts)
@@ -1906,12 +1913,9 @@ def visualize_faithfulness_circuit_samples(
         for i, effect in enumerate(faithfulness.in_counterfactual_effects[:6]):
             fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
-            clean_input = torch.tensor([effect.clean_input], dtype=torch.float32)
-            corrupt_input = torch.tensor([effect.corrupted_input], dtype=torch.float32)
-
-            with torch.no_grad():
-                clean_acts = gate_model(clean_input, return_activations=True)
-                corrupt_acts = gate_model(corrupt_input, return_activations=True)
+            # *** NO MODEL RUNS HERE! Use pre-computed activations ***
+            clean_acts = [torch.tensor(a).unsqueeze(0) for a in effect.clean_activations]
+            corrupt_acts = [torch.tensor(a).unsqueeze(0) for a in effect.corrupted_activations]
 
             all_acts = clean_acts + corrupt_acts
             vmin, vmax = _symmetric_range(all_acts)
@@ -1950,12 +1954,9 @@ def visualize_faithfulness_circuit_samples(
         for i, effect in enumerate(faithfulness.counterfactual_effects[:6]):
             fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
-            clean_input = torch.tensor([effect.clean_input], dtype=torch.float32)
-            corrupt_input = torch.tensor([effect.corrupted_input], dtype=torch.float32)
-
-            with torch.no_grad():
-                clean_acts = gate_model(clean_input, return_activations=True)
-                corrupt_acts = gate_model(corrupt_input, return_activations=True)
+            # *** NO MODEL RUNS HERE! Use pre-computed activations ***
+            clean_acts = [torch.tensor(a).unsqueeze(0) for a in effect.clean_activations]
+            corrupt_acts = [torch.tensor(a).unsqueeze(0) for a in effect.corrupted_activations]
 
             all_acts = clean_acts + corrupt_acts
             vmin, vmax = _symmetric_range(all_acts)
@@ -2346,8 +2347,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     viz_paths[trial_id][gname]["full"]["spd"] = path
 
         # --- Subcircuit visualization ---
-        # Get gate models for creating subcircuit models
-        gate_models = trial.model.separate_into_k_mlps() if trial.model else []
+        # NOTE: No gate_models needed - all activations are pre-computed in samples!
 
         for gate_idx, gname in enumerate(gate_names):
             # Use per_gate_bests to iterate over all best subcircuits (not just decomposed ones)
@@ -2355,7 +2355,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
             if not best_indices:
                 continue
 
-            gate_model = gate_models[gate_idx] if gate_idx < len(gate_models) else None
+            print(f"[VIZ] Gate {gname}: {len(best_indices)} best subcircuits to visualize")
             bests_robust = trial.metrics.per_gate_bests_robust.get(gname, [])
             decomposed_indices = trial.decomposed_subcircuit_indices.get(gname, [])
 
@@ -2390,37 +2390,25 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     viz_paths[trial_id][gname][sc_idx]["robustness"] = {}
 
                     # Summary overview
-                    summary_path = visualize_robustness_summary(
-                        robustness_data, robustness_dir, gate_name=sc_label
-                    )
-                    viz_paths[trial_id][gname][sc_idx]["robustness"]["summary"] = (
-                        summary_path
-                    )
+                    with profile("robust_summary"):
+                        summary_path = visualize_robustness_summary(
+                            robustness_data, robustness_dir, gate_name=sc_label
+                        )
+                    viz_paths[trial_id][gname][sc_idx]["robustness"]["summary"] = summary_path
 
                     # Stats curves (accuracy and agreement vs level)
-                    stats_paths = visualize_robustness_curves(
-                        robustness_data, robustness_dir, gate_name=sc_label
-                    )
-                    viz_paths[trial_id][gname][sc_idx]["robustness"]["stats"] = (
-                        stats_paths
-                    )
+                    with profile("robust_curves"):
+                        stats_paths = visualize_robustness_curves(
+                            robustness_data, robustness_dir, gate_name=sc_label
+                        )
+                    viz_paths[trial_id][gname][sc_idx]["robustness"]["stats"] = stats_paths
 
                     # Circuit visualizations for sample inputs
-                    if gate_model is not None:
-                        subcircuit_model = gate_model.separate_subcircuit(circuit)
-                        circuit_viz_paths = visualize_robustness_circuit_samples(
-                            robustness_data,
-                            subcircuit_model,
-                            gate_model,
-                            circuit,
-                            layer_weights,
-                            robustness_dir,
+                    with profile("robust_circuit_viz"):
+                        circuit_paths = visualize_robustness_circuit_samples(
+                            robustness_data, circuit, layer_weights, robustness_dir
                         )
-                    else:
-                        circuit_viz_paths = {}
-                    viz_paths[trial_id][gname][sc_idx]["robustness"]["circuit_viz"] = (
-                        circuit_viz_paths
-                    )
+                    viz_paths[trial_id][gname][sc_idx]["robustness"]["circuit_viz"] = circuit_paths
 
                 # Faithfulness visualization in faithfulness/ subfolder
                 bests_faith = trial.metrics.per_gate_bests_faith.get(gname, [])
@@ -2431,37 +2419,25 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     viz_paths[trial_id][gname][sc_idx]["faithfulness"] = {}
 
                     # Summary overview
-                    summary_path = visualize_faithfulness_summary(
-                        faithfulness_data, faithfulness_dir, gate_name=sc_label
-                    )
-                    viz_paths[trial_id][gname][sc_idx]["faithfulness"]["summary"] = (
-                        summary_path
-                    )
+                    with profile("faith_summary"):
+                        summary_path = visualize_faithfulness_summary(
+                            faithfulness_data, faithfulness_dir, gate_name=sc_label
+                        )
+                    viz_paths[trial_id][gname][sc_idx]["faithfulness"]["summary"] = summary_path
 
                     # Stats (in/out circuit patches, counterfactual)
-                    stats_paths = visualize_faithfulness_stats(
-                        faithfulness_data, faithfulness_dir, gate_name=sc_label
-                    )
-                    viz_paths[trial_id][gname][sc_idx]["faithfulness"]["stats"] = (
-                        stats_paths
-                    )
-
-                    # Circuit visualizations for interventions
-                    if gate_model is not None:
-                        subcircuit_model = gate_model.separate_subcircuit(circuit)
-                        circuit_viz_paths = visualize_faithfulness_circuit_samples(
-                            faithfulness_data,
-                            subcircuit_model,
-                            gate_model,
-                            circuit,
-                            layer_weights,
-                            faithfulness_dir,
+                    with profile("faith_stats"):
+                        stats_paths = visualize_faithfulness_stats(
+                            faithfulness_data, faithfulness_dir, gate_name=sc_label
                         )
-                    else:
-                        circuit_viz_paths = {}
-                    viz_paths[trial_id][gname][sc_idx]["faithfulness"]["circuit_viz"] = (
-                        circuit_viz_paths
-                    )
+                    viz_paths[trial_id][gname][sc_idx]["faithfulness"]["stats"] = stats_paths
+
+                    # Circuit visualizations for intervention effects
+                    with profile("faith_circuit_viz"):
+                        circuit_paths = visualize_faithfulness_circuit_samples(
+                            faithfulness_data, circuit, layer_weights, faithfulness_dir
+                        )
+                    viz_paths[trial_id][gname][sc_idx]["faithfulness"]["circuit_viz"] = circuit_paths
 
                 # SPD
                 if gname in trial.decomposed_subcircuits:

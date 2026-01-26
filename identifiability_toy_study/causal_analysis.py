@@ -5,13 +5,14 @@ Look at calculate_subcircuit_metrics to see high-level
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
 
 from .common.causal import Intervention, InterventionEffect, PatchShape
-from .common.circuit import CircuitStructure
+from .common.circuit import Circuit, CircuitStructure
 from .common.helpers import calculate_best_match_rate, calculate_match_rate
 from .common.neural_model import MLP
 from .common.schemas import (
@@ -27,21 +28,63 @@ from .common.schemas import (
 )
 
 
-def filter_subcircuits(
-    constraints: IdentifiabilityConstraints, subcircuit_metrics: list[SubcircuitMetrics]
-) -> list[int]:
-    subcircuit_metrics = sorted(
-        subcircuit_metrics,
-        key=lambda x: (x.bit_similarity, x.accuracy, x.logit_similarity),
-        reverse=True,
-    )
+def _node_masks_key(circuit: Circuit) -> tuple:
+    """Convert node_masks to a hashable key for grouping by activation pattern."""
+    return tuple(tuple(m.tolist()) for m in circuit.node_masks)
 
-    subcircuit_indices = []
+
+def filter_subcircuits(
+    constraints: IdentifiabilityConstraints,
+    subcircuit_metrics: list[SubcircuitMetrics],
+    subcircuits: list[Circuit],
+    subcircuit_structures: list[CircuitStructure],
+) -> list[int]:
+    """Filter subcircuits by epsilon thresholds, then deduplicate by activation pattern.
+
+    Steps:
+    1. Filter by bit_similarity and accuracy using epsilon threshold
+    2. Group passing subcircuits by activation pattern (node_masks)
+    3. Within each group, sort by sparsity (node_sparsity desc, then edge_sparsity desc)
+    4. Return only top 1 subcircuit per unique activation pattern
+    """
+    # First pass: filter by epsilon thresholds
+    passing_indices = []
     for result in subcircuit_metrics:
+        # Must pass BOTH bit_similarity AND accuracy thresholds
         if 1.0 - result.bit_similarity > constraints.epsilon:
-            break
-        subcircuit_indices.append(result.idx)
-    return subcircuit_indices
+            continue
+        if 1.0 - result.accuracy > constraints.epsilon:
+            continue
+        passing_indices.append(result.idx)
+
+    if not passing_indices:
+        return []
+
+    # Group by activation pattern (node_masks)
+    pattern_groups: dict[tuple, list[int]] = {}
+    for idx in passing_indices:
+        pattern_key = _node_masks_key(subcircuits[idx])
+        if pattern_key not in pattern_groups:
+            pattern_groups[pattern_key] = []
+        pattern_groups[pattern_key].append(idx)
+
+    # For each pattern, select the most sparse subcircuit
+    # Sort by (node_sparsity desc, edge_sparsity desc) - higher = more sparse = better
+    selected_indices = []
+    for pattern_key, group_indices in pattern_groups.items():
+        # Sort by sparsity (descending - higher is more sparse)
+        sorted_group = sorted(
+            group_indices,
+            key=lambda idx: (
+                subcircuit_structures[idx].node_sparsity,
+                subcircuit_structures[idx].edge_sparsity,
+            ),
+            reverse=True,
+        )
+        # Take only the top 1 (most sparse)
+        selected_indices.append(sorted_group[0])
+
+    return selected_indices
 
 
 # ===== Robustness Analysis =====
@@ -128,7 +171,10 @@ def _evaluate_samples(
     samples: list[tuple[torch.Tensor, torch.Tensor, float]],
     device: str,
 ) -> list[RobustnessSample]:
-    """Evaluate gate_model and subcircuit on the same perturbed inputs."""
+    """Evaluate gate_model and subcircuit on the same perturbed inputs.
+
+    Pre-computes activations for circuit visualization (no model runs during viz).
+    """
     results = []
 
     for perturbed, base_input, magnitude in samples:
@@ -138,10 +184,13 @@ def _evaluate_samples(
         base_key = (int(base_input[0].item()), int(base_input[1].item()))
         ground_truth = GROUND_TRUTH.get(base_key, 0.0)
 
-        # Run BOTH models on the SAME perturbed input
+        # Run BOTH models on the SAME perturbed input, get activations for viz
         with torch.no_grad():
-            gate_output = gate_model(perturbed_dev).item()
-            subcircuit_output = subcircuit(perturbed_dev).item()
+            gate_acts = gate_model(perturbed_dev, return_activations=True)
+            gate_output = gate_acts[-1].item()
+
+            sc_acts = subcircuit(perturbed_dev, return_activations=True)
+            subcircuit_output = sc_acts[-1].item()
 
         # Interpret outputs as 0 or 1 (based on which is closest)
         gate_bit = 1 if gate_output >= 0.5 else 0
@@ -155,6 +204,10 @@ def _evaluate_samples(
         agreement_bit = gate_bit == sc_bit
         mse = (gate_output - subcircuit_output) ** 2
 
+        # Convert activations to lists for JSON serialization
+        gate_acts_list = [a.squeeze(0).tolist() for a in gate_acts]
+        sc_acts_list = [a.squeeze(0).tolist() for a in sc_acts]
+
         results.append(
             RobustnessSample(
                 input_values=[perturbed[0].item(), perturbed[1].item()],
@@ -167,6 +220,8 @@ def _evaluate_samples(
                 subcircuit_correct=subcircuit_correct,
                 agreement_bit=agreement_bit,
                 mse=mse,
+                gate_activations=gate_acts_list,
+                subcircuit_activations=sc_acts_list,
             )
         )
 
@@ -278,6 +333,7 @@ def calculate_patches_causal_effect(
     n_interventions_per_patch: int,
     out_circuit: bool = False,
     device: str = "cpu",
+    value_range: Optional[list] = None,
 ) -> dict[str, list[InterventionEffect]]:
     """
     Calculate causal effects for a list of patches.
@@ -300,7 +356,10 @@ def calculate_patches_causal_effect(
     intervention_results = {}
     for patch in patches:
         interventions = Intervention.create_random_interventions(
-            patch, n_interventions=n_interventions_per_patch, device=device
+            patch,
+            n_interventions=n_interventions_per_patch,
+            device=device,
+            value_range=value_range,
         )
         patch_results = []
         for iv in interventions:
@@ -316,7 +375,11 @@ def _create_intervention_samples(
     patch_key: str,
     effects: list[InterventionEffect],
 ) -> list[InterventionSample]:
-    """Create InterventionSample objects from InterventionEffect list."""
+    """Create InterventionSample objects from InterventionEffect list.
+
+    IMPORTANT: Activations from InterventionEffect are converted to lists
+    so visualization code NEVER needs to run models. Visualization is READ-ONLY.
+    """
     samples = []
 
     # Parse patch info from key (e.g., "PatchShape(layers=(1,), indices=(0,), axis='neuron')")
@@ -345,6 +408,14 @@ def _create_intervention_samples(
         mse = (y_target_val - y_proxy_val) ** 2
         bit_agree = round(y_target_val) == round(y_proxy_val)
 
+        # Convert tensor activations to lists for JSON serialization
+        gate_acts_list = []
+        subcircuit_acts_list = []
+        if effect.target_activations is not None:
+            gate_acts_list = [a.squeeze(0).tolist() for a in effect.target_activations]
+        if effect.proxy_activations is not None:
+            subcircuit_acts_list = [a.squeeze(0).tolist() for a in effect.proxy_activations]
+
         samples.append(
             InterventionSample(
                 patch_key=patch_key,
@@ -356,93 +427,102 @@ def _create_intervention_samples(
                 logit_similarity=effect.logit_similarity,
                 bit_agreement=bit_agree,
                 mse=mse,
+                gate_activations=gate_acts_list,
+                subcircuit_activations=subcircuit_acts_list,
             )
         )
 
     return samples
 
 
+def _compute_patch_statistics(effects_dict: dict[str, list[InterventionEffect]]) -> tuple[dict[str, PatchStatistics], list[float]]:
+    """Helper to compute patch statistics from effects dict."""
+    stats = {}
+    all_sims = []
+    for patch_key, effects in effects_dict.items():
+        if not effects:
+            continue
+        logit_sims = [e.logit_similarity for e in effects]
+        bit_sims = [e.bit_similarity for e in effects]
+        best_sims = [e.best_similarity for e in effects]
+        all_sims.extend(bit_sims)
+
+        samples = _create_intervention_samples(patch_key, effects)
+
+        stats[patch_key] = PatchStatistics(
+            mean_logit_similarity=float(np.mean(logit_sims)),
+            std_logit_similarity=float(np.std(logit_sims)),
+            mean_bit_similarity=float(np.mean(bit_sims)),
+            std_bit_similarity=float(np.std(bit_sims)),
+            mean_best_similarity=float(np.mean(best_sims)),
+            std_best_similarity=float(np.std(best_sims)),
+            n_interventions=len(effects),
+            samples=samples,
+        )
+    return stats, all_sims
+
+
 def calculate_statistics(
-    in_circuit_effects: dict[str, list[InterventionEffect]],
-    out_circuit_effects: dict[str, list[InterventionEffect]],
+    in_circuit_effects: dict[str, dict[str, list[InterventionEffect]] | list[InterventionEffect]],
+    out_circuit_effects: dict[str, dict[str, list[InterventionEffect]] | list[InterventionEffect]],
     counterfactual_effects: list[CounterfactualEffect],
-) -> tuple[
-    dict[str, PatchStatistics], dict[str, PatchStatistics], float, float, float, float
-]:
+) -> dict:
     """
     Compute statistics from intervention effects.
 
+    Args:
+        in_circuit_effects: Either dict with "in"/"ood" keys containing patch dicts,
+                           or flat dict of patch_key -> effects (legacy)
+        out_circuit_effects: Same format as in_circuit_effects
+        counterfactual_effects: List of CounterfactualEffect
+
     Returns:
-        Tuple of (in_circuit_stats, out_circuit_stats,
-                  mean_in_sim, mean_out_sim, mean_faith, std_faith)
+        Dict with keys: in_circuit_stats, out_circuit_stats, in_circuit_stats_ood, out_circuit_stats_ood,
+                       mean_in_sim, mean_out_sim, mean_in_sim_ood, mean_out_sim_ood,
+                       mean_faith, std_faith
     """
-    # Per-patch statistics for in-circuit
-    in_circuit_stats = {}
-    all_in_sims = []
-    for patch_key, effects in in_circuit_effects.items():
-        if not effects:
-            continue
-        logit_sims = [e.logit_similarity for e in effects]
-        bit_sims = [e.bit_similarity for e in effects]
-        best_sims = [e.best_similarity for e in effects]
-        all_in_sims.extend(bit_sims)
+    # Check if new format (nested with "in"/"ood") or legacy (flat dict)
+    is_nested = "in" in in_circuit_effects or "ood" in in_circuit_effects
 
-        # Create individual samples for visualization
-        samples = _create_intervention_samples(patch_key, effects)
+    if is_nested:
+        # New format with "in" and "ood" keys
+        in_stats, in_sims = _compute_patch_statistics(in_circuit_effects.get("in", {}))
+        in_stats_ood, in_sims_ood = _compute_patch_statistics(in_circuit_effects.get("ood", {}))
+        out_stats, out_sims = _compute_patch_statistics(out_circuit_effects.get("in", {}))
+        out_stats_ood, out_sims_ood = _compute_patch_statistics(out_circuit_effects.get("ood", {}))
 
-        in_circuit_stats[patch_key] = PatchStatistics(
-            mean_logit_similarity=float(np.mean(logit_sims)),
-            std_logit_similarity=float(np.std(logit_sims)),
-            mean_bit_similarity=float(np.mean(bit_sims)),
-            std_bit_similarity=float(np.std(bit_sims)),
-            mean_best_similarity=float(np.mean(best_sims)),
-            std_best_similarity=float(np.std(best_sims)),
-            n_interventions=len(effects),
-            samples=samples,
-        )
-
-    # Per-patch statistics for out-circuit
-    out_circuit_stats = {}
-    all_out_sims = []
-    for patch_key, effects in out_circuit_effects.items():
-        if not effects:
-            continue
-        logit_sims = [e.logit_similarity for e in effects]
-        bit_sims = [e.bit_similarity for e in effects]
-        best_sims = [e.best_similarity for e in effects]
-        all_out_sims.extend(bit_sims)
-
-        # Create individual samples for visualization
-        samples = _create_intervention_samples(patch_key, effects)
-
-        out_circuit_stats[patch_key] = PatchStatistics(
-            mean_logit_similarity=float(np.mean(logit_sims)),
-            std_logit_similarity=float(np.std(logit_sims)),
-            mean_bit_similarity=float(np.mean(bit_sims)),
-            std_bit_similarity=float(np.std(bit_sims)),
-            mean_best_similarity=float(np.mean(best_sims)),
-            std_best_similarity=float(np.std(best_sims)),
-            n_interventions=len(effects),
-            samples=samples,
-        )
-
-    # Aggregate statistics
-    mean_in_sim = float(np.mean(all_in_sims)) if all_in_sims else 0.0
-    mean_out_sim = float(np.mean(all_out_sims)) if all_out_sims else 0.0
+        mean_in_sim = float(np.mean(in_sims)) if in_sims else 0.0
+        mean_out_sim = float(np.mean(out_sims)) if out_sims else 0.0
+        mean_in_sim_ood = float(np.mean(in_sims_ood)) if in_sims_ood else 0.0
+        mean_out_sim_ood = float(np.mean(out_sims_ood)) if out_sims_ood else 0.0
+    else:
+        # Legacy flat format
+        in_stats, in_sims = _compute_patch_statistics(in_circuit_effects)
+        out_stats, out_sims = _compute_patch_statistics(out_circuit_effects)
+        in_stats_ood = {}
+        out_stats_ood = {}
+        mean_in_sim = float(np.mean(in_sims)) if in_sims else 0.0
+        mean_out_sim = float(np.mean(out_sims)) if out_sims else 0.0
+        mean_in_sim_ood = 0.0
+        mean_out_sim_ood = 0.0
 
     # Counterfactual statistics
     faith_scores = [c.faithfulness_score for c in counterfactual_effects]
     mean_faith = float(np.mean(faith_scores)) if faith_scores else 0.0
     std_faith = float(np.std(faith_scores)) if faith_scores else 0.0
 
-    return (
-        in_circuit_stats,
-        out_circuit_stats,
-        mean_in_sim,
-        mean_out_sim,
-        mean_faith,
-        std_faith,
-    )
+    return {
+        "in_circuit_stats": in_stats,
+        "out_circuit_stats": out_stats,
+        "in_circuit_stats_ood": in_stats_ood,
+        "out_circuit_stats_ood": out_stats_ood,
+        "mean_in_sim": mean_in_sim,
+        "mean_out_sim": mean_out_sim,
+        "mean_in_sim_ood": mean_in_sim_ood,
+        "mean_out_sim_ood": mean_out_sim_ood,
+        "mean_faith": mean_faith,
+        "std_faith": std_faith,
+    }
 
 
 @dataclass
@@ -595,8 +675,12 @@ def calculate_faithfulness_metrics(
     in_circuit_effects = {}
     out_circuit_effects = {}
 
+    # TODO(claude): Modify create_random_interventions so it can also take set(list) of ranges that will consider its union
+    in_distribution_value_range = [-1, 1]
+    out_distribution_value_range = [[-1000, -2], [2, 1000]]
+
     if structure.in_patches:
-        in_circuit_effects = calculate_patches_causal_effect(
+        in_circuit_effects["in"] = calculate_patches_causal_effect(
             structure.in_patches,
             x,
             model,
@@ -604,10 +688,21 @@ def calculate_faithfulness_metrics(
             n_interventions_per_patch,
             out_circuit=False,
             device=device,
+            value_range=in_distribution_value_range,
+        )
+        in_circuit_effects["ood"] = calculate_patches_causal_effect(
+            structure.in_patches,
+            x,
+            model,
+            subcircuit,
+            n_interventions_per_patch,
+            out_circuit=False,
+            device=device,
+            value_range=out_distribution_value_range,
         )
 
     if structure.out_patches:
-        out_circuit_effects = calculate_patches_causal_effect(
+        out_circuit_effects["in"] = calculate_patches_causal_effect(
             structure.out_patches,
             x,
             model,
@@ -615,12 +710,22 @@ def calculate_faithfulness_metrics(
             n_interventions_per_patch,
             out_circuit=True,
             device=device,
+            value_range=in_distribution_value_range,
+        )
+        out_circuit_effects["ood"] = calculate_patches_causal_effect(
+            structure.out_patches,
+            x,
+            model,
+            subcircuit,
+            n_interventions_per_patch,
+            out_circuit=True,
+            device=device,
+            value_range=in_distribution_value_range,
         )
 
     # ===== Counterfactual Analysis =====
     def compute_counterfactual_effects(
-        patches: list[PatchShape],
-        pairs: list[CleanCorruptedPair],
+        patches: list[PatchShape], pairs: list[CleanCorruptedPair], score_type: str
     ) -> list[CounterfactualEffect]:
         """Compute counterfactual effects for a set of patches."""
         effects = []
@@ -628,34 +733,53 @@ def calculate_faithfulness_metrics(
             iv = create_patch_intervention(patches, pair.act_corrupted)
             y_sc = model(pair.x_clean, intervention=iv)
 
-            # faithfulness = (y_sc - y_corrupted) / (y_clean - y_corrupted)
             denominator = pair.y_clean - pair.y_corrupted
             assert torch.abs(denominator).mean() > 1e-6
-            faith_score = ((y_sc - pair.y_corrupted) / denominator).mean().item()
+
+            # TODO(claude): Clean this up (score_type), might have more scores in future
+            faith_score = None
+            if score_type == "necessity":
+                # faithfulness = (y_sc - y_corrupted) / (y_clean - y_corrupted)
+                faith_score = ((y_sc - pair.y_corrupted) / denominator).mean().item()
+
+            if score_type == "sufficiency":
+                # faithfulness = (y_clean - y_sc) / (y_clean - y_corrupted)
+                faith_score = ((pair.y_clean - y_sc) / denominator).mean().item()
+
+            assert faith_score is not None, f"Unknown score_type: {score_type}"
 
             y_clean_val = pair.y_clean.mean().item()
             y_corrupted_val = pair.y_corrupted.mean().item()
             y_sc_val = y_sc.mean().item()
             output_changed = round(y_sc_val) == round(y_corrupted_val)
 
+            # Convert activations to lists for JSON serialization
+            clean_acts_list = [a.squeeze(0).tolist() for a in pair.act_clean]
+            corrupted_acts_list = [a.squeeze(0).tolist() for a in pair.act_corrupted]
+
             effects.append(
                 CounterfactualEffect(
                     faithfulness_score=faith_score,
+                    score_type=score_type,
                     clean_input=pair.x_clean.flatten().tolist(),
                     corrupted_input=pair.x_corrupted.flatten().tolist(),
                     expected_clean_output=y_clean_val,
                     expected_corrupted_output=y_corrupted_val,
                     actual_output=y_sc_val,
                     output_changed_to_corrupted=output_changed,
+                    clean_activations=clean_acts_list,
+                    corrupted_activations=corrupted_acts_list,
                 )
             )
         return effects
 
+    # Sufficiency
     out_counterfactual_effects = compute_counterfactual_effects(
-        structure.out_circuit, counterfactual_pairs
+        structure.out_circuit, counterfactual_pairs, "sufficiency"
     )
+    # Necesity
     in_counterfactual_effects = compute_counterfactual_effects(
-        structure.in_circuit, counterfactual_pairs
+        structure.in_circuit, counterfactual_pairs, "necessity"
     )
 
     # ===== Calculate Statistics =====
@@ -663,32 +787,31 @@ def calculate_faithfulness_metrics(
     # since patching out-circuit neurons tests if the subcircuit is sufficient)
     all_counterfactual_effects = out_counterfactual_effects + in_counterfactual_effects
 
-    (
-        in_circuit_stats,
-        out_circuit_stats,
-        mean_in_sim,
-        mean_out_sim,
-        mean_faith,
-        std_faith,
-    ) = calculate_statistics(
+    stats = calculate_statistics(
         in_circuit_effects, out_circuit_effects, all_counterfactual_effects
     )
 
     # Overall faithfulness: combine in-circuit similarity and counterfactual faithfulness
     # Higher in-circuit similarity is good, higher faithfulness score is good
+    mean_in_sim = stats["mean_in_sim"]
+    mean_faith = stats["mean_faith"]
     overall_faithfulness = (
         (mean_in_sim + mean_faith) / 2.0 if mean_faith > 0 else mean_in_sim
     )
 
     return FaithfulnessMetrics(
-        in_circuit_stats=in_circuit_stats,
-        out_circuit_stats=out_circuit_stats,
-        mean_in_circuit_similarity=mean_in_sim,
-        mean_out_circuit_similarity=mean_out_sim,
+        in_circuit_stats=stats["in_circuit_stats"],
+        out_circuit_stats=stats["out_circuit_stats"],
+        in_circuit_stats_ood=stats["in_circuit_stats_ood"],
+        out_circuit_stats_ood=stats["out_circuit_stats_ood"],
+        mean_in_circuit_similarity=stats["mean_in_sim"],
+        mean_out_circuit_similarity=stats["mean_out_sim"],
+        mean_in_circuit_similarity_ood=stats["mean_in_sim_ood"],
+        mean_out_circuit_similarity_ood=stats["mean_out_sim_ood"],
         out_counterfactual_effects=out_counterfactual_effects,
         in_counterfactual_effects=in_counterfactual_effects,
         counterfactual_effects=all_counterfactual_effects,  # Legacy combined
-        mean_faithfulness_score=mean_faith,
-        std_faithfulness_score=std_faith,
+        mean_faithfulness_score=stats["mean_faith"],
+        std_faithfulness_score=stats["std_faith"],
         overall_faithfulness=overall_faithfulness,
     )

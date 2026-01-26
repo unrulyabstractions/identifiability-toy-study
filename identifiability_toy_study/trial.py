@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 
 from .causal_analysis import (
-    CleanCorruptedPair,
     calculate_faithfulness_metrics,
     calculate_robustness_metrics,
     create_clean_corrupted_data,
@@ -26,6 +25,7 @@ from .common.utils import (
     set_seeds,
 )
 from .parameter_decomposition import decompose_mlp
+from .profiler import profile
 
 
 def run_trial(
@@ -137,7 +137,7 @@ def run_trial(
         bit_gate_gt = bit_gt[..., [gate_idx]]
         bit_gate = bit_pred[..., [gate_idx]]
 
-        subcircuit_models = [gate_model.separate_subcircuit(sub) for sub in subcircuits]
+        subcircuit_models = [gate_model.separate_subcircuit(sub, gate_idx=gate_idx) for sub in subcircuits]
 
         # ===== Calculate Gate Metrics =====
         update_status(f"STARTED_GATE_METRICS:{gate_idx}")
@@ -170,6 +170,8 @@ def run_trial(
         per_gate_bests[gate_name] = filter_subcircuits(
             setup.constraints,
             per_gate_metrics[gate_name].subcircuit_metrics,
+            subcircuits,
+            subcircuit_structures,
         )
 
         best_indices = per_gate_bests[gate_name]
@@ -179,12 +181,13 @@ def run_trial(
         robusts = per_gate_bests_robust[gate_name]
         for subcircuit_idx in best_indices:
             subcircuit_model = subcircuit_models[subcircuit_idx]
-            robustness = calculate_robustness_metrics(
-                subcircuit=subcircuit_model,
-                full_model=gate_model,
-                n_samples_per_base=100,
-                device=device,
-            )
+            with profile("calc_robustness"):
+                robustness = calculate_robustness_metrics(
+                    subcircuit=subcircuit_model,
+                    full_model=gate_model,
+                    n_samples_per_base=100,
+                    device=device,
+                )
             robusts.append(robustness)
         update_status(f"FINISHED_ROBUSTNESS:{gate_idx}")
 
@@ -201,47 +204,52 @@ def run_trial(
         faiths = per_gate_bests_faith[gate_name]
         for subcircuit_idx in best_indices:
             subcircuit_model = subcircuit_models[subcircuit_idx]
-            faithfulness = calculate_faithfulness_metrics(
-                x=x,
-                y=y_gate,
-                model=gate_model,
-                activations=activations,
-                subcircuit=subcircuit_model,
-                structure=subcircuit_structures[subcircuit_idx],
-                counterfactual_pairs=counterfactual_pairs,
-                config=setup.faithfulness_config,
-                device=device,
-            )
+            with profile("calc_faithfulness"):
+                faithfulness = calculate_faithfulness_metrics(
+                    x=x,
+                    y=y_gate,
+                    model=gate_model,
+                    activations=activations,
+                    subcircuit=subcircuit_model,
+                    structure=subcircuit_structures[subcircuit_idx],
+                    counterfactual_pairs=counterfactual_pairs,
+                    config=setup.faithfulness_config,
+                    device=device,
+                )
             faiths.append(faithfulness)
         update_status(f"FINISHED_FAITH:{gate_idx}")
 
         # ===== Parameter Decomposition =====
-        update_status(f"STARTED_SPD_TRAINING_GATE:{gate_idx}")
-        # Decompose full single-gate model
-        trial_result.decomposed_gate_models[gate_name] = decompose_mlp(
-            x, y_gate, gate_model, spd_device, spd_config
-        )
-        update_status(f"FINISHED_SPD_TRAINING_GATE:{gate_idx}")
-
-        # Decompose best subcircuits (limited by max_subcircuits)
-        decomposed_dict = trial_result.decomposed_subcircuits[gate_name]
-
-        best_indices = per_gate_bests[gate_name]
-        if spd_config.max_subcircuits:
-            best_indices = best_indices[: spd_config.max_subcircuits]
-
-        for subcircuit_idx in best_indices:
-            update_status(
-                f"STARTED_SPD_TRAINING_SUBCIRCUIT:{gate_idx}:{subcircuit_idx}"
+        spd_for_small = False
+        if spd_for_small:
+            update_status(f"STARTED_SPD_TRAINING_GATE:{gate_idx}")
+            # Decompose full single-gate model
+            trial_result.decomposed_gate_models[gate_name] = decompose_mlp(
+                x, y_gate, gate_model, spd_device, spd_config
             )
-            decomposed_dict[subcircuit_idx] = decompose_mlp(
-                x, y_gate, subcircuit_models[subcircuit_idx], spd_device, spd_config
-            )
-            # Track which subcircuits were decomposed (for JSON serialization)
-            trial_result.decomposed_subcircuit_indices[gate_name].append(subcircuit_idx)
-            update_status(
-                f"FINISHED_SPD_TRAINING_SUBCIRCUIT:{gate_idx}:{subcircuit_idx}"
-            )
+            update_status(f"FINISHED_SPD_TRAINING_GATE:{gate_idx}")
+
+            # Decompose best subcircuits (limited by max_subcircuits)
+            decomposed_dict = trial_result.decomposed_subcircuits[gate_name]
+
+            best_indices = per_gate_bests[gate_name]
+            if spd_config.max_subcircuits:
+                best_indices = best_indices[: spd_config.max_subcircuits]
+
+            for subcircuit_idx in best_indices:
+                update_status(
+                    f"STARTED_SPD_TRAINING_SUBCIRCUIT:{gate_idx}:{subcircuit_idx}"
+                )
+                decomposed_dict[subcircuit_idx] = decompose_mlp(
+                    x, y_gate, subcircuit_models[subcircuit_idx], spd_device, spd_config
+                )
+                # Track which subcircuits were decomposed (for JSON serialization)
+                trial_result.decomposed_subcircuit_indices[gate_name].append(
+                    subcircuit_idx
+                )
+                update_status(
+                    f"FINISHED_SPD_TRAINING_SUBCIRCUIT:{gate_idx}:{subcircuit_idx}"
+                )
 
     update_status("STARTED_GATE_ANALYSIS")
     for gate_idx in range(len(gate_models)):
