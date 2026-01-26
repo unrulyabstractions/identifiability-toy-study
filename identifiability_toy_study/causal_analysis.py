@@ -102,8 +102,7 @@ def filter_subcircuits(
         # Calculate max overlap with any already-selected subcircuit
         # (lower is better - we want diversity)
         max_overlap = max(
-            subcircuits[candidate_idx].overlap_jaccard(subcircuits[s])
-            for s in selected
+            subcircuits[candidate_idx].overlap_jaccard(subcircuits[s]) for s in selected
         )
 
         # Check if this candidate is a quality tie with the last selected
@@ -727,30 +726,43 @@ def calculate_faithfulness_metrics(
     def compute_counterfactual_effects(
         patches: list[PatchShape], pairs: list[CleanCorruptedPair], score_type: str
     ) -> list[CounterfactualEffect]:
-        """Compute counterfactual effects for a set of patches."""
+        """Compute counterfactual effects for a set of patches.
+
+        Runs the FULL MODEL with interventions that patch specific neurons
+        to corrupted values. Captures activations from the intervention run
+        for visualization.
+        """
         effects = []
         for pair in pairs:
             iv = create_patch_intervention(patches, pair.act_corrupted)
-            y_sc = model(pair.x_clean, intervention=iv)
+
+            # Run FULL MODEL with intervention and capture activations
+            with torch.inference_mode():
+                intervened_acts = model(pair.x_clean, intervention=iv, return_activations=True)
+                y_intervened = intervened_acts[-1]  # Last activation is output
 
             denominator = pair.y_clean - pair.y_corrupted
             assert torch.abs(denominator).mean() > 1e-6
 
             faith_score = None
             if score_type == "necessity":
-                faith_score = ((y_sc - pair.y_corrupted) / denominator).mean().item()
+                faith_score = ((y_intervened - pair.y_corrupted) / denominator).mean().item()
             if score_type == "sufficiency":
-                faith_score = ((pair.y_clean - y_sc) / denominator).mean().item()
+                faith_score = ((pair.y_clean - y_intervened) / denominator).mean().item()
 
             assert faith_score is not None, f"Unknown score_type: {score_type}"
 
             y_clean_val = pair.y_clean.mean().item()
             y_corrupted_val = pair.y_corrupted.mean().item()
-            y_sc_val = y_sc.mean().item()
-            output_changed = round(y_sc_val) == round(y_corrupted_val)
+            y_intervened_val = y_intervened.mean().item()
+            output_changed = round(y_intervened_val) == round(y_corrupted_val)
 
+            # Reference activations from clean/corrupted (no intervention)
             clean_acts_list = [a.squeeze(0).tolist() for a in pair.act_clean]
             corrupted_acts_list = [a.squeeze(0).tolist() for a in pair.act_corrupted]
+
+            # Activations from the actual intervention run (FULL MODEL with patches)
+            intervened_acts_list = [a.squeeze(0).tolist() for a in intervened_acts]
 
             effects.append(
                 CounterfactualEffect(
@@ -760,18 +772,16 @@ def calculate_faithfulness_metrics(
                     corrupted_input=pair.x_corrupted.flatten().tolist(),
                     expected_clean_output=y_clean_val,
                     expected_corrupted_output=y_corrupted_val,
-                    actual_output=y_sc_val,
+                    actual_output=y_intervened_val,
                     output_changed_to_corrupted=output_changed,
                     clean_activations=clean_acts_list,
                     corrupted_activations=corrupted_acts_list,
+                    intervened_activations=intervened_acts_list,
                 )
             )
         return effects
 
     # ===== Interventional + Counterfactual Analysis =====
-    # NOTE: Run sequentially to avoid GPU thread safety issues.
-    # PyTorch GPU ops are not thread-safe with ThreadPoolExecutor.
-    # See: https://github.com/pytorch/pytorch/issues/103793
     in_distribution_value_range = [-1, 1]
     out_distribution_value_range = [[-1000, -2], [2, 1000]]
 

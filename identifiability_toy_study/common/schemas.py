@@ -167,6 +167,10 @@ class PatchStatistics(SchemaClass):
 class CounterfactualEffect(SchemaClass):
     """Result of a single counterfactual test.
 
+    Counterfactual analysis runs the FULL MODEL with interventions that patch
+    specific neurons to corrupted values. This tests whether patching circuit
+    neurons changes the output.
+
     NOTE: Activations are pre-computed here so visualization code
     NEVER needs to run models. Visualization is READ-ONLY.
     """
@@ -174,27 +178,32 @@ class CounterfactualEffect(SchemaClass):
     faithfulness_score: float  # Score depends on score_type
 
     # Score type: "sufficiency" or "necessity"
-    # - sufficiency: (y_clean - y_sc) / (y_clean - y_corrupted) - tests if subcircuit alone is sufficient
-    # - necessity: (y_sc - y_corrupted) / (y_clean - y_corrupted) - tests if subcircuit is necessary
+    # - sufficiency: patch OUT-circuit neurons -> tests if in-circuit is sufficient
+    # - necessity: patch IN-circuit neurons -> tests if in-circuit is necessary
     score_type: str = "sufficiency"
 
     # Clean/corrupted input info
     clean_input: list[float] = field(default_factory=list)  # e.g., [0, 1]
     corrupted_input: list[float] = field(default_factory=list)  # e.g., [1, 0]
 
-    # Expected outputs
-    expected_clean_output: float = 0.0  # y_clean (before patching)
-    expected_corrupted_output: float = 0.0  # y_corrupted (counterfactual target)
+    # Expected outputs (from original clean/corrupted runs, no intervention)
+    expected_clean_output: float = 0.0  # y_clean (full model on clean input)
+    expected_corrupted_output: float = 0.0  # y_corrupted (full model on corrupted input)
 
-    # Actual output after patching corrupted activations
-    actual_output: float = 0.0  # y_sc (subcircuit output with patched activations)
+    # Actual output from FULL MODEL with intervention (patched activations)
+    actual_output: float = 0.0  # model(x_clean, intervention=patch)
 
     # Did patching change output toward corrupted?
     output_changed_to_corrupted: bool = False  # round(actual) == round(corrupted)
 
     # Pre-computed activations for visualization (NO model runs during viz!)
+    # These are from the ORIGINAL clean/corrupted runs (reference)
     clean_activations: list[list[float]] = field(default_factory=list)
     corrupted_activations: list[list[float]] = field(default_factory=list)
+
+    # Activations from the actual intervention run (FULL MODEL with patches)
+    # This is what the visualization should show for the counterfactual
+    intervened_activations: list[list[float]] = field(default_factory=list)
 
 
 @dataclass
