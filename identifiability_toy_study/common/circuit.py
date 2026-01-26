@@ -851,50 +851,72 @@ def _enumerate_edge_mask_per_layer(in_mask, out_mask):
 
 
 def enumerate_all_valid_circuit(
-    model, min_sparsity=None, use_tqdm=True
+    model, min_sparsity: float = 0.0, use_tqdm=True
 ) -> list[Circuit]:
     """
-    Generates all valid circuits for the given model.
+    Enumerate valid node patterns as circuits with full edge connectivity.
+
+    Formula: (2^w - 1)^d valid patterns for d hidden layers of width w.
+    Each pattern has at least 1 active node per hidden layer.
 
     Args:
         model: The input model
-        min_sparsity: The sparsity threshold for circuits
+        min_sparsity: Minimum node sparsity (fraction of hidden nodes OFF).
+            Default 0.0 includes all valid patterns.
         use_tqdm: Whether to use tqdm to show progress
 
     Returns:
-        The list of all valid circuits
+        List of circuits, one per valid node pattern, with full edges.
     """
-    input_mask = np.ones(model.layers[0][0].in_features)
+    from .subcircuit import enumerate_node_patterns, full_edge_config
 
-    all_valid_node_masks = model.enumerate_valid_node_masks()
-
-    all_valid_node_masks_with_inputs = []
-    for mask in all_valid_node_masks[:-1]:
-        mask = list(mask)
-        mask.insert(0, input_mask)
-        all_valid_node_masks_with_inputs.append(mask)
+    layer_widths = model.layer_sizes
 
     all_circuits = []
-    if use_tqdm:
-        all_valid_node_masks_with_inputs = tqdm(
-            all_valid_node_masks_with_inputs, desc="Enumerating circuits"
-        )
-    for node_masks in all_valid_node_masks_with_inputs:
-        if min_sparsity:
-            combined_node_mask = np.concatenate(node_masks[1:-1], axis=None)
-            node_sparsity = np.mean(combined_node_mask == 0)
-            if node_sparsity <= min_sparsity:
-                continue
+    patterns = enumerate_node_patterns(layer_widths, min_sparsity)
 
-        all_masks_per_layer = [
-            _enumerate_edge_mask_per_layer(x, y)
-            for x, y in zip(node_masks, node_masks[1:])
-        ]
-        for v_e_m in itertools.product(*all_masks_per_layer):
-            circuit = Circuit(node_masks=node_masks, edge_masks=v_e_m)
-            all_circuits.append(circuit)
+    if use_tqdm:
+        from .subcircuit import count_node_patterns
+        total = count_node_patterns(layer_widths)
+        patterns = tqdm(patterns, total=total, desc="Enumerating node patterns")
+
+    for pattern in patterns:
+        node_arrays = pattern.to_arrays()
+        edge_masks = full_edge_config(pattern)
+        circuit = Circuit(node_masks=node_arrays, edge_masks=edge_masks)
+        all_circuits.append(circuit)
 
     return all_circuits
+
+
+def enumerate_edge_variants(circuit: Circuit) -> list[Circuit]:
+    """
+    For a given node pattern, enumerate all valid edge configurations.
+
+    Use after identifying best node patterns via subcircuit metrics.
+
+    Args:
+        circuit: A circuit with a specific node pattern
+
+    Returns:
+        List of circuits with all valid edge configurations.
+    """
+    from .subcircuit import NodePattern, enumerate_edge_configs
+
+    # Convert circuit to NodePattern
+    layer_masks = tuple(
+        sum(int(b) << i for i, b in enumerate(mask))
+        for mask in circuit.node_masks
+    )
+    layer_widths = tuple(len(mask) for mask in circuit.node_masks)
+    pattern = NodePattern(layer_masks=layer_masks, layer_widths=layer_widths)
+
+    circuits = []
+    for edge_masks in enumerate_edge_configs(pattern):
+        new_circuit = Circuit(node_masks=circuit.node_masks, edge_masks=edge_masks)
+        circuits.append(new_circuit)
+
+    return circuits
 
 
 def analyze_circuits(circuits, top_n=None):

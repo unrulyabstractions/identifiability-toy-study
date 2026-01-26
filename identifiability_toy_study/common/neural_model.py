@@ -293,6 +293,7 @@ class MLP(nn.Module):
             )
         return Intervention(patches)
 
+    @property
     def hidden_sizes(self) -> list[int]:
         """Returns the sizes of post-activation hidden layers (1..L-1)."""
         return [self.layers[i][0].out_features for i in range(self.num_layers - 1)]
@@ -624,9 +625,6 @@ class MLP(nn.Module):
         Returns:
             A list of K MLP models, each for a single output.
         """
-        # Deep clones to ensure each gate model has independent weights
-        separate_models = [self.clone[:] for _ in range(self.output_size)]
-
         # Original final linear
         last_linear = self.layers[-1][0]
         in_features = last_linear.in_features
@@ -636,31 +634,42 @@ class MLP(nn.Module):
         p = next(self.parameters())
         device, dtype = p.device, p.dtype
 
-        with torch.no_grad():
-            for i, model in enumerate(separate_models):
-                new_linear = nn.Linear(in_features, 1, bias=True).to(
-                    device=device, dtype=dtype
-                )
-                new_linear.weight.copy_(W[i : i + 1].detach())  # [1, H]
-                new_linear.bias.copy_(b[i : i + 1].detach())  # [1]
+        separate_models = []
+        for i in range(self.output_size):
+            # Create a fresh model with output_size=1
+            model = MLP(
+                hidden_sizes=self.hidden_sizes,
+                input_size=self.input_size,
+                output_size=1,
+                activation=self.activation,
+                device=device,
+                debug=self.debug,
+            )
 
-                if isinstance(model.layers[-1], nn.Sequential):
-                    model.layers[-1][0] = new_linear
-                else:
-                    model.layers[-1] = nn.Sequential(new_linear)
+            # Copy weights from original model (all layers except last)
+            with torch.no_grad():
+                for layer_idx in range(len(self.layers) - 1):
+                    src = self.layers[layer_idx][0]
+                    dst = model.layers[layer_idx][0]
+                    dst.weight.copy_(src.weight.detach())
+                    dst.bias.copy_(src.bias.detach())
 
-                # Update metadata
-                model.output_size = 1
-                model.layer_sizes = model.layer_sizes[:-1] + [1]
+                # Copy the i-th output's weights for the last layer
+                dst = model.layers[-1][0]
+                dst.weight.copy_(W[i : i + 1].detach())  # [1, H]
+                dst.bias.copy_(b[i : i + 1].detach())  # [1]
+
+            separate_models.append(model)
 
         return separate_models
 
-    def separate_subcircuit(self, circuit: "Circuit") -> "MLP":
+    def separate_subcircuit(self, circuit: "Circuit", gate_idx: int = 0) -> "MLP":
         """
         Create a new MLP with the circuit's masked edges zeroed out.
 
         Args:
             circuit: Circuit object with edge_masks defining which connections to keep
+            gate_idx: Which output gate this subcircuit is for (used to slice last edge_mask)
 
         Returns:
             New MLP with masked weights set to zero
@@ -672,28 +681,50 @@ class MLP(nn.Module):
         with torch.no_grad():
             for layer_idx, edge_mask in enumerate(circuit.edge_masks):
                 linear = submodel.layers[layer_idx][0]
+                mask_arr = edge_mask
+
+                # If this is the last layer and the mask has more outputs than the model,
+                # slice the mask to match the model's output size
+                if layer_idx == len(circuit.edge_masks) - 1:
+                    expected_out = linear.weight.shape[0]
+                    if mask_arr.shape[0] > expected_out:
+                        # Slice to get this gate's mask
+                        mask_arr = mask_arr[gate_idx : gate_idx + expected_out, :]
+
                 mask_tensor = torch.tensor(
-                    edge_mask, dtype=linear.weight.dtype, device=linear.weight.device
+                    mask_arr, dtype=linear.weight.dtype, device=linear.weight.device
                 )
                 linear.weight.mul_(mask_tensor)
 
         return submodel
 
-    def enumerate_valid_node_masks(self):
+    def enumerate_valid_node_masks(self, fix_output: bool = True):
         """
-        Generate all valid node masks in the neural network.
+        Generate all valid node masks for hidden layers.
+
+        Formula: For d hidden layers each of width w, total masks = 2^(w*d).
+        Each hidden node independently can be 0 or 1.
+
+        Args:
+            fix_output: If True, output layer is always all-ones.
 
         Returns:
-            A list of all valid node masks (cartesian product across layers)
+            A list of all node masks (cartesian product across hidden layers)
         """
         all_masks_per_layer = []
 
-        for layer_size in self.layer_sizes[1:]:
-            # Generate all on/off combinations for this layer
-            layer_masks = list(itertools.product([0, 1], repeat=layer_size))
-            all_masks_per_layer.append([np.array(mask) for mask in layer_masks])
+        layer_sizes = self.layer_sizes[1:]  # Skip input layer
+        for i, layer_size in enumerate(layer_sizes):
+            is_output_layer = (i == len(layer_sizes) - 1)
+            if fix_output and is_output_layer:
+                # Output layer: only all-ones mask
+                all_masks_per_layer.append([np.ones(layer_size, dtype=int)])
+            else:
+                # Hidden layers: all 2^w combinations
+                layer_masks = [np.array(mask, dtype=int) for mask in itertools.product([0, 1], repeat=layer_size)]
+                all_masks_per_layer.append(layer_masks)
 
-        # Combine masks across all layers
+        # Combine masks across all layers: product of 2^w for each hidden layer = 2^(w*d)
         return list(itertools.product(*all_masks_per_layer))
 
     def _apply_neuron_patches_inplace(self, h, patches):  # inside class MLP

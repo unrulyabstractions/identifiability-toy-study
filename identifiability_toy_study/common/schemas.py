@@ -57,9 +57,9 @@ class DataParams(SchemaClass):
 
 @dataclass
 class ModelParams(SchemaClass):
-    logic_gates: list[str] = field(default_factory=lambda: ["XOR"])
-    width: int = 3
-    depth: int = 2
+    logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND"])
+    width: int = 4
+    depth: int = 3
 
 
 @dataclass
@@ -92,8 +92,6 @@ class SPDConfig(SchemaClass):
 @dataclass
 class TrainParams(SchemaClass):
     learning_rate: float = 0.001
-    loss_target: float = 0.001
-    acc_target: float = 0.99
     batch_size: int = 2048
     epochs: int = 1000
     val_frequency: int = 1
@@ -209,6 +207,40 @@ class FaithfulnessConfig(SchemaClass):
 
     n_interventions_per_patch: int = 10  # Reduced from 100
     n_counterfactual_pairs: int = 10
+
+
+@dataclass
+class ParallelConfig(SchemaClass):
+    """Configuration for parallelization and compute optimization.
+
+    Optimized defaults based on M4 Max benchmarks:
+    - MPS precomputed is 2.7x faster than CPU for batched eval
+    - Sequential structure analysis is FASTER than parallel (thread overhead dominates)
+    - Larger batch sizes improve throughput
+
+    PyTorch GPU ops are NOT thread-safe, so we avoid threading for GPU work.
+    """
+
+    # Device selection for batched circuit evaluation
+    eval_device: str = "mps"  # "cpu" or "mps" - MPS is 2.7x faster with precompute
+    use_mps_if_available: bool = True
+
+    # Structure analysis parallelization
+    # BENCHMARK RESULT: Sequential is FASTER (77ms vs 130ms) because
+    # thread overhead exceeds computation time per circuit
+    max_workers_structure: int = 1  # 1 = sequential (fastest based on benchmark)
+    enable_parallel_structure: bool = False  # Disabled - sequential is faster
+
+    # Batched evaluation settings (GPU)
+    precompute_masks: bool = True  # Pre-stack masks: 5.8ms vs 9.6ms on MPS
+
+    # Robustness/Faithfulness - these involve GPU, so threading is risky
+    # KEEP FALSE to avoid GPU thread safety issues
+    enable_parallel_robustness: bool = False
+    enable_parallel_faithfulness: bool = False
+
+    # Memory optimization - use more memory for speed
+    cache_subcircuit_models: bool = True  # Cache models for best subcircuits
 
 
 @dataclass
@@ -356,6 +388,7 @@ class TrialSetup(SchemaClass):
     )
     spd_config: SPDConfig = field(default_factory=SPDConfig)
     faithfulness_config: FaithfulnessConfig = field(default_factory=FaithfulnessConfig)
+    parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
 
     def __str__(self) -> str:
         setup_dict = asdict(self)
@@ -430,8 +463,7 @@ class ExperimentConfig(SchemaClass):
 
     widths: list[int] = field(default_factory=lambda: [ModelParams().width])
     depths: list[int] = field(default_factory=lambda: [ModelParams().depth])
-    loss_targets: list[int] = field(default_factory=lambda: [TrainParams().loss_target])
-    learning_rates: list[int] = field(
+    learning_rates: list[float] = field(
         default_factory=lambda: [TrainParams().learning_rate]
     )
 

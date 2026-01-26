@@ -185,7 +185,7 @@ def _evaluate_samples(
         ground_truth = GROUND_TRUTH.get(base_key, 0.0)
 
         # Run BOTH models on the SAME perturbed input, get activations for viz
-        with torch.no_grad():
+        with torch.inference_mode():
             gate_acts = gate_model(perturbed_dev, return_activations=True)
             gate_output = gate_acts[-1].item()
 
@@ -263,12 +263,12 @@ def calculate_robustness_metrics(
         torch.tensor([1.0, 1.0]),
     ]
 
-    # Generate and evaluate noise samples
+    # Generate samples (quick, do sequentially)
     noise_input_pairs = _generate_noise_samples(base_inputs, n_samples_per_base)
-    noise_samples = _evaluate_samples(full_model, subcircuit, noise_input_pairs, device)
-
-    # Generate and evaluate OOD samples
     ood_input_pairs = _generate_ood_samples(base_inputs, n_samples_per_base)
+
+    # Evaluate samples sequentially (GPU ops are not thread-safe)
+    noise_samples = _evaluate_samples(full_model, subcircuit, noise_input_pairs, device)
     ood_samples = _evaluate_samples(full_model, subcircuit, ood_input_pairs, device)
 
     # Aggregate noise stats
@@ -671,59 +671,7 @@ def calculate_faithfulness_metrics(
 
     n_interventions_per_patch = config.n_interventions_per_patch
 
-    # ===== Interventional Analysis =====
-    in_circuit_effects = {}
-    out_circuit_effects = {}
-
-    # TODO(claude): Modify create_random_interventions so it can also take set(list) of ranges that will consider its union
-    in_distribution_value_range = [-1, 1]
-    out_distribution_value_range = [[-1000, -2], [2, 1000]]
-
-    if structure.in_patches:
-        in_circuit_effects["in"] = calculate_patches_causal_effect(
-            structure.in_patches,
-            x,
-            model,
-            subcircuit,
-            n_interventions_per_patch,
-            out_circuit=False,
-            device=device,
-            value_range=in_distribution_value_range,
-        )
-        in_circuit_effects["ood"] = calculate_patches_causal_effect(
-            structure.in_patches,
-            x,
-            model,
-            subcircuit,
-            n_interventions_per_patch,
-            out_circuit=False,
-            device=device,
-            value_range=out_distribution_value_range,
-        )
-
-    if structure.out_patches:
-        out_circuit_effects["in"] = calculate_patches_causal_effect(
-            structure.out_patches,
-            x,
-            model,
-            subcircuit,
-            n_interventions_per_patch,
-            out_circuit=True,
-            device=device,
-            value_range=in_distribution_value_range,
-        )
-        out_circuit_effects["ood"] = calculate_patches_causal_effect(
-            structure.out_patches,
-            x,
-            model,
-            subcircuit,
-            n_interventions_per_patch,
-            out_circuit=True,
-            device=device,
-            value_range=in_distribution_value_range,
-        )
-
-    # ===== Counterfactual Analysis =====
+    # ===== Define helper for counterfactual effects =====
     def compute_counterfactual_effects(
         patches: list[PatchShape], pairs: list[CleanCorruptedPair], score_type: str
     ) -> list[CounterfactualEffect]:
@@ -736,14 +684,10 @@ def calculate_faithfulness_metrics(
             denominator = pair.y_clean - pair.y_corrupted
             assert torch.abs(denominator).mean() > 1e-6
 
-            # TODO(claude): Clean this up (score_type), might have more scores in future
             faith_score = None
             if score_type == "necessity":
-                # faithfulness = (y_sc - y_corrupted) / (y_clean - y_corrupted)
                 faith_score = ((y_sc - pair.y_corrupted) / denominator).mean().item()
-
             if score_type == "sufficiency":
-                # faithfulness = (y_clean - y_sc) / (y_clean - y_corrupted)
                 faith_score = ((pair.y_clean - y_sc) / denominator).mean().item()
 
             assert faith_score is not None, f"Unknown score_type: {score_type}"
@@ -753,7 +697,6 @@ def calculate_faithfulness_metrics(
             y_sc_val = y_sc.mean().item()
             output_changed = round(y_sc_val) == round(y_corrupted_val)
 
-            # Convert activations to lists for JSON serialization
             clean_acts_list = [a.squeeze(0).tolist() for a in pair.act_clean]
             corrupted_acts_list = [a.squeeze(0).tolist() for a in pair.act_corrupted]
 
@@ -773,11 +716,41 @@ def calculate_faithfulness_metrics(
             )
         return effects
 
-    # Sufficiency
+    # ===== Interventional + Counterfactual Analysis =====
+    # NOTE: Run sequentially to avoid GPU thread safety issues.
+    # PyTorch GPU ops are not thread-safe with ThreadPoolExecutor.
+    # See: https://github.com/pytorch/pytorch/issues/103793
+    in_distribution_value_range = [-1, 1]
+    out_distribution_value_range = [[-1000, -2], [2, 1000]]
+
+    in_circuit_effects = {}
+    out_circuit_effects = {}
+
+    # Interventional analysis (sequential for GPU safety)
+    if structure.in_patches:
+        in_circuit_effects["in"] = calculate_patches_causal_effect(
+            structure.in_patches, x, model, subcircuit,
+            n_interventions_per_patch, False, device, in_distribution_value_range,
+        )
+        in_circuit_effects["ood"] = calculate_patches_causal_effect(
+            structure.in_patches, x, model, subcircuit,
+            n_interventions_per_patch, False, device, out_distribution_value_range,
+        )
+
+    if structure.out_patches:
+        out_circuit_effects["in"] = calculate_patches_causal_effect(
+            structure.out_patches, x, model, subcircuit,
+            n_interventions_per_patch, True, device, in_distribution_value_range,
+        )
+        out_circuit_effects["ood"] = calculate_patches_causal_effect(
+            structure.out_patches, x, model, subcircuit,
+            n_interventions_per_patch, True, device, in_distribution_value_range,
+        )
+
+    # Counterfactual analysis
     out_counterfactual_effects = compute_counterfactual_effects(
         structure.out_circuit, counterfactual_pairs, "sufficiency"
     )
-    # Necesity
     in_counterfactual_effects = compute_counterfactual_effects(
         structure.in_circuit, counterfactual_pairs, "necessity"
     )
