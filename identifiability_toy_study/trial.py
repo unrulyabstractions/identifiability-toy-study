@@ -8,7 +8,12 @@ from .causal_analysis import (
     create_clean_corrupted_data,
     filter_subcircuits,
 )
-from .common.batched_eval import batch_compute_metrics, precompute_circuit_masks
+from .common.batched_eval import (
+    adapt_masks_for_gate,
+    batch_compute_metrics,
+    batch_evaluate_edge_variants,
+    precompute_circuit_masks_base,
+)
 from .common.circuit import enumerate_all_valid_circuit
 from .common.helpers import calculate_match_rate, train_model, update_status_fx
 from .common.logic_gates import ALL_LOGIC_GATES
@@ -23,6 +28,7 @@ from .common.schemas import (
 from .common.utils import set_seeds
 from .parallelization import ParallelTasks
 from .parameter_decomposition import decompose_mlp
+from .spd_subcircuits import estimate_spd_subcircuits
 from .profiler import profile
 
 
@@ -31,7 +37,11 @@ def _get_eval_device(parallel_config: ParallelConfig, default_device: str) -> st
     if parallel_config.use_mps_if_available and parallel_config.eval_device == "mps":
         if torch.backends.mps.is_available():
             return "mps"
-    return parallel_config.eval_device if parallel_config.eval_device != "mps" else default_device
+    return (
+        parallel_config.eval_device
+        if parallel_config.eval_device != "mps"
+        else default_device
+    )
 
 
 def run_trial(
@@ -121,8 +131,23 @@ def run_trial(
     spd_config = setup.spd_config
     update_status("STARTED_SPD")
     with profile("spd_mlp"):
-        trial_result.decomposed_model = decompose_mlp(x, y_pred, model, spd_device, spd_config)
+        trial_result.decomposed_model = decompose_mlp(
+            x, y_pred, model, spd_device, spd_config
+        )
     update_status("FINISHED_SPD")
+
+    # ===== SPD Subcircuit =====
+    # Note: SPD analysis could potentially run asynchronously in the future
+    update_status("STARTED_SPD_SC")
+    with profile("spd_mlp_sc"):
+        # Estimate subcircuits from SPD component clustering
+        # Note: Full implementation requires more research into SPD internals
+        # See spd_subcircuits.py and https://arxiv.org/pdf/2506.20790
+        trial_result.spd_subcircuit_estimate = estimate_spd_subcircuits(
+            trial_result.decomposed_model,
+            device=spd_device,
+        )
+    update_status("FINISHED_SPD_SC")
 
     # ===== Circuit Finding =====
     parallel_config = setup.parallel_config
@@ -133,7 +158,9 @@ def run_trial(
     # Structure analysis is CPU-bound, safe to parallelize
     with profile("structure_analysis"):
         if parallel_config.enable_parallel_structure:
-            with ParallelTasks(max_workers=parallel_config.max_workers_structure) as tasks:
+            with ParallelTasks(
+                max_workers=parallel_config.max_workers_structure
+            ) as tasks:
                 futures = [tasks.submit(s.analyze_structure) for s in subcircuits]
             subcircuit_structures = [f.result() for f in futures]
         else:
@@ -152,12 +179,18 @@ def run_trial(
     eval_device = _get_eval_device(parallel_config, device)
 
     # Precompute circuit masks once for all gates (significant speedup on GPU)
-    # This avoids repeated tensor creation overhead per gate
+    # Compute base masks once, then cheaply adapt for each gate by slicing output layer
+    precomputed_base_masks = None
     precomputed_masks_per_gate = {}
     if parallel_config.precompute_masks:
+        # Compute base masks once (without output slicing)
+        precomputed_base_masks = precompute_circuit_masks_base(
+            subcircuits, len(model.layers), device=eval_device
+        )
+        # Adapt for each gate (cheap slicing operation)
         for gate_idx in range(len(gate_names)):
-            precomputed_masks_per_gate[gate_idx] = precompute_circuit_masks(
-                subcircuits, len(model.layers), gate_idx=gate_idx, device=eval_device
+            precomputed_masks_per_gate[gate_idx] = adapt_masks_for_gate(
+                precomputed_base_masks, gate_idx, output_size
             )
 
     # Gate subcircuit metrics
@@ -177,10 +210,16 @@ def run_trial(
         # Move data to eval device if different from training device
         x_eval = x.to(eval_device) if eval_device != device else x
         y_gate_eval = y_gate.to(eval_device) if eval_device != device else y_gate
-        bit_gate_gt_eval = bit_gate_gt.to(eval_device) if eval_device != device else bit_gate_gt
+        bit_gate_gt_eval = (
+            bit_gate_gt.to(eval_device) if eval_device != device else bit_gate_gt
+        )
 
         with profile("gate_metrics"):
-            precomputed = precomputed_masks_per_gate.get(gate_idx) if parallel_config.precompute_masks else None
+            precomputed = (
+                precomputed_masks_per_gate.get(gate_idx)
+                if parallel_config.precompute_masks
+                else None
+            )
             accuracies, logit_sims, bit_sims = batch_compute_metrics(
                 model=model,
                 circuits=subcircuits,
@@ -212,13 +251,35 @@ def run_trial(
             per_gate_metrics[gate_name].subcircuit_metrics,
             subcircuits,
             subcircuit_structures,
+            max_subcircuits=setup.faithfulness_config.max_subcircuits_per_gate,
         )
 
+        # Explore edge variants for best node patterns and find optimal edge configs
         best_indices = per_gate_bests[gate_name]
+        best_circuits_for_gate = [subcircuits[idx] for idx in best_indices]
 
-        # Create subcircuit models only for best subcircuits (saves memory)
+        with profile("edge_variants"):
+            edge_results = batch_evaluate_edge_variants(
+                model=model,
+                base_circuits=best_circuits_for_gate,
+                x=x_eval,
+                y_target=bit_gate_gt_eval,
+                y_pred=y_gate_eval,
+                gate_idx=gate_idx,
+                eval_device=eval_device,
+            )
+
+        # Map original indices to optimized circuits
+        optimized_circuits = {
+            best_indices[orig_idx]: opt_circuit
+            for orig_idx, opt_circuit, _, _, _ in edge_results
+        }
+
+        # Create subcircuit models using edge-optimized circuits
         best_subcircuit_models = {
-            idx: gate_model.separate_subcircuit(subcircuits[idx], gate_idx=gate_idx)
+            idx: gate_model.separate_subcircuit(
+                optimized_circuits[idx], gate_idx=gate_idx
+            )
             for idx in best_indices
         }
 
@@ -227,7 +288,7 @@ def run_trial(
             x=x,
             y=y_gate,
             activations=activations,
-            n_pairs=10,
+            n_pairs=setup.faithfulness_config.n_counterfactual_pairs,
         )
 
         # ===== Robustness + Faithfulness Analysis =====
@@ -247,7 +308,9 @@ def run_trial(
 
         if parallel_config.enable_parallel_robustness and len(best_indices) > 1:
             with ParallelTasks(max_workers=min(4, len(best_indices))) as tasks:
-                futures = [tasks.submit(compute_single_robustness, idx) for idx in best_indices]
+                futures = [
+                    tasks.submit(compute_single_robustness, idx) for idx in best_indices
+                ]
             robustness_results = [f.result() for f in futures]
         else:
             robustness_results = []
@@ -276,62 +339,25 @@ def run_trial(
 
         if parallel_config.enable_parallel_faithfulness and len(best_indices) > 1:
             with ParallelTasks(max_workers=min(4, len(best_indices))) as tasks:
-                futures = [tasks.submit(compute_single_faithfulness, idx) for idx in best_indices]
+                futures = [
+                    tasks.submit(compute_single_faithfulness, idx)
+                    for idx in best_indices
+                ]
             faithfulness_results = [f.result() for f in futures]
         else:
             faithfulness_results = []
             for subcircuit_idx in best_indices:
                 with profile("calc_faithfulness"):
-                    faithfulness_results.append(compute_single_faithfulness(subcircuit_idx))
+                    faithfulness_results.append(
+                        compute_single_faithfulness(subcircuit_idx)
+                    )
 
         per_gate_bests_faith[gate_name].extend(faithfulness_results)
         update_status(f"FINISHED_FAITH:{gate_idx}")
 
-        # ===== Subcircuit Parameter Decomposition =====
-        spd_for_subcircuit = False
-        if spd_for_subcircuit:
-            update_status(f"STARTED_SPD_TRAINING_GATE:{gate_idx}")
-
-            # Collect indices for decomposition
-            decompose_indices = per_gate_bests[gate_name]
-            if spd_config.max_subcircuits:
-                decompose_indices = decompose_indices[: spd_config.max_subcircuits]
-
-            # Run gate model and all subcircuit decompositions in parallel
-            with ParallelTasks(max_workers=len(decompose_indices) + 1) as tasks:
-                # Submit gate model decomposition
-                gate_future = tasks.submit(
-                    decompose_mlp, x, y_gate, gate_model, spd_device, spd_config
-                )
-
-                # Submit all subcircuit decompositions
-                subcircuit_futures = {
-                    idx: tasks.submit(
-                        decompose_mlp,
-                        x,
-                        y_gate,
-                        best_subcircuit_models[idx],
-                        spd_device,
-                        spd_config,
-                    )
-                    for idx in decompose_indices
-                }
-
-            # Collect results
-            trial_result.decomposed_gate_models[gate_name] = gate_future.result()
-            update_status(f"FINISHED_SPD_TRAINING_GATE:{gate_idx}")
-
-            decomposed_dict = trial_result.decomposed_subcircuits[gate_name]
-            for subcircuit_idx, future in subcircuit_futures.items():
-                decomposed_dict[subcircuit_idx] = future.result()
-                trial_result.decomposed_subcircuit_indices[gate_name].append(
-                    subcircuit_idx
-                )
-                update_status(
-                    f"FINISHED_SPD_TRAINING_SUBCIRCUIT:{gate_idx}:{subcircuit_idx}"
-                )
-
     update_status("STARTED_GATE_ANALYSIS")
+    # Sequential gate analysis - parallelization not used because GPU ops are not thread-safe
+    # See ParallelConfig comments and https://github.com/pytorch/pytorch/issues/103793
     for gate_idx in range(len(gate_models)):
         run_gate_trial(gate_idx)
     update_status("FINISHED_GATE_ANALYSIS")

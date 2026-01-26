@@ -57,9 +57,9 @@ class DataParams(SchemaClass):
 
 @dataclass
 class ModelParams(SchemaClass):
-    logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND"])
-    width: int = 4
-    depth: int = 3
+    logic_gates: list[str] = field(default_factory=lambda: ["XOR"])
+    width: int = 3
+    depth: int = 2
 
 
 @dataclass
@@ -83,10 +83,6 @@ class SPDConfig(SchemaClass):
     # Loss coefficients
     importance_coeff: float = 3e-3
     recon_coeff: float = 1.0
-
-    # Limit subcircuits to decompose (0 = decompose all)
-    # Higher = more subcircuits analyzed but slower
-    max_subcircuits: int = 1
 
 
 @dataclass
@@ -205,6 +201,7 @@ class CounterfactualEffect(SchemaClass):
 class FaithfulnessConfig(SchemaClass):
     """Configuration for faithfulness analysis."""
 
+    max_subcircuits_per_gate: int = 1
     n_interventions_per_patch: int = 10
     n_counterfactual_pairs: int = 10
 
@@ -429,6 +426,7 @@ class TrialResult(SchemaClass):
     # Models stored at runtime (saved as model.pt, not in JSON)
     model: Optional["MLP"] = None
     decomposed_model: Optional["DecomposedMLP"] = None  # Full multi-gate model
+    spd_subcircuit_estimate: Optional[Any] = None  # SPD-based subcircuit clustering result
     subcircuits: list = field(default_factory=list)
     subcircuit_structure_analysis: list = field(default_factory=list)
     # Maps gate_name -> DecomposedMLP for full single-gate model (saved separately)

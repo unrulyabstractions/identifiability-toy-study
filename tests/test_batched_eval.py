@@ -7,9 +7,12 @@ import time
 from identifiability_toy_study.common.neural_model import MLP
 from identifiability_toy_study.common.circuit import enumerate_all_valid_circuit
 from identifiability_toy_study.common.batched_eval import (
+    adapt_masks_for_gate,
+    batch_evaluate_edge_variants,
     batch_evaluate_subcircuits,
     batch_compute_metrics,
     precompute_circuit_masks,
+    precompute_circuit_masks_base,
 )
 
 
@@ -228,3 +231,148 @@ def test_batch_compute_metrics_with_eval_device():
         # Results should match
         np.testing.assert_allclose(accs_cpu, accs_mps, rtol=1e-4, atol=1e-4)
         np.testing.assert_allclose(bits_cpu, bits_mps, rtol=1e-4, atol=1e-4)
+
+
+def test_base_masks_with_adapt_matches_direct():
+    """Verify base masks + adapt gives same results as direct precompute."""
+    model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=2, device="cpu")
+    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    x = torch.randn(10, 2)
+
+    # Direct computation for each gate
+    direct_g0 = precompute_circuit_masks(circuits, len(model.layers), gate_idx=0, device="cpu")
+    direct_g1 = precompute_circuit_masks(circuits, len(model.layers), gate_idx=1, device="cpu")
+
+    # Base + adapt approach
+    base_masks = precompute_circuit_masks_base(circuits, len(model.layers), device="cpu")
+    adapted_g0 = adapt_masks_for_gate(base_masks, gate_idx=0, output_size=2)
+    adapted_g1 = adapt_masks_for_gate(base_masks, gate_idx=1, output_size=2)
+
+    # Compare masks
+    for layer_idx in range(len(model.layers)):
+        np.testing.assert_allclose(
+            direct_g0[layer_idx].numpy(),
+            adapted_g0[layer_idx].numpy(),
+            rtol=1e-5, atol=1e-5,
+            err_msg=f"Gate 0, layer {layer_idx} masks differ"
+        )
+        np.testing.assert_allclose(
+            direct_g1[layer_idx].numpy(),
+            adapted_g1[layer_idx].numpy(),
+            rtol=1e-5, atol=1e-5,
+            err_msg=f"Gate 1, layer {layer_idx} masks differ"
+        )
+
+
+def test_base_masks_evaluate_matches():
+    """Verify evaluation results match between base+adapt and direct precompute."""
+    model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=2, device="cpu")
+    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    x = torch.randn(15, 2)
+
+    # Direct precompute approach
+    direct_g0 = precompute_circuit_masks(circuits, len(model.layers), gate_idx=0, device="cpu")
+    result_direct_g0 = batch_evaluate_subcircuits(model, circuits, x, gate_idx=0, precomputed_masks=direct_g0)
+
+    # Base + adapt approach
+    base_masks = precompute_circuit_masks_base(circuits, len(model.layers), device="cpu")
+    adapted_g0 = adapt_masks_for_gate(base_masks, gate_idx=0, output_size=2)
+    result_adapted_g0 = batch_evaluate_subcircuits(model, circuits, x, gate_idx=0, precomputed_masks=adapted_g0)
+
+    np.testing.assert_allclose(
+        result_direct_g0.numpy(),
+        result_adapted_g0.numpy(),
+        rtol=1e-5, atol=1e-5,
+        err_msg="Evaluation results differ between direct and adapt approaches"
+    )
+
+
+def test_single_output_adapt_returns_base():
+    """For single-output models, adapt should return unchanged masks."""
+    model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=1, device="cpu")
+    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+
+    base_masks = precompute_circuit_masks_base(circuits, len(model.layers), device="cpu")
+    adapted = adapt_masks_for_gate(base_masks, gate_idx=0, output_size=1)
+
+    # Should return same masks (no slicing needed)
+    assert len(adapted) == len(base_masks)
+    for layer_idx in range(len(model.layers)):
+        assert torch.equal(adapted[layer_idx], base_masks[layer_idx])
+
+
+def test_batch_evaluate_edge_variants_returns_results():
+    """Verify edge variant evaluation returns correct structure."""
+    model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=1, device="cpu")
+    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    x = torch.randn(10, 2)
+    y_target = torch.randint(0, 2, (10, 1)).float()
+
+    with torch.no_grad():
+        y_pred = model(x)
+
+    # Select a few circuits to test edge variants
+    test_circuits = circuits[:3]
+
+    results = batch_evaluate_edge_variants(
+        model, test_circuits, x, y_target, y_pred, gate_idx=0
+    )
+
+    assert len(results) == len(test_circuits)
+
+    for orig_idx, opt_circuit, acc, logit_sim, bit_sim in results:
+        assert 0 <= orig_idx < len(test_circuits)
+        assert opt_circuit is not None
+        assert 0 <= acc <= 1
+        assert 0 <= bit_sim <= 1
+        # logit_sim can be negative if MSE > 1
+
+
+def test_batch_evaluate_edge_variants_preserves_node_pattern():
+    """Edge optimization should preserve the original node pattern."""
+    model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=1, device="cpu")
+    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    x = torch.randn(10, 2)
+    y_target = torch.randint(0, 2, (10, 1)).float()
+
+    with torch.no_grad():
+        y_pred = model(x)
+
+    test_circuits = circuits[:5]
+
+    results = batch_evaluate_edge_variants(
+        model, test_circuits, x, y_target, y_pred, gate_idx=0
+    )
+
+    for orig_idx, opt_circuit, _, _, _ in results:
+        original = test_circuits[orig_idx]
+        # Node masks should match exactly
+        assert len(opt_circuit.node_masks) == len(original.node_masks)
+        for opt_nm, orig_nm in zip(opt_circuit.node_masks, original.node_masks):
+            np.testing.assert_array_equal(opt_nm, orig_nm)
+
+
+def test_batch_evaluate_edge_variants_multi_gate():
+    """Test edge variant evaluation with multi-gate model."""
+    model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=2, device="cpu")
+    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    x = torch.randn(10, 2)
+    y_target = torch.randint(0, 2, (10, 1)).float()
+
+    with torch.no_grad():
+        y_pred = model(x)[:, :1]  # Use first gate output
+
+    test_circuits = circuits[:3]
+
+    # Test gate 0
+    results_g0 = batch_evaluate_edge_variants(
+        model, test_circuits, x, y_target, y_pred, gate_idx=0
+    )
+
+    # Test gate 1
+    results_g1 = batch_evaluate_edge_variants(
+        model, test_circuits, x, y_target, y_pred, gate_idx=1
+    )
+
+    # Both should return same number of results
+    assert len(results_g0) == len(results_g1) == len(test_circuits)

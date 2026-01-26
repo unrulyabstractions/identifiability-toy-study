@@ -38,15 +38,31 @@ def filter_subcircuits(
     subcircuit_metrics: list[SubcircuitMetrics],
     subcircuits: list[Circuit],
     subcircuit_structures: list[CircuitStructure],
+    max_subcircuits: int = 1,
 ) -> list[int]:
-    """Filter subcircuits by epsilon thresholds, then deduplicate by activation pattern.
+    """Filter subcircuits by epsilon thresholds, then select diverse top-k.
 
     Steps:
     1. Filter by bit_similarity and accuracy using epsilon threshold
-    2. Group passing subcircuits by activation pattern (node_masks)
-    3. Within each group, sort by sparsity (node_sparsity desc, then edge_sparsity desc)
-    4. Return only top 1 subcircuit per unique activation pattern
+    2. Sort by (accuracy DESC, bit_similarity DESC, node_sparsity DESC)
+    3. Select up to max_subcircuits, diversifying by jaccard distance
+
+    Note: Edge masks are not directly filtered here since circuits with
+    the same node pattern but different edges are functionally equivalent
+    for initial filtering. Edge exploration happens in a later stage.
+
+    Args:
+        constraints: Epsilon thresholds for filtering
+        subcircuit_metrics: Per-subcircuit accuracy/similarity metrics
+        subcircuits: Circuit objects (for jaccard calculation)
+        subcircuit_structures: Circuit structure info (for sparsity)
+        max_subcircuits: Maximum number of subcircuits to return
+
+    Returns:
+        List of subcircuit indices (up to max_subcircuits), diversified by overlap
     """
+    metrics_by_idx = {m.idx: m for m in subcircuit_metrics}
+
     # First pass: filter by epsilon thresholds
     passing_indices = []
     for result in subcircuit_metrics:
@@ -60,31 +76,53 @@ def filter_subcircuits(
     if not passing_indices:
         return []
 
-    # Group by activation pattern (node_masks)
-    pattern_groups: dict[tuple, list[int]] = {}
-    for idx in passing_indices:
-        pattern_key = _node_masks_key(subcircuits[idx])
-        if pattern_key not in pattern_groups:
-            pattern_groups[pattern_key] = []
-        pattern_groups[pattern_key].append(idx)
+    # Sort by quality: (accuracy DESC, bit_similarity DESC, node_sparsity DESC)
+    # Higher is better for all metrics
+    sorted_indices = sorted(
+        passing_indices,
+        key=lambda idx: (
+            metrics_by_idx[idx].accuracy,
+            metrics_by_idx[idx].bit_similarity,
+            subcircuit_structures[idx].node_sparsity,
+        ),
+        reverse=True,
+    )
 
-    # For each pattern, select the most sparse subcircuit
-    # Sort by (node_sparsity desc, edge_sparsity desc) - higher = more sparse = better
-    selected_indices = []
-    for pattern_key, group_indices in pattern_groups.items():
-        # Sort by sparsity (descending - higher is more sparse)
-        sorted_group = sorted(
-            group_indices,
-            key=lambda idx: (
-                subcircuit_structures[idx].node_sparsity,
-                subcircuit_structures[idx].edge_sparsity,
-            ),
-            reverse=True,
+    if max_subcircuits == 1:
+        return [sorted_indices[0]]
+
+    # Greedy selection: pick best, then diversify
+    # For ties in quality, prefer less overlap with already-selected
+    selected = [sorted_indices[0]]
+
+    for candidate_idx in sorted_indices[1:]:
+        if len(selected) >= max_subcircuits:
+            break
+
+        # Calculate max overlap with any already-selected subcircuit
+        # (lower is better - we want diversity)
+        max_overlap = max(
+            subcircuits[candidate_idx].overlap_jaccard(subcircuits[s])
+            for s in selected
         )
-        # Take only the top 1 (most sparse)
-        selected_indices.append(sorted_group[0])
 
-    return selected_indices
+        # Check if this candidate is a quality tie with the last selected
+        candidate = metrics_by_idx[candidate_idx]
+        last = metrics_by_idx[selected[-1]]
+        is_tie = (
+            abs(candidate.accuracy - last.accuracy) < 1e-6
+            and abs(candidate.bit_similarity - last.bit_similarity) < 1e-6
+        )
+
+        if is_tie:
+            # For ties, only add if sufficiently different (jaccard < 0.8)
+            if max_overlap < 0.8:
+                selected.append(candidate_idx)
+        else:
+            # Not a tie - just add (it's lower quality but still passes)
+            selected.append(candidate_idx)
+
+    return selected
 
 
 # ===== Robustness Analysis =====
@@ -414,7 +452,9 @@ def _create_intervention_samples(
         if effect.target_activations is not None:
             gate_acts_list = [a.squeeze(0).tolist() for a in effect.target_activations]
         if effect.proxy_activations is not None:
-            subcircuit_acts_list = [a.squeeze(0).tolist() for a in effect.proxy_activations]
+            subcircuit_acts_list = [
+                a.squeeze(0).tolist() for a in effect.proxy_activations
+            ]
 
         samples.append(
             InterventionSample(
@@ -435,7 +475,9 @@ def _create_intervention_samples(
     return samples
 
 
-def _compute_patch_statistics(effects_dict: dict[str, list[InterventionEffect]]) -> tuple[dict[str, PatchStatistics], list[float]]:
+def _compute_patch_statistics(
+    effects_dict: dict[str, list[InterventionEffect]],
+) -> tuple[dict[str, PatchStatistics], list[float]]:
     """Helper to compute patch statistics from effects dict."""
     stats = {}
     all_sims = []
@@ -463,8 +505,12 @@ def _compute_patch_statistics(effects_dict: dict[str, list[InterventionEffect]])
 
 
 def calculate_statistics(
-    in_circuit_effects: dict[str, dict[str, list[InterventionEffect]] | list[InterventionEffect]],
-    out_circuit_effects: dict[str, dict[str, list[InterventionEffect]] | list[InterventionEffect]],
+    in_circuit_effects: dict[
+        str, dict[str, list[InterventionEffect]] | list[InterventionEffect]
+    ],
+    out_circuit_effects: dict[
+        str, dict[str, list[InterventionEffect]] | list[InterventionEffect]
+    ],
     counterfactual_effects: list[CounterfactualEffect],
 ) -> dict:
     """
@@ -487,9 +533,15 @@ def calculate_statistics(
     if is_nested:
         # New format with "in" and "ood" keys
         in_stats, in_sims = _compute_patch_statistics(in_circuit_effects.get("in", {}))
-        in_stats_ood, in_sims_ood = _compute_patch_statistics(in_circuit_effects.get("ood", {}))
-        out_stats, out_sims = _compute_patch_statistics(out_circuit_effects.get("in", {}))
-        out_stats_ood, out_sims_ood = _compute_patch_statistics(out_circuit_effects.get("ood", {}))
+        in_stats_ood, in_sims_ood = _compute_patch_statistics(
+            in_circuit_effects.get("ood", {})
+        )
+        out_stats, out_sims = _compute_patch_statistics(
+            out_circuit_effects.get("in", {})
+        )
+        out_stats_ood, out_sims_ood = _compute_patch_statistics(
+            out_circuit_effects.get("ood", {})
+        )
 
         mean_in_sim = float(np.mean(in_sims)) if in_sims else 0.0
         mean_out_sim = float(np.mean(out_sims)) if out_sims else 0.0
@@ -729,22 +781,46 @@ def calculate_faithfulness_metrics(
     # Interventional analysis (sequential for GPU safety)
     if structure.in_patches:
         in_circuit_effects["in"] = calculate_patches_causal_effect(
-            structure.in_patches, x, model, subcircuit,
-            n_interventions_per_patch, False, device, in_distribution_value_range,
+            structure.in_patches,
+            x,
+            model,
+            subcircuit,
+            n_interventions_per_patch,
+            False,
+            device,
+            in_distribution_value_range,
         )
         in_circuit_effects["ood"] = calculate_patches_causal_effect(
-            structure.in_patches, x, model, subcircuit,
-            n_interventions_per_patch, False, device, out_distribution_value_range,
+            structure.in_patches,
+            x,
+            model,
+            subcircuit,
+            n_interventions_per_patch,
+            False,
+            device,
+            out_distribution_value_range,
         )
 
     if structure.out_patches:
         out_circuit_effects["in"] = calculate_patches_causal_effect(
-            structure.out_patches, x, model, subcircuit,
-            n_interventions_per_patch, True, device, in_distribution_value_range,
+            structure.out_patches,
+            x,
+            model,
+            subcircuit,
+            n_interventions_per_patch,
+            True,
+            device,
+            in_distribution_value_range,
         )
         out_circuit_effects["ood"] = calculate_patches_causal_effect(
-            structure.out_patches, x, model, subcircuit,
-            n_interventions_per_patch, True, device, in_distribution_value_range,
+            structure.out_patches,
+            x,
+            model,
+            subcircuit,
+            n_interventions_per_patch,
+            True,
+            device,
+            in_distribution_value_range,
         )
 
     # Counterfactual analysis
