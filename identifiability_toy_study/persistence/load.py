@@ -275,6 +275,21 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                         mean_bit_similarity=ps.get("mean_bit_similarity", 0),
                         samples=samples,
                     )
+                # OOD stats
+                in_stats_ood = {}
+                for pk, ps in f.get("in_circuit_stats_ood", {}).items():
+                    samples = [InterventionSample(**s) for s in ps.get("samples", [])]
+                    in_stats_ood[pk] = PatchStatistics(
+                        mean_bit_similarity=ps.get("mean_bit_similarity", 0),
+                        samples=samples,
+                    )
+                out_stats_ood = {}
+                for pk, ps in f.get("out_circuit_stats_ood", {}).items():
+                    samples = [InterventionSample(**s) for s in ps.get("samples", [])]
+                    out_stats_ood[pk] = PatchStatistics(
+                        mean_bit_similarity=ps.get("mean_bit_similarity", 0),
+                        samples=samples,
+                    )
                 # Load separate in/out counterfactual effects (new format)
                 out_cf_effects = [CounterfactualEffect(**c) for c in f.get("out_counterfactual_effects", [])]
                 in_cf_effects = [CounterfactualEffect(**c) for c in f.get("in_counterfactual_effects", [])]
@@ -285,8 +300,12 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                     FaithfulnessMetrics(
                         in_circuit_stats=in_stats,
                         out_circuit_stats=out_stats,
+                        in_circuit_stats_ood=in_stats_ood,
+                        out_circuit_stats_ood=out_stats_ood,
                         mean_in_circuit_similarity=f.get("mean_in_circuit_similarity", 0),
                         mean_out_circuit_similarity=f.get("mean_out_circuit_similarity", 0),
+                        mean_in_circuit_similarity_ood=f.get("mean_in_circuit_similarity_ood", 0),
+                        mean_out_circuit_similarity_ood=f.get("mean_out_circuit_similarity_ood", 0),
                         out_counterfactual_effects=out_cf_effects,
                         in_counterfactual_effects=in_cf_effects,
                         counterfactual_effects=cf_effects,

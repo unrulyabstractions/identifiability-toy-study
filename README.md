@@ -1,10 +1,11 @@
 # Identifiability Toy Study
 
 This repository integrates and extends code from the following projects:
-- [MI-identifiability](https://github.com/MelouxM/MI-identifiability) by Maxime Méloux 
-- [spd](https://github.com/goodfire-ai/spd) by the Goodfire-AI team
+- [MI-identifiability](https://github.com/MelouxM/MI-identifiability) by Maxime Méloux
+- [spd](https://github.com/goodfire-ai/spd) by the Goodfire-AI team (git submodule)
 - [circuit-stability](https://github.com/alansun17904/circuit-stability) by Alan Sun
-- [eap-ig-faithfulness](https://github.com/hannamw/eap-ig-faithfulness) by Hannah W. 
+- [eap-ig-faithfulness](https://github.com/hannamw/eap-ig-faithfulness) by Hannah W.
+- [SubspacePartition](https://github.com/huangxt39/SubspacePartition) by Xiaotian Huang et al. 
 
 All of the above projects are licensed under MIT (see their LICENSE files).  
 My modifications and additional contributions are © 2025 Ian Rios-Sialer, released under the MIT License.
@@ -23,9 +24,9 @@ Using [uv](https://docs.astral.sh/uv/) - a fast Python package manager:
 
 2. **Clone and setup**:
    ```bash
-   git clone https://github.com/unrulyabstractions/identifiability-toy-study.git
+   git clone --recurse-submodules https://github.com/unrulyabstractions/identifiability-toy-study.git
    cd identifiability-toy-study
-   uv sync --dev
+   uv sync
    ```
 
 This creates a virtual environment and installs all dependencies automatically.
@@ -41,9 +42,9 @@ import os
 os.environ['PATH'] = f"/root/.local/bin:{os.environ['PATH']}"
 
 # Clone and install the project
-!git clone https://github.com/unrulyabstractions/identifiability-toy-study.git
+!git clone --recurse-submodules https://github.com/unrulyabstractions/identifiability-toy-study.git
 %cd identifiability-toy-study
-!uv sync --dev
+!uv sync
 
 # For GPU acceleration in Colab, use CUDA
 # when running main.py: --device cuda:0
@@ -110,8 +111,17 @@ Results are saved to `logs/run_TIMESTAMP/` with CSV output containing experiment
 For contributors (requires uv installation):
 
 ```bash
+make run       # Run main experiment
 make sanity    # Check device availability and imports
-make lint      # Check code style  
+make lint      # Check code style
 make format    # Fix code formatting
 uv run jupyter lab  # Start Jupyter notebooks
+```
+
+### Updating Submodules
+
+To update the spd submodule to the latest version:
+
+```bash
+git submodule update --remote identifiability_toy_study/spd
 ```

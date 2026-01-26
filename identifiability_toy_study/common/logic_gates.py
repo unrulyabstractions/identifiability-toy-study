@@ -74,8 +74,8 @@ class LogicGate:
         inputs = self.get_inputs(self.n_inputs, n_repeats, weights)
         outputs = np.expand_dims(self.gate_fn(inputs), 1)
 
-        out_x, out_y = self.add_noise_and_repeat(n_repeats, noise_std, inputs, outputs)
-        return out_x.to(device), out_y.to(device)
+        out_x, out_y = self.add_noise_and_repeat(n_repeats, noise_std, inputs, outputs, device=device)
+        return out_x, out_y
 
     @staticmethod
     def get_inputs(n_inputs, n_repeats, weights):
@@ -103,35 +103,29 @@ class LogicGate:
         return LogicGate.inputs[n_inputs][x]
 
     @staticmethod
-    def add_noise_and_repeat(n_repeats, noise_std, inputs, outputs):
+    def add_noise_and_repeat(n_repeats, noise_std, inputs, outputs, device="cpu"):
         """
-        Adds noise to the inputs and repeats them.
+        Adds Gaussian noise to the inputs (inputs are already repeated by caller).
 
         Args:
-            n_repeats: The number of times to repeat the inputs
+            n_repeats: Unused (kept for API compatibility)
             noise_std: The standard deviation of the Gaussian noise
-            inputs: The inputs
-            outputs: The outputs
+            inputs: The inputs (already repeated)
+            outputs: The outputs (already repeated)
+            device: The device to create tensors on
 
         Returns:
-            The noisy inputs and outputs
+            The noisy inputs and outputs as tensors
         """
-        if noise_std == 0:
-            return torch.tensor(inputs, dtype=torch.float32), torch.tensor(
-                outputs, dtype=torch.float32
-            )
+        x_tensor = torch.tensor(inputs, dtype=torch.float32, device=device)
+        y_tensor = torch.tensor(outputs, dtype=torch.float32, device=device)
 
-        # Generate noisy data by repeating the inputs and adding Gaussian noise
-        x_noisy = np.repeat(inputs, n_repeats, axis=0)
-        y_noisy = np.repeat(outputs, n_repeats, axis=0)
+        if noise_std == 0:
+            return x_tensor, y_tensor
 
         # Add Gaussian noise
-        noise = np.random.normal(0, noise_std, x_noisy.shape).astype(np.float32)
-        x_noisy += noise
-
-        return torch.tensor(x_noisy, dtype=torch.float32), torch.tensor(
-            y_noisy, dtype=torch.float32
-        )
+        noise = torch.randn_like(x_tensor) * noise_std
+        return x_tensor + noise, y_tensor
 
     def print_truth_table(self, logger):
         """
@@ -183,8 +177,8 @@ def generate_noisy_multi_gate_data(
     # Generate outputs for each logic gate and stack them horizontally (axis=1)
     outputs = np.hstack([gate.gate_fn(inputs).reshape(-1, 1) for gate in logic_gates])
 
-    out_x, out_y = LogicGate.add_noise_and_repeat(n_repeats, noise_std, inputs, outputs)
-    return out_x.to(device), out_y.to(device)
+    out_x, out_y = LogicGate.add_noise_and_repeat(n_repeats, noise_std, inputs, outputs, device=device)
+    return out_x, out_y
 
 
 class LogicTree:
@@ -492,7 +486,7 @@ class LogicTree:
             for child in self.children:
                 child.do_intervene(node_, value_)
 
-    def sample(self, add_vars=None, device="cuda:"):
+    def sample(self, add_vars=None, device="cpu"):
         """
         Gets all possible samples from the tree
 
@@ -1035,3 +1029,22 @@ ALL_LOGIC_GATES: Mapping[str, LogicGate] = {
     #     n_inputs=3, gate_fn=lambda x: exactly_k_func(x, 2), name="EXACT_2"
     # ),
 }
+
+
+def nn_sample_complexity(width, depth, output_dim=7, n_gates=7):
+    """
+    Empirical estimate for training NN to simulate boolean circuits
+    """
+    # Base complexity: width × depth² (composition is hard)
+    circuit_complexity = width * (depth**2)
+
+    # Output scales linearly (7 independent functions)
+    output_factor = output_dim
+
+    # Gate variety adds log factor
+    gate_factor = n_gates  # or log(n_gates)
+
+    # Empirical multiplier (NN inefficiency)
+    k = 50
+
+    return int(k * circuit_complexity * output_factor)

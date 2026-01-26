@@ -1,8 +1,8 @@
-.PHONY: notebook test lint format sanity
+.PHONY: notebook lint format sanity run
 notebook:
 	uv run jupyter lab
-test:
-	uv run pytest -q
+run:
+	uv run python main.py
 lint:
 	uv run ruff check .
 	uv run black --check .
