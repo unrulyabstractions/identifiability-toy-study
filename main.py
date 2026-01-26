@@ -1,8 +1,7 @@
 import argparse
 import datetime
-import json
 import os
-from dataclasses import asdict
+import sys
 from pathlib import Path
 
 from identifiability_toy_study.common.schemas import (
@@ -11,51 +10,83 @@ from identifiability_toy_study.common.schemas import (
 )
 from identifiability_toy_study.common.utils import setup_logging
 from identifiability_toy_study.experiment import run_experiment
+from identifiability_toy_study.persistence import (
+    get_all_runs,
+    load_results,
+    save_results,
+)
+from identifiability_toy_study.visualization import visualize_experiment
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--device",
         type=str,
-        default="mps",
-        help="Device to store the data on. Use mps (Apple Silicon), cuda:0 (NVIDIA), or cpu",
+        default="cpu",
+        help="Device for data/model. Use cpu, mps (Apple Silicon), or cuda:0 (NVIDIA)",
+    )
+    parser.add_argument(
+        "--spd-device",
+        type=str,
+        default="cpu",
+        help="Device for SPD decomposition. CPU is fastest for small models",
     )
     parser.add_argument("--debug", action="store_true", help="Enable debugging")
     parser.add_argument(
-        "--from-scratch",
+        "--analysis-only",
         action="store_true",
-        help="Train instead of loading mlp model",
+        help="Re-run visualization on existing runs without training",
     )
     args = parser.parse_args()
+
+    # Output path
+    output_dir = Path("runs")
+    os.makedirs(output_dir, exist_ok=True)
+
+    if args.analysis_only:
+        # Re-run visualization on all runs
+        runs = get_all_runs(output_dir)
+        if not runs:
+            print("No runs found")
+            sys.exit(1)
+        print(f"Found {len(runs)} runs to analyze")
+        for run_dir in runs:
+            print(f"Re-analyzing {run_dir.name}...")
+            result = load_results(run_dir)
+            if not result.trials:
+                print("  No trials found, skipping")
+                continue
+            print(f"  Loaded {len(result.trials)} trials")
+            result.viz_paths = visualize_experiment(result, run_dir=str(run_dir))
+            print("  Visualization complete")
+        print(f"Finished analyzing {len(runs)} runs")
+        sys.exit(0)
 
     # We identify run by time
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    # Dir paths
-    output_dir = Path("runs")
+    # Run path
     run_dir = os.path.join(output_dir, f"run_{timestamp}")
-    model_dir = os.path.join(output_dir, "models")
-    os.makedirs(output_dir, exist_ok=True)
     os.makedirs(run_dir, exist_ok=False)
-    os.makedirs(model_dir, exist_ok=True)
 
     # File paths
     log_path = os.path.join(run_dir, "log.txt")
-    results_path = os.path.join(run_dir, "results.json")
 
     # Logger
     logger = setup_logging(log_path, args.debug)
 
     # Run Experiment with many trials
     cfg = ExperimentConfig(
-        from_scratch=args.from_scratch, model_dir=model_dir, debug=args.debug
+        debug=args.debug,
+        device=args.device,
+        spd_device=args.spd_device,
     )
+
     result: ExperimentResult = run_experiment(cfg, logger=logger)
+    result.viz_paths = visualize_experiment(result, run_dir=run_dir)
+    save_results(result, run_dir=run_dir)
 
-    # Save results
-    with open(results_path, "w", encoding="utf-8") as f:
-        json.dump(asdict(result), f, indent=4, ensure_ascii=False)
-
-    # Print in console
+    # Print summary
     logger.info(f"\n\n\n run_{timestamp} \n")
-    logger.info(json.dumps(asdict(result), indent=4))
+    summary = result.print_summary()
+    logger.info(summary)

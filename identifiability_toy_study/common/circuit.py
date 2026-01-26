@@ -1,6 +1,7 @@
 import copy
 import itertools
 from collections import defaultdict
+from dataclasses import asdict, dataclass
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -15,6 +16,51 @@ from .causal import Intervention, PatchShape
 from .grounding import Grounding, compute_local_tts, enumerate_tts
 from .logic_gates import name_gate
 from .utils import get_node_size
+
+
+@dataclass
+class CircuitStructure:
+    node_sparsity: float
+    edge_sparsity: float
+    in_patches: list[PatchShape]
+    out_patches: list[PatchShape]
+    in_circuit: PatchShape
+    out_circuit: PatchShape
+    input_size: int
+    output_size: int
+    width: int
+    depth: int
+
+    def to_dict(self) -> dict:
+        """Convert CircuitStructure to a serializable dictionary."""
+        return {
+            "node_sparsity": self.node_sparsity,
+            "edge_sparsity": self.edge_sparsity,
+            "in_patches": [p.to_dict() for p in self.in_patches],
+            "out_patches": [p.to_dict() for p in self.out_patches],
+            "in_circuit": self.in_circuit.to_dict() if self.in_circuit else None,
+            "out_circuit": self.out_circuit.to_dict() if self.out_circuit else None,
+            "input_size": self.input_size,
+            "output_size": self.output_size,
+            "width": self.width,
+            "depth": self.depth,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CircuitStructure":
+        """Create from dict."""
+        return cls(
+            node_sparsity=data["node_sparsity"],
+            edge_sparsity=data["edge_sparsity"],
+            in_patches=[PatchShape.from_dict(p) for p in data["in_patches"]],
+            out_patches=[PatchShape.from_dict(p) for p in data["out_patches"]],
+            in_circuit=PatchShape.from_dict(data["in_circuit"]) if data["in_circuit"] else None,
+            out_circuit=PatchShape.from_dict(data["out_circuit"]) if data["out_circuit"] else None,
+            input_size=data["input_size"],
+            output_size=data["output_size"],
+            width=data["width"],
+            depth=data["depth"],
+        )
 
 
 class Circuit:
@@ -37,10 +83,24 @@ class Circuit:
         self.node_masks = node_masks
         self.edge_masks = edge_masks
 
+    def to_dict(self):
+        """Convert Circuit to a serializable dictionary."""
+        return {
+            "node_masks": [mask.tolist() for mask in self.node_masks],
+            "edge_masks": [mask.tolist() for mask in self.edge_masks],
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        """Create a Circuit from a dictionary."""
+        node_masks = [np.array(mask) for mask in data["node_masks"]]
+        edge_masks = [np.array(mask) for mask in data["edge_masks"]]
+        return cls(node_masks, edge_masks)
+
     def __repr__(self):
         return f"Circuit(node_masks={self.node_masks}, edge_masks={self.edge_masks})"
 
-    def to_intervention(self, model: nn.Module) -> Intervention:
+    def to_intervention(self, device: str = "cpu") -> Intervention:
         """
         Convert Circuit to an Intervention that zeroes masked nodes/edges:
           - Node masks: neuron 'mul' at h^{(L)} with a 0/1 vector (broadcast across batch).
@@ -53,9 +113,9 @@ class Circuit:
             for L, nm in enumerate(self.node_masks):
                 k = len(nm)
                 idxs = tuple(range(k))  # all neurons in that activation
-                vals = torch.as_tensor(
-                    nm, dtype=torch.float32, device=model.device
-                ).view(1, k)
+                vals = torch.as_tensor(nm, dtype=torch.float32, device=device).view(
+                    1, k
+                )
                 patches[PatchShape(layers=(L,), indices=idxs, axis="neuron")] = (
                     "mul",
                     vals,
@@ -64,13 +124,104 @@ class Circuit:
         # Edge masks (apply to W^{(L)})
         if getattr(self, "edge_masks", None) is not None:
             for L, em in enumerate(self.edge_masks):
-                vals = torch.as_tensor(em, dtype=torch.float32, device=model.device)
+                vals = torch.as_tensor(em, dtype=torch.float32, device=device)
                 patches[PatchShape(layers=(L,), indices=(), axis="edge")] = (
                     "mul",
                     vals,
                 )
 
         return Intervention(patches=patches)
+
+    def get_all_possible_intervention_patches(
+        self, max_patch_size: int = -1
+    ) -> tuple[list[PatchShape], list[PatchShape], PatchShape, PatchShape]:
+        """
+        Get all possible positions(PatchShape) for interventions.
+        Patches returned should modify at most max_patch_size neurons. (-1 return all possible combinations of patches)
+        Returns:
+            in_patches: Patches that are interventions within circuit (active neurons)
+            out_patches: Patches that are interventions outside circuit (inactive neurons)
+            in_circuit: Single PatchShape covering all in-circuit hidden neurons
+            out_circuit: Single PatchShape covering all out-circuit hidden neurons
+        """
+        in_patches = []
+        out_patches = []
+
+        # Collect all in-circuit and out-circuit neuron indices per layer
+        # Skip layer 0 (input) and last layer (output)
+        all_in_indices = []
+        all_out_indices = []
+        hidden_layers = []
+
+        for layer_idx in range(1, len(self.node_masks) - 1):
+            node_mask = self.node_masks[layer_idx]
+            in_indices = tuple(i for i, active in enumerate(node_mask) if active == 1)
+            out_indices = tuple(i for i, active in enumerate(node_mask) if active == 0)
+
+            hidden_layers.append(layer_idx)
+            all_in_indices.append(in_indices)
+            all_out_indices.append(out_indices)
+
+            # Create per-neuron patches for in-circuit
+            for idx in in_indices:
+                in_patches.append(
+                    PatchShape(layers=(layer_idx,), indices=(idx,), axis="neuron")
+                )
+
+            # Create per-neuron patches for out-circuit
+            for idx in out_indices:
+                out_patches.append(
+                    PatchShape(layers=(layer_idx,), indices=(idx,), axis="neuron")
+                )
+
+        # If max_patch_size is specified, filter or generate combinations
+        if max_patch_size > 0:
+            # Filter to patches of at most max_patch_size
+            in_patches = [p for p in in_patches if len(p.indices) <= max_patch_size]
+            out_patches = [p for p in out_patches if len(p.indices) <= max_patch_size]
+
+        # Create single PatchShape covering all in-circuit neurons per layer
+        # We create one per layer since indices differ per layer
+        in_circuit_patches = []
+        out_circuit_patches = []
+        for layer_idx, in_idx, out_idx in zip(
+            hidden_layers, all_in_indices, all_out_indices
+        ):
+            if in_idx:
+                in_circuit_patches.append(
+                    PatchShape(layers=(layer_idx,), indices=in_idx, axis="neuron")
+                )
+            if out_idx:
+                out_circuit_patches.append(
+                    PatchShape(layers=(layer_idx,), indices=out_idx, axis="neuron")
+                )
+
+        # in_circuit and out_circuit as combined PatchShape (using first layer as representative)
+        # or None if empty
+        in_circuit = in_circuit_patches[0] if in_circuit_patches else None
+        out_circuit = out_circuit_patches[0] if out_circuit_patches else None
+
+        return in_patches, out_patches, in_circuit, out_circuit
+
+    def analyze_structure(self) -> CircuitStructure:
+        node_sparsity, edge_sparsity, _ = self.sparsity()
+
+        in_patches, out_patches, in_circuit, out_circuit = (
+            self.get_all_possible_intervention_patches()
+        )
+
+        return CircuitStructure(
+            node_sparsity=node_sparsity,
+            edge_sparsity=edge_sparsity,
+            in_patches=in_patches,
+            out_patches=out_patches,
+            in_circuit=in_circuit,
+            out_circuit=out_circuit,
+            input_size=len(self.node_masks[0]),
+            output_size=len(self.node_masks[-1]),
+            width=len(self.node_masks[1]),
+            depth=len(self.node_masks[1:-1]),
+        )
 
     @staticmethod
     def full(layer_sizes):
@@ -746,7 +897,7 @@ def enumerate_all_valid_circuit(
     return all_circuits
 
 
-def analyze_circuits(circuits, top_n=10):
+def analyze_circuits(circuits, top_n=None):
     """
     Analyzes a list of circuits and returns the fraction of included pairs, average Jaccard similarity, and top pairs.
 
@@ -786,8 +937,11 @@ def analyze_circuits(circuits, top_n=10):
         np.mean(jaccard_similarities) if jaccard_similarities else 0
     )
 
-    # Sort pairs by Jaccard similarity and get the top_n with lowest similarity
-    top_n_pairs = sorted(pair_similarities, key=lambda x: x[1])[:top_n]
+    # Sort pairs by Jaccard similarity
+    top_n_pairs = sorted(pair_similarities, key=lambda x: x[1])
+    # Get the top_n with lowest similarity
+    if top_n:
+        top_n_pairs = top_n_pairs[:top_n]
 
     return fraction_included_pairs, average_jaccard_similarity, top_n_pairs
 
@@ -830,7 +984,7 @@ def find_circuits(
         it = tqdm(it, total=len(all_sks), desc="Evaluating circuits")
     for i, circuit in it:
         # Make predictions with the current circuit
-        sk_predictions = model(x, circuit=circuit)
+        sk_predictions = model(x, intervention=circuit.to_intervention(model.device))
         bit_sk_pred = torch.round(sk_predictions)
 
         # Compute the accuracy with respect to the task

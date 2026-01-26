@@ -17,6 +17,13 @@ from .trial import (
     run_trial,
 )
 
+"""
+An experiment has many runs. Each run is called a trial
+The experiment as a whole will have a ExperimentConfig.
+Each individual trial will have a TrialSetup
+Look at .common.schemas for full definitions
+"""
+
 
 def run_experiment(cfg: ExperimentConfig, logger=None) -> ExperimentResult:
     logger and logger.info(f"\n\n ExperimentConfig: \n {cfg} \n\n")
@@ -39,7 +46,8 @@ def run_experiment(cfg: ExperimentConfig, logger=None) -> ExperimentResult:
             # Each trial should have its independent set of params
             model_params = copy.deepcopy(cfg.base_trial.model_params)
             train_params = copy.deepcopy(cfg.base_trial.train_params)
-            iden_constraints = copy.deepcopy(cfg.base_trial.iden_constraints)
+            constraints = copy.deepcopy(cfg.base_trial.constraints)
+            spd_config = copy.deepcopy(cfg.base_trial.spd_config)
 
             train_params.learning_rate = lr
             train_params.loss_target = loss_target
@@ -52,17 +60,16 @@ def run_experiment(cfg: ExperimentConfig, logger=None) -> ExperimentResult:
                 data_params=data_params,
                 model_params=model_params,
                 train_params=train_params,
-                iden_constraints=iden_constraints,
+                constraints=constraints,
+                spd_config=spd_config,
             )
             trial_result = run_trial(
                 trial_setup,
                 trial_data,
                 device=cfg.device,
+                spd_device=cfg.spd_device,
                 logger=logger,
                 debug=cfg.debug,
-                model_dir=cfg.model_dir,
-                try_load_model=(not cfg.from_scratch),
-                try_save_model=True,
             )
             experiment_result.trials[trial_result.trial_id] = trial_result
 

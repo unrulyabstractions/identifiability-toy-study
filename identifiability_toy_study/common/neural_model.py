@@ -2,7 +2,7 @@
 import copy
 import itertools
 import random
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -14,7 +14,9 @@ from torch import optim
 from torch.utils.data import DataLoader, TensorDataset
 
 from .causal import Intervention, PatchShape
-from .circuit import Circuit
+
+if TYPE_CHECKING:
+    from .circuit import Circuit
 
 ACTIVATION_FUNCTIONS = {
     "leaky_relu": nn.LeakyReLU,
@@ -24,35 +26,91 @@ ACTIVATION_FUNCTIONS = {
 }
 
 
-def debug_device(logger, tensors, expected_device, context: str = ""):
+class DecomposedMLP(nn.Module):
     """
-    Check if all tensors are on the expected device.
-
-    Args:
-        tensors: List of tensors or single tensor to check
-        expected_device: Expected device (e.g., 'mps', 'cuda:0', 'cpu')
-        context: Context description for logging
-        verbose: Whether to print device information
+    Wrapper holding the result of SPD decomposition on an MLP.
+    Stores the component model and provides methods to inspect/visualize components.
     """
-    if not isinstance(tensors, (list, tuple)):
-        tensors = [tensors]
 
-    ok = True
-    for i, tensor in enumerate(tensors):
-        if tensor is not None and hasattr(tensor, "device"):
-            actual_device = str(tensor.device)
-            logger.info(
-                f"{context} - Tensor {i}: {actual_device} (expected: {expected_device})"
+    def __init__(self, component_model=None, target_model: "MLP" = None):
+        super().__init__()
+        self.component_model = component_model  # SPD ComponentModel after optimization
+        self.target_model = target_model  # Original MLP that was decomposed
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through the decomposed model."""
+        if self.component_model is not None:
+            return self.component_model(x)
+        elif self.target_model is not None:
+            return self.target_model(x)
+        raise RuntimeError("DecomposedMLP has no model to forward through")
+
+    def get_n_components(self) -> int:
+        """Return number of components in the decomposition."""
+        if self.component_model is None:
+            return 0
+        # Get components dict and extract C from first component
+        components = getattr(self.component_model, "components", {})
+        if not components:
+            return 0
+        first_component = next(iter(components.values()))
+        return getattr(first_component, "C", 0)
+
+    def save(self, path: str):
+        """Save decomposed model to file."""
+        torch.save(
+            {
+                "component_model_state": self.component_model.state_dict()
+                if self.component_model
+                else None,
+                "target_model_state": self.target_model.state_dict()
+                if self.target_model
+                else None,
+                "n_components": self.get_n_components(),
+            },
+            path,
+        )
+
+    @classmethod
+    def load(cls, path: str, target_model: "MLP" = None, device: str = "cpu"):
+        """Load decomposed model from file.
+
+        Args:
+            path: Path to saved decomposed model
+            target_model: Optional pre-loaded target model. If None, will try to
+                         reconstruct from saved state (requires MLP architecture info).
+            device: Device to load model to
+        """
+        from spd.models.components import ComponentModel
+
+        data = torch.load(path, map_location=device, weights_only=False)
+
+        # Reconstruct target model if not provided
+        if target_model is None and data.get("target_model_state"):
+            # We can't fully reconstruct without knowing architecture
+            # So target_model should be provided when loading
+            raise ValueError(
+                "target_model must be provided to load DecomposedMLP. "
+                "Load the MLP first using MLP.load_from_file()."
             )
-            if (
-                expected_device not in actual_device
-                and actual_device != expected_device
-            ):
-                logger.info(
-                    f"WARNING: {context} - Tensor {i} on {actual_device}, expected {expected_device}"
-                )
-                ok = False
-    return ok
+
+        # Load target model state if we have one
+        if target_model is not None and data.get("target_model_state"):
+            target_model.load_state_dict(data["target_model_state"])
+            target_model.to(device)
+
+        # Reconstruct component model if we have state
+        component_model = None
+        if data.get("component_model_state") and target_model is not None:
+            n_components = data.get("n_components", 10)
+            # Freeze target model for ComponentModel
+            for param in target_model.parameters():
+                param.requires_grad = False
+            component_model = ComponentModel(target_model, n_components=n_components)
+            component_model.load_state_dict(data["component_model_state"])
+            component_model.to(device)
+
+        return cls(component_model=component_model, target_model=target_model)
 
 
 class MLP(nn.Module):
@@ -83,7 +141,7 @@ class MLP(nn.Module):
         """
         super().__init__()
         self.input_size = input_size
-        self.hidden_sizes = hidden_sizes
+        self._hidden_sizes = hidden_sizes  # underscore to avoid conflict with method
         self.output_size = output_size
         self.layer_sizes = [input_size] + hidden_sizes + [output_size]
         self.activation = activation
@@ -106,24 +164,12 @@ class MLP(nn.Module):
         self.debug = debug
         self.to(device)
 
-        if self.debug and logger:
-            logger.info(f"checking_device: Model initialized on device: {device}")
-            for i, layer in enumerate(self.layers):
-                logger.info(
-                    f"checking_device: Layer {i} weights on: {layer[0].weight.device}"
-                )
-                logger.info(
-                    f"checking_device: Layer {i} bias on: {layer[0].bias.device}"
-                )
-
-    def save_to_file(self, filepath):
-        """
-        Save the model's configuration and state_dict to a file.
-        """
+    def save_to_file(self, filepath: str):
+        """Save the model's configuration and state_dict to a file."""
         torch.save(
             {
+                "hidden_sizes": self._hidden_sizes,
                 "input_size": self.input_size,
-                "hidden_sizes": self.hidden_sizes,
                 "output_size": self.output_size,
                 "activation": self.activation,
                 "state_dict": self.state_dict(),
@@ -132,16 +178,15 @@ class MLP(nn.Module):
         )
 
     @classmethod
-    def load_from_file(cls, filepath):
-        """
-        Load a model from a file and return it.
-        """
-        model_data = torch.load(filepath)
+    def load_from_file(cls, filepath, device: str = "cpu"):
+        """Load a model from a file and return it."""
+        model_data = torch.load(filepath, map_location=device)
         model = cls(
             model_data["hidden_sizes"],
             input_size=model_data["input_size"],
             output_size=model_data["output_size"],
             activation=model_data["activation"],
+            device=device,
         )
         model.load_state_dict(model_data["state_dict"])
         return model
@@ -161,19 +206,16 @@ class MLP(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        circuit: Optional[Circuit] = None,
         intervention: Optional[Intervention] = None,
         return_activations: bool = False,
     ):
-        # If a Circuit is provided, turn it into an Intervention that zeros masks and merge it.
-        if circuit is not None:
-            circ_iv = circuit.to_intervention(self)
-            # other wins in iv.merge(other)
-            intervention = (
-                circ_iv if intervention is None else circ_iv.merge(intervention)
-            )
-
         activations = [x.detach()] if return_activations else None
+
+        # Fast path: no interventions - use standard module calls (enables forward hooks)
+        if intervention is None and not return_activations:
+            for layer in self.layers:
+                x = layer(x)
+            return x
 
         # Group new Intervention by layer/axis
         neuron_by_layer = (
@@ -392,7 +434,8 @@ class MLP(nn.Module):
         plt.axis("off")
         plt.show()
 
-    def __getitem__(self, idx, in_place: bool = False):
+    def _slice(self, idx, in_place: bool):
+        # ... your existing logic here ...
         """
         Overload the indexing operator to create a submodel
 
@@ -457,6 +500,29 @@ class MLP(nn.Module):
                 return self.layers[idx]
             return copy.deepcopy(self.layers[idx])
 
+    class _View:
+        def __init__(self, model, in_place):
+            self._model = model
+            self._in_place = in_place
+
+        def __getitem__(self, idx):
+            return self._model._slice(idx, in_place=self._in_place)
+
+        def __call__(self, idx=slice(None)):
+            return self._model._slice(idx, in_place=self._in_place)
+
+    @property
+    def view(self):
+        return MLP._View(self, True)
+
+    @property
+    def clone(self):
+        return MLP._View(self, False)
+
+    def __getitem__(self, idx):
+        """Slicing always copies (safe default)."""
+        return self.clone(idx)
+
     def do_train(
         self,
         x,
@@ -474,10 +540,6 @@ class MLP(nn.Module):
         """
         Train the model using the given data and hyperparameters.
         """
-        if self.debug and logger:
-            debug_device(
-                logger, [x, y, x_val, y_val], str(self.device), "Training data"
-            )
 
         # Deterministic worker seeding plays well with your global set_seeds(...)
         def seed_worker(worker_id):
@@ -555,30 +617,6 @@ class MLP(nn.Module):
 
         return avg_loss
 
-    def do_eval(self, x_test, y_test, logger=None):
-        """
-        Performs evaluation on the given test data
-
-        Args:
-            x_test: The test input tensor
-            y_test: The test target tensor
-
-        Returns:
-            The accuracy of the model on the test data
-        """
-        if self.debug and logger:
-            debug_device(logger, [x_test, y_test], str(self.device), "Evaluation data")
-
-        self.eval()
-        with torch.no_grad():
-            val_outputs = self(x_test.to(self.device))
-            val_predictions = torch.round(val_outputs)
-            correct_predictions_val = val_predictions.eq(y_test.to(self.device)).all(
-                dim=1
-            )
-            acc = correct_predictions_val.sum().item() / y_test.size(0)
-        return acc
-
     def separate_into_k_mlps(self):
         """
         Separates the original MLP into K individual MLPs, each with output size 1.
@@ -586,8 +624,8 @@ class MLP(nn.Module):
         Returns:
             A list of K MLP models, each for a single output.
         """
-        # Full clones (independent parameters) using the slice constructor
-        separate_models = [self[:] for _ in range(self.output_size)]
+        # Deep clones to ensure each gate model has independent weights
+        separate_models = [self.clone[:] for _ in range(self.output_size)]
 
         # Original final linear
         last_linear = self.layers[-1][0]
@@ -617,6 +655,30 @@ class MLP(nn.Module):
 
         return separate_models
 
+    def separate_subcircuit(self, circuit: "Circuit") -> "MLP":
+        """
+        Create a new MLP with the circuit's masked edges zeroed out.
+
+        Args:
+            circuit: Circuit object with edge_masks defining which connections to keep
+
+        Returns:
+            New MLP with masked weights set to zero
+        """
+        # Deep clone the model to avoid modifying original weights
+        submodel = self.clone[:]
+
+        # Apply edge masks: zero out weights where mask is 0
+        with torch.no_grad():
+            for layer_idx, edge_mask in enumerate(circuit.edge_masks):
+                linear = submodel.layers[layer_idx][0]
+                mask_tensor = torch.tensor(
+                    edge_mask, dtype=linear.weight.dtype, device=linear.weight.device
+                )
+                linear.weight.mul_(mask_tensor)
+
+        return submodel
+
     def enumerate_valid_node_masks(self):
         """
         Generate all valid node masks in the neural network.
@@ -625,16 +687,14 @@ class MLP(nn.Module):
             A list of all valid node masks (cartesian product across layers)
         """
         all_masks_per_layer = []
-        for size in self.layer_sizes[1:]:
-            masks = [
-                np.array([int(x) for x in format(i, f"0{size}b")])
-                for i in range(2**size)
-            ]
-            all_masks_per_layer.append(masks)
 
-        # Generate combinations of masks for all layers
-        all_masks = list(itertools.product(*all_masks_per_layer))
-        return all_masks
+        for layer_size in self.layer_sizes[1:]:
+            # Generate all on/off combinations for this layer
+            layer_masks = list(itertools.product([0, 1], repeat=layer_size))
+            all_masks_per_layer.append([np.array(mask) for mask in layer_masks])
+
+        # Combine masks across all layers
+        return list(itertools.product(*all_masks_per_layer))
 
     def _apply_neuron_patches_inplace(self, h, patches):  # inside class MLP
         """
