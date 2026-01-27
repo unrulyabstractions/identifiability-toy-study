@@ -3,11 +3,13 @@
 This repository integrates and extends code from the following projects:
 - [MI-identifiability](https://github.com/MelouxM/MI-identifiability) by Maxime Méloux
 - [spd](https://github.com/goodfire-ai/spd) by the Goodfire-AI team (git submodule)
-- [circuit-stability](https://github.com/alansun17904/circuit-stability) by Alan Sun
-- [eap-ig-faithfulness](https://github.com/hannamw/eap-ig-faithfulness) by Hannah W.
-- [SubspacePartition](https://github.com/huangxt39/SubspacePartition) by Xiaotian Huang et al. 
 
-All of the above projects are licensed under MIT (see their LICENSE files).  
+**External libraries** (not tracked, placed in `external/` folder):
+- [circuit-stability](https://github.com/alansun17904/circuit-stability) by Alan Sun
+- [eap-ig-faithfulness](https://github.com/hannamw/eap-ig-faithfulness) by Hannah W. (EAP-IG)
+- [SubspacePartition](https://github.com/huangxt39/SubspacePartition) by Xiaotian Huang et al.
+
+All of the above projects are licensed under MIT (see their LICENSE files).
 My modifications and additional contributions are © 2025 Ian Rios-Sialer, released under the MIT License.
 
 ## Installation
