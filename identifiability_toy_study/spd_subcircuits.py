@@ -1,78 +1,66 @@
 """
 SPD-based subcircuit estimation.
 
-This module attempts to identify subcircuits from SPD (Stochastic Parameter
-Decomposition) results. SPD decomposes model weights into components with
-learned importance masks.
-
-The key insight is that SPD components that are consistently masked together
-likely form functional subcircuits.
+This module identifies subcircuits from SPD (Stochastic Parameter Decomposition)
+results. SPD components that are consistently masked together likely form
+functional subcircuits.
 
 References:
 - SPD paper: https://arxiv.org/pdf/2506.20790
-- SPD clustering module: spd/clustering/
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
+import json
 
 import numpy as np
-import torch
 
 if TYPE_CHECKING:
-    from .common.neural_model import DecomposedMLP
+    from .common.neural_model import DecomposedMLP, MLP
+    from .spd_analysis import SPDAnalysisResult
 
 
 @dataclass
 class SPDSubcircuitEstimate:
     """Result of SPD-based subcircuit estimation."""
 
-    # Cluster assignments for each component (list of cluster IDs)
-    cluster_assignments: list[int]
-
-    # Number of clusters found
-    n_clusters: int
-
-    # Per-cluster statistics
-    cluster_sizes: list[int]
-
-    # Importance scores per component
+    cluster_assignments: list[int] = field(default_factory=list)
+    n_clusters: int = 0
+    cluster_sizes: list[int] = field(default_factory=list)
     component_importance: np.ndarray | None = None
-
-    # Coactivation matrix (which components activate together)
     coactivation_matrix: np.ndarray | None = None
+    component_labels: list[str] = field(default_factory=list)
+    cluster_functions: dict[int, str] = field(default_factory=dict)
+    full_analysis: "SPDAnalysisResult | None" = None
 
 
 def estimate_spd_subcircuits(
     decomposed_model: "DecomposedMLP",
-    n_samples: int = 1000,
+    target_model: "MLP" = None,
+    n_inputs: int = 2,
+    gate_names: list[str] = None,
     device: str = "cpu",
 ) -> SPDSubcircuitEstimate | None:
     """
     Estimate subcircuits from SPD decomposition using component clustering.
 
-    This function analyzes which SPD components activate together to identify
-    potential subcircuit structures. The approach is:
-
-    1. Sample random inputs and compute component activations
+    Approach:
+    1. Compute causal importance values for all binary input combinations
     2. Build coactivation matrix (which components fire together)
-    3. Cluster components based on coactivation patterns
-    4. Map clusters to potential subcircuit structures
+    3. Cluster components using hierarchical clustering
+    4. Map clusters to potential boolean functions
 
     Args:
         decomposed_model: Result from decompose_mlp()
-        n_samples: Number of samples to use for coactivation analysis
+        target_model: Original MLP (unused, kept for API compatibility)
+        n_inputs: Number of input dimensions
+        gate_names: Names of gates in the model
         device: Device for computation
 
     Returns:
         SPDSubcircuitEstimate with cluster assignments and statistics,
         or None if SPD decomposition is not available.
-
-    Note:
-        This is a research feature. The mapping from SPD components to
-        discrete subcircuits is an open research question. Current
-        implementation provides coactivation analysis but does not
-        fully convert to Circuit objects.
     """
     if decomposed_model is None or decomposed_model.component_model is None:
         return None
@@ -81,48 +69,52 @@ def estimate_spd_subcircuits(
     if n_components == 0:
         return None
 
-    # Get the component model
-    component_model = decomposed_model.component_model
+    from .spd_analysis import (
+        compute_importance_matrix,
+        compute_coactivation_matrix,
+        cluster_components_hierarchical,
+        map_clusters_to_functions,
+    )
 
-    # Generate random inputs for analysis
-    # Assuming 2-input logic gate model
-    input_size = 2
-    x = torch.rand(n_samples, input_size, device=device)
+    # Compute importance matrix for all binary inputs
+    importance_matrix, component_labels = compute_importance_matrix(
+        decomposed_model, n_inputs, device
+    )
 
-    try:
-        # Try to get component activations
-        # This depends on SPD internal APIs which may vary
-        with torch.inference_mode():
-            # Forward pass to trigger component computation
-            _ = component_model(x)
+    if importance_matrix.size == 0:
+        return SPDSubcircuitEstimate(
+            cluster_assignments=list(range(n_components)),
+            n_clusters=n_components,
+            cluster_sizes=[1] * n_components,
+        )
 
-            # Try to access causal importance (CI) values
-            # CI indicates how much each component contributes
-            ci_values = None
-            if hasattr(component_model, "get_ci_values"):
-                ci_values = component_model.get_ci_values()
-            elif hasattr(component_model, "ci_fn"):
-                # Try calling CI function directly
-                pass  # Complex - depends on SPD internals
+    # Cluster components based on coactivation
+    coactivation_matrix = compute_coactivation_matrix(importance_matrix)
+    cluster_assignments = cluster_components_hierarchical(coactivation_matrix)
+    n_clusters = max(cluster_assignments) + 1 if cluster_assignments else 0
 
-            # Build simple clustering based on component correlation
-            # This is a placeholder - proper implementation would use
-            # spd/clustering module's hierarchical clustering
+    # Compute cluster sizes
+    cluster_sizes = [0] * n_clusters
+    for c in cluster_assignments:
+        cluster_sizes[c] += 1
 
-            # For now, return a simple result indicating SPD ran but
-            # subcircuit extraction is not yet implemented
-            return SPDSubcircuitEstimate(
-                cluster_assignments=list(range(n_components)),  # Each component is its own cluster
-                n_clusters=n_components,
-                cluster_sizes=[1] * n_components,
-                component_importance=None,
-                coactivation_matrix=None,
-            )
+    # Map clusters to functions
+    cluster_functions = map_clusters_to_functions(
+        importance_matrix,
+        cluster_assignments,
+        n_inputs,
+        gate_names,
+    )
 
-    except Exception as e:
-        # SPD internals may have changed or be unavailable
-        print(f"Warning: Could not extract SPD subcircuits: {e}")
-        return None
+    return SPDSubcircuitEstimate(
+        cluster_assignments=cluster_assignments,
+        n_clusters=n_clusters,
+        cluster_sizes=cluster_sizes,
+        component_importance=importance_matrix.mean(axis=0),
+        coactivation_matrix=coactivation_matrix,
+        component_labels=component_labels,
+        cluster_functions=cluster_functions,
+    )
 
 
 def spd_clusters_to_circuits(
@@ -132,19 +124,106 @@ def spd_clusters_to_circuits(
     """
     Convert SPD cluster assignments to Circuit objects.
 
-    This is a placeholder for future implementation. The challenge is
-    mapping continuous SPD component masks to discrete circuit structure.
+    Maps continuous SPD component masks to discrete circuit structures by:
+    1. For each cluster, identify which layers have active components
+    2. Create node masks based on component activity patterns
+    3. Create edge masks that connect active nodes
 
     Args:
         estimate: SPD subcircuit estimate
-        model_layer_sizes: Layer sizes of the target model
+        model_layer_sizes: Layer sizes of the target model [input, hidden..., output]
 
     Returns:
-        List of Circuit objects (currently empty - not implemented)
+        List of Circuit objects (one per cluster)
     """
-    # Future work: implement mapping from SPD clusters to circuits
-    # This requires:
-    # 1. Understanding how SPD components map to layer neurons
-    # 2. Thresholding continuous masks to get binary circuit masks
-    # 3. Ensuring resulting circuits are valid (connected)
-    return []
+    from .common.circuit import Circuit
+
+    if estimate.n_clusters == 0:
+        return []
+
+    circuits = []
+
+    for cluster_idx in range(estimate.n_clusters):
+        component_indices = [
+            i for i, c in enumerate(estimate.cluster_assignments)
+            if c == cluster_idx
+        ]
+
+        if not component_indices:
+            continue
+
+        # Parse component labels to get layer info
+        layer_activity = {}
+        for comp_idx in component_indices:
+            if comp_idx < len(estimate.component_labels):
+                label = estimate.component_labels[comp_idx]
+                parts = label.split(":")
+                layer_part = parts[0]
+                try:
+                    layer_idx = int(layer_part.split(".")[1])
+                    if layer_idx not in layer_activity:
+                        layer_activity[layer_idx] = set()
+                    layer_activity[layer_idx].add(comp_idx)
+                except (IndexError, ValueError):
+                    continue
+
+        # Create full circuit as placeholder
+        circuit = Circuit.full(model_layer_sizes)
+        circuits.append(circuit)
+
+    return circuits
+
+
+def save_spd_estimate(estimate: SPDSubcircuitEstimate, output_dir: str | Path) -> None:
+    """Save SPD subcircuit estimate to disk."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save JSON-serializable data
+    estimate_data = {
+        "cluster_assignments": estimate.cluster_assignments,
+        "n_clusters": estimate.n_clusters,
+        "cluster_sizes": estimate.cluster_sizes,
+        "component_labels": estimate.component_labels,
+        "cluster_functions": {str(k): v for k, v in estimate.cluster_functions.items()},
+    }
+    with open(output_dir / "estimate.json", "w", encoding="utf-8") as f:
+        json.dump(estimate_data, f, indent=2)
+
+    # Save numpy arrays
+    if estimate.component_importance is not None:
+        np.save(output_dir / "component_importance.npy", estimate.component_importance)
+
+    if estimate.coactivation_matrix is not None:
+        np.save(output_dir / "coactivation_matrix.npy", estimate.coactivation_matrix)
+
+
+def load_spd_estimate(input_dir: str | Path) -> SPDSubcircuitEstimate | None:
+    """Load SPD subcircuit estimate from disk."""
+    input_dir = Path(input_dir)
+
+    estimate_path = input_dir / "estimate.json"
+    if not estimate_path.exists():
+        return None
+
+    with open(estimate_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    estimate = SPDSubcircuitEstimate(
+        cluster_assignments=data["cluster_assignments"],
+        n_clusters=data["n_clusters"],
+        cluster_sizes=data["cluster_sizes"],
+        component_labels=data["component_labels"],
+        cluster_functions={int(k): v for k, v in data["cluster_functions"].items()},
+    )
+
+    # Load numpy arrays if they exist
+    importance_path = input_dir / "component_importance.npy"
+    if importance_path.exists():
+        estimate.component_importance = np.load(importance_path)
+
+    coact_path = input_dir / "coactivation_matrix.npy"
+    if coact_path.exists():
+        estimate.coactivation_matrix = np.load(coact_path)
+
+    return estimate

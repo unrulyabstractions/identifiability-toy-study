@@ -96,12 +96,79 @@ def load_decomposed_model(
     target_model: Optional[MLP] = None,
     device: str = "cpu",
 ) -> Optional[DecomposedMLP]:
-    """Load decomposed model from trial directory."""
+    """Load decomposed model from trial directory.
+
+    Tries new spd/ location first, then falls back to old all_gates/ location.
+    """
     trial_dir = Path(trial_dir)
+
+    # Try new spd/ location first
+    spd_path = trial_dir / "spd" / "decomposed_model.pt"
+    if spd_path.exists():
+        return DecomposedMLP.load(str(spd_path), target_model=target_model, device=device)
+
+    # Fall back to old location
     decomposed_path = trial_dir / "all_gates" / "decomposed_model.pt"
     if decomposed_path.exists():
         return DecomposedMLP.load(str(decomposed_path), target_model=target_model, device=device)
+
     return None
+
+
+def load_spd_estimate(trial_dir: str | Path):
+    """Load SPD subcircuit estimate from trial directory."""
+    from ..spd_subcircuits import load_spd_estimate as _load_spd_estimate
+
+    trial_dir = Path(trial_dir)
+    spd_dir = trial_dir / "spd"
+    if spd_dir.exists():
+        return _load_spd_estimate(spd_dir)
+    return None
+
+
+def load_spd_analysis(trial_dir: str | Path) -> dict:
+    """Load SPD analysis data from trial directory.
+
+    Returns dict with:
+        - clustering: Cluster assignments and labels
+        - importance_matrix: Per-input component importances (numpy array)
+        - coactivation_matrix: Component coactivation matrix (numpy array)
+        - visualization_paths: Paths to visualization files
+    """
+    import numpy as np
+
+    trial_dir = Path(trial_dir)
+    spd_dir = trial_dir / "spd"
+    result = {}
+
+    if not spd_dir.exists():
+        return result
+
+    # Load clustering data
+    clustering_path = spd_dir / "clustering" / "assignments.json"
+    if clustering_path.exists():
+        with open(clustering_path, encoding="utf-8") as f:
+            result["clustering"] = json.load(f)
+
+    # Load importance matrix
+    imp_path = spd_dir / "clustering" / "importance_matrix.npy"
+    if imp_path.exists():
+        result["importance_matrix"] = np.load(imp_path)
+
+    # Load coactivation matrix
+    coact_path = spd_dir / "clustering" / "coactivation_matrix.npy"
+    if coact_path.exists():
+        result["coactivation_matrix"] = np.load(coact_path)
+
+    # Find visualization paths
+    viz_dir = spd_dir / "visualizations"
+    if viz_dir.exists():
+        result["visualization_paths"] = {
+            f.stem: str(f.relative_to(trial_dir))
+            for f in viz_dir.glob("*.png")
+        }
+
+    return result
 
 
 def load_tensors(trial_dir: str | Path, device: str = "cpu") -> dict:

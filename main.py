@@ -7,6 +7,8 @@ from pathlib import Path
 from identifiability_toy_study.common.schemas import (
     ExperimentConfig,
     ExperimentResult,
+    SPDConfig,
+    generate_spd_sweep_configs,
 )
 from identifiability_toy_study.common.utils import setup_logging
 from identifiability_toy_study.experiment import run_experiment
@@ -42,6 +44,11 @@ if __name__ == "__main__":
         "--no-viz",
         action="store_true",
         help="Skip visualization step",
+    )
+    parser.add_argument(
+        "--no-spd-sweep",
+        action="store_true",
+        help="Disable SPD parameter sweep (only run single config)",
     )
     args = parser.parse_args()
 
@@ -87,6 +94,20 @@ if __name__ == "__main__":
         device=args.device,
         spd_device=args.spd_device,
     )
+
+    # SPD sweep is enabled by default
+    if not args.no_spd_sweep:
+        base_config_id = cfg.base_trial.spd_config.get_config_id()
+        sweep_configs = generate_spd_sweep_configs(
+            base_config=cfg.base_trial.spd_config,
+            importance_coeff_list=[1e-5, 1e-4, 1e-3],
+            n_components_list=[10, 20],
+        )
+        # Exclude configs that match the base config
+        cfg.base_trial.spd_sweep_configs = [
+            c for c in sweep_configs if c.get_config_id() != base_config_id
+        ]
+        logger.info(f"SPD sweep: {len(cfg.base_trial.spd_sweep_configs) + 1} total configs")
 
     result: ExperimentResult = run_experiment(cfg, logger=logger)
     save_results(result, run_dir=run_dir)  # Save before just in case viz crashes

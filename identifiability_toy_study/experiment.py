@@ -59,6 +59,7 @@ def run_experiment(cfg: ExperimentConfig, logger=None, max_parallel_trials: int 
             train_params = copy.deepcopy(cfg.base_trial.train_params)
             constraints = copy.deepcopy(cfg.base_trial.constraints)
             spd_config = copy.deepcopy(cfg.base_trial.spd_config)
+            spd_sweep_configs = copy.deepcopy(cfg.base_trial.spd_sweep_configs)
 
             train_params.learning_rate = lr
             model_params.width = width
@@ -72,6 +73,7 @@ def run_experiment(cfg: ExperimentConfig, logger=None, max_parallel_trials: int 
                 train_params=train_params,
                 constraints=constraints,
                 spd_config=spd_config,
+                spd_sweep_configs=spd_sweep_configs,
             )
 
             trial_configs.append((trial_setup, trial_data))

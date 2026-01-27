@@ -146,26 +146,56 @@ def run_trial(
     trial_metrics.val_acc = val_acc
     trial_metrics.test_acc = calculate_match_rate(torch.round(y_pred), y_gt).item()
 
-    # ===== SPD =====
-    spd_config = setup.spd_config
+    # ===== SPD (Multi-config sweep) =====
+    # Get list of configs to run: primary + any sweep configs
+    spd_configs_to_run = [setup.spd_config]
+    if setup.spd_sweep_configs:
+        spd_configs_to_run.extend(setup.spd_sweep_configs)
+
     update_status("STARTED_SPD")
-    with profile("spd_mlp"):
-        trial_result.decomposed_model = decompose_mlp(
-            x, y_pred, model, spd_device, spd_config
-        )
+    for config_idx, spd_config in enumerate(spd_configs_to_run):
+        config_id = spd_config.get_config_id()
+        update_status(f"STARTED_SPD:{config_idx}:{config_id}")
+
+        with profile(f"spd_mlp_{config_id}"):
+            decomposed = decompose_mlp(x, y_pred, model, spd_device, spd_config)
+
+        # Store results
+        if config_idx == 0:
+            # Primary config - backwards compatible storage
+            trial_result.decomposed_model = decomposed
+        # Also store in sweep dict (including primary for consistency)
+        trial_result.decomposed_models_sweep[config_id] = decomposed
+        update_status(f"FINISHED_SPD:{config_idx}:{config_id}")
     update_status("FINISHED_SPD")
 
-    # ===== SPD Subcircuit =====
+    # ===== SPD Subcircuit (Multi-config sweep) =====
     # Note: SPD analysis could potentially run asynchronously in the future
     update_status("STARTED_SPD_SC")
-    with profile("spd_mlp_sc"):
-        # Estimate subcircuits from SPD component clustering
-        # Note: Full implementation requires more research into SPD internals
-        # See spd_subcircuits.py and https://arxiv.org/pdf/2506.20790
-        trial_result.spd_subcircuit_estimate = estimate_spd_subcircuits(
-            trial_result.decomposed_model,
-            device=spd_device,
-        )
+    for config_idx, spd_config in enumerate(spd_configs_to_run):
+        config_id = spd_config.get_config_id()
+        decomposed = trial_result.decomposed_models_sweep[config_id]
+
+        update_status(f"STARTED_SPD_SC:{config_idx}:{config_id}")
+        with profile(f"spd_mlp_sc_{config_id}"):
+            # Estimate subcircuits from SPD component clustering
+            # Uses causal importance analysis and hierarchical clustering
+            # See spd_subcircuits.py and https://arxiv.org/pdf/2506.20790
+            estimate = estimate_spd_subcircuits(
+                decomposed_model=decomposed,
+                target_model=model,
+                n_inputs=input_size,
+                gate_names=gate_names,
+                device=spd_device,
+            )
+
+        # Store results
+        if config_idx == 0:
+            # Primary config - backwards compatible storage
+            trial_result.spd_subcircuit_estimate = estimate
+        # Also store in sweep dict
+        trial_result.spd_subcircuit_estimates_sweep[config_id] = estimate
+        update_status(f"FINISHED_SPD_SC:{config_idx}:{config_id}")
     update_status("FINISHED_SPD_SC")
 
     # ===== Circuit Finding =====

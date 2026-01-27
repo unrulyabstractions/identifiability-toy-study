@@ -32,85 +32,97 @@ class DecomposedMLP(nn.Module):
     Stores the component model and provides methods to inspect/visualize components.
     """
 
-    def __init__(self, component_model=None, target_model: "MLP" = None):
+    # Default ComponentModel config (used if not provided)
+    DEFAULT_CM_CONFIG = {
+        "ci_fn_type": "vector_mlp",
+        "ci_fn_hidden_dims": [8],
+        "sigmoid_type": "leaky_hard",
+        "pretrained_model_output_attr": None,
+    }
+
+    def __init__(
+        self,
+        component_model=None,
+        target_model: "MLP" = None,
+        cm_config: dict = None,
+    ):
         super().__init__()
         self.component_model = component_model  # SPD ComponentModel after optimization
         self.target_model = target_model  # Original MLP that was decomposed
+        self.cm_config = cm_config or self.DEFAULT_CM_CONFIG.copy()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through the decomposed model."""
-        if self.component_model is not None:
-            return self.component_model(x)
-        elif self.target_model is not None:
-            return self.target_model(x)
-        raise RuntimeError("DecomposedMLP has no model to forward through")
+        assert self.component_model is not None, "No component model available"
+        return self.component_model(x)
 
     def get_n_components(self) -> int:
-        """Return number of components in the decomposition."""
-        if self.component_model is None:
-            return 0
-        # Get components dict and extract C from first component
-        components = getattr(self.component_model, "components", {})
-        if not components:
-            return 0
-        first_component = next(iter(components.values()))
-        return getattr(first_component, "C", 0)
+        """Return number of components per layer."""
+        assert self.component_model is not None
+        first_component = next(iter(self.component_model.components.values()))
+        return first_component.C
 
     def save(self, path: str):
         """Save decomposed model to file."""
+        assert self.component_model is not None
+        assert self.target_model is not None
+
+        # Extract module_info for reconstruction
+        module_info = [
+            {"module_pattern": name, "C": comp.C}
+            for name, comp in self.component_model.components.items()
+        ]
+
         torch.save(
             {
-                "component_model_state": self.component_model.state_dict()
-                if self.component_model
-                else None,
-                "target_model_state": self.target_model.state_dict()
-                if self.target_model
-                else None,
-                "n_components": self.get_n_components(),
+                "component_model_state": self.component_model.state_dict(),
+                "target_model_state": self.target_model.state_dict(),
+                "module_info": module_info,
+                "component_model_config": self.cm_config,
             },
             path,
         )
 
     @classmethod
-    def load(cls, path: str, target_model: "MLP" = None, device: str = "cpu"):
+    def load(cls, path: str, target_model: "MLP", device: str = "cpu"):
         """Load decomposed model from file.
 
         Args:
             path: Path to saved decomposed model
-            target_model: Optional pre-loaded target model. If None, will try to
-                         reconstruct from saved state (requires MLP architecture info).
+            target_model: Pre-loaded target model (required)
             device: Device to load model to
         """
-        from spd.models.components import ComponentModel
+        from spd.configs import ModulePatternInfoConfig
+        from spd.models.component_model import ComponentModel
+        from spd.run_spd import expand_module_patterns
 
         data = torch.load(path, map_location=device, weights_only=False)
 
-        # Reconstruct target model if not provided
-        if target_model is None and data.get("target_model_state"):
-            # We can't fully reconstruct without knowing architecture
-            # So target_model should be provided when loading
-            raise ValueError(
-                "target_model must be provided to load DecomposedMLP. "
-                "Load the MLP first using MLP.load_from_file()."
-            )
+        # Load target model state
+        target_model.load_state_dict(data["target_model_state"])
+        target_model.to(device)
+        target_model.requires_grad_(False)
 
-        # Load target model state if we have one
-        if target_model is not None and data.get("target_model_state"):
-            target_model.load_state_dict(data["target_model_state"])
-            target_model.to(device)
+        # Reconstruct component model
+        module_info = [
+            ModulePatternInfoConfig(module_pattern=m["module_pattern"], C=m["C"])
+            for m in data["module_info"]
+        ]
+        module_path_info = expand_module_patterns(target_model, module_info)
 
-        # Reconstruct component model if we have state
-        component_model = None
-        if data.get("component_model_state") and target_model is not None:
-            n_components = data.get("n_components", 10)
-            # Freeze target model for ComponentModel
-            for param in target_model.parameters():
-                param.requires_grad = False
-            component_model = ComponentModel(target_model, n_components=n_components)
-            component_model.load_state_dict(data["component_model_state"])
-            component_model.to(device)
+        cm_config = data["component_model_config"]
+        component_model = ComponentModel(
+            target_model=target_model,
+            module_path_info=module_path_info,
+            ci_fn_type=cm_config["ci_fn_type"],
+            ci_fn_hidden_dims=cm_config["ci_fn_hidden_dims"],
+            sigmoid_type=cm_config["sigmoid_type"],
+            pretrained_model_output_attr=cm_config["pretrained_model_output_attr"],
+        )
+        component_model.load_state_dict(data["component_model_state"])
+        component_model.to(device)
 
-        return cls(component_model=component_model, target_model=target_model)
+        return cls(component_model=component_model, target_model=target_model, cm_config=cm_config)
 
 
 class MLP(nn.Module):

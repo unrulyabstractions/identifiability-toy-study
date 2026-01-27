@@ -64,25 +64,98 @@ class ModelParams(SchemaClass):
 
 @dataclass
 class SPDConfig(SchemaClass):
-    """Config for Stochastic Parameter Decomposition."""
+    """Config for Stochastic Parameter Decomposition.
+
+    Recommended sweep parameters (in order of importance):
+    1. n_components: 2-4× max(n_functions, max_hidden_width)
+       - For 2→3→1 network: [6, 10, 15, 20]
+       - For multi-gate: [10, 20, 30, 40]
+
+    2. importance_coeff: Critical for sparsity (g values)
+       - Too low → all g≈1 (no sparsity), too high → all g→0
+       - Sweep: [1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3]
+
+    3. steps: Training duration (100 is too few!)
+       - Minimum: 5000 for small models
+       - Recommended: 10000-30000 for proper convergence
+
+    4. importance_p (pnorm): Shape of sparsity penalty
+       - p=0.5: extreme sparsity, p=1.0: L1, p=2.0: L2 (softer)
+    """
 
     # Number of components per module
-    n_components: int = 10
+    # Rule of thumb: 2-4x max(n_functions, max_hidden_width)
+    n_components: int = 20  # Increased default for better decomposition
 
-    # Training - optimized for M4 Max with 48GB (MPS)
-    steps: int = 100  # Reduced from 1000 for faster iteration
+    # Training settings
+    steps: int = 10000  # Increased from 100 - need enough for convergence
     batch_size: int = 4096  # Large batch for MPS throughput
     eval_batch_size: int = 4096
     n_eval_steps: int = 10
-    learning_rate: float = 5e-3  # Higher LR for larger batches
+    learning_rate: float = 1e-3  # Standard Adam LR with cosine schedule
 
     # Data generation
     feature_probability: float = 0.5
     data_generation_type: str = "at_least_zero_active"
 
     # Loss coefficients
-    importance_coeff: float = 3e-3
+    importance_coeff: float = 1e-4  # Key tuning param for sparsity
+    importance_p: float = 0.5  # pnorm: 0.5=extreme, 1.0=L1, 2.0=L2
     recon_coeff: float = 1.0
+
+    # Analysis settings (for post-training clustering)
+    activation_threshold: float = 0.5  # Threshold for "active" component
+    n_clusters: Optional[int] = None  # Auto-detect if None
+
+    def get_config_id(self) -> str:
+        """Short ID for this config based on key params."""
+        return f"c{self.n_components}_s{self.steps}_i{self.importance_coeff:.0e}_p{self.importance_p}"
+
+
+def generate_spd_sweep_configs(
+    base_config: "SPDConfig" = None,
+    n_components_list: list[int] = None,
+    importance_coeff_list: list[float] = None,
+    steps_list: list[int] = None,
+    importance_p_list: list[float] = None,
+) -> list["SPDConfig"]:
+    """
+    Generate multiple SPD configs for parameter sweep.
+
+    Args:
+        base_config: Base config to modify (uses defaults if None)
+        n_components_list: List of n_components values to try
+        importance_coeff_list: List of importance_coeff values to try
+        steps_list: List of steps values to try
+        importance_p_list: List of importance_p (pnorm) values to try
+
+    Returns:
+        List of SPDConfig objects for sweep
+    """
+    from itertools import product
+    import copy
+
+    if base_config is None:
+        base_config = SPDConfig()
+
+    # Default sweep values if not specified
+    n_components_list = n_components_list or [base_config.n_components]
+    importance_coeff_list = importance_coeff_list or [base_config.importance_coeff]
+    steps_list = steps_list or [base_config.steps]
+    importance_p_list = importance_p_list or [base_config.importance_p]
+
+    configs = []
+    for n_comp, imp_coeff, steps, imp_p in product(
+        n_components_list, importance_coeff_list, steps_list, importance_p_list
+    ):
+        cfg = copy.deepcopy(base_config)
+        cfg.n_components = n_comp
+        cfg.importance_coeff = imp_coeff
+        cfg.steps = steps
+        cfg.importance_p = imp_p
+        configs.append(cfg)
+
+    return configs
 
 
 @dataclass
@@ -397,6 +470,9 @@ class TrialSetup(SchemaClass):
         default_factory=IdentifiabilityConstraints
     )
     spd_config: SPDConfig = field(default_factory=SPDConfig)
+    # Optional: list of additional SPD configs to run (for parameter sweeps)
+    # If provided, SPD runs for each config and stores results per config_id
+    spd_sweep_configs: Optional[list[SPDConfig]] = None
     faithfulness_config: FaithfulnessConfig = field(default_factory=FaithfulnessConfig)
     parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
 
@@ -442,8 +518,11 @@ class TrialResult(SchemaClass):
 
     # Models stored at runtime (saved as model.pt, not in JSON)
     model: Optional["MLP"] = None
-    decomposed_model: Optional["DecomposedMLP"] = None  # Full multi-gate model
-    spd_subcircuit_estimate: Optional[Any] = None  # SPD-based subcircuit clustering result
+    decomposed_model: Optional["DecomposedMLP"] = None  # Full multi-gate model (primary config)
+    spd_subcircuit_estimate: Optional[Any] = None  # SPD-based subcircuit clustering (primary config)
+    # Multi-config SPD sweep results: maps config_id -> DecomposedMLP/estimate
+    decomposed_models_sweep: dict[str, "DecomposedMLP"] = field(default_factory=dict)
+    spd_subcircuit_estimates_sweep: dict[str, Any] = field(default_factory=dict)
     subcircuits: list = field(default_factory=list)
     subcircuit_structure_analysis: list = field(default_factory=list)
     # Maps gate_name -> DecomposedMLP for full single-gate model (saved separately)
