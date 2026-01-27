@@ -344,6 +344,10 @@ def calculate_intervention_effect(
     intervention: Intervention,
     y_target: torch.Tensor,
     y_proxy: torch.Tensor,
+    target_activations: list = None,
+    proxy_activations: list = None,
+    original_target_activations: list = None,
+    original_proxy_activations: list = None,
 ) -> InterventionEffect:
     """Calculate the effect of an intervention by comparing target and proxy outputs."""
     bit_target = torch.round(y_target)
@@ -359,7 +363,34 @@ def calculate_intervention_effect(
         logit_similarity=logit_similarity,
         bit_similarity=bit_similarity,
         best_similarity=best_similarity,
+        target_activations=target_activations,
+        proxy_activations=proxy_activations,
+        original_target_activations=original_target_activations,
+        original_proxy_activations=original_proxy_activations,
     )
+
+
+def _sample_from_value_range(shape, value_range, device):
+    """Sample uniformly from value_range (single or union of ranges)."""
+    is_union = isinstance(value_range[0], (list, tuple))
+    if not is_union:
+        min_val, max_val = value_range
+        return torch.empty(shape, device=device).uniform_(min_val, max_val)
+    else:
+        # Union of ranges: sample uniformly across all ranges
+        ranges = value_range
+        widths = torch.tensor([r[1] - r[0] for r in ranges])
+        probs = widths / widths.sum()
+        # Vectorized sampling: choose range for each element
+        n_elements = int(np.prod(shape))
+        range_choices = torch.multinomial(probs, n_elements, replacement=True)
+        result = torch.empty(n_elements, device=device)
+        for i, r in enumerate(ranges):
+            mask = range_choices == i
+            count = mask.sum().item()
+            if count > 0:
+                result[mask] = torch.empty(count, device=device).uniform_(r[0], r[1])
+        return result.view(shape)
 
 
 def calculate_patches_causal_effect(
@@ -373,11 +404,14 @@ def calculate_patches_causal_effect(
     value_range: Optional[list] = None,
 ) -> dict[str, list[InterventionEffect]]:
     """
-    Calculate causal effects for a list of patches.
+    Calculate causal effects for a list of patches (BATCHED for performance).
+
+    Instead of running n_interventions forward passes per patch, this batches
+    all interventions for each patch into a single forward pass.
 
     Args:
         patches: List of PatchShape objects to intervene on
-        x: Input data
+        x: Input data [N, input_dim]
         target: Target model (full model)
         proxy: Proxy model (subcircuit)
         n_interventions_per_patch: Number of random interventions per patch
@@ -387,24 +421,104 @@ def calculate_patches_causal_effect(
     Returns:
         Dict mapping patch string repr to list of InterventionEffect
     """
+    if value_range is None:
+        value_range = [-1, 1]
+
+    N = x.shape[0]
+    n_ivs = n_interventions_per_patch
+
+    # Compute original activations (without intervention) for two-value display in viz
+    with torch.inference_mode():
+        original_target_acts = target(x, return_activations=True)
+        original_proxy_acts = proxy(x, return_activations=True)
+
     if out_circuit:
-        y_proxy = proxy(x)
+        # For out_circuit, proxy output is computed once without intervention
+        proxy_acts_base = original_proxy_acts
+        y_proxy_base = proxy_acts_base[-1]
 
     intervention_results = {}
+
     for patch in patches:
-        interventions = Intervention.create_random_interventions(
-            patch,
-            n_interventions=n_interventions_per_patch,
-            device=device,
-            value_range=value_range,
+        k = len(patch.indices) if patch.indices else 1
+
+        # Create batched intervention values: [n_ivs, k]
+        batched_values = _sample_from_value_range((n_ivs, k), value_range, device)
+
+        # Expand x from [N, input_dim] to [n_ivs * N, input_dim]
+        x_expanded = x.repeat(n_ivs, 1)  # [n_ivs * N, input_dim]
+
+        # Expand intervention values: each intervention applies to N consecutive samples
+        # Shape: [n_ivs * N, k] - repeat each intervention value N times
+        values_expanded = batched_values.repeat_interleave(N, dim=0)
+
+        # Create single batched intervention
+        batched_patch = PatchShape(
+            layers=patch.layers, indices=patch.indices, axis=patch.axis
         )
-        patch_results = []
-        for iv in interventions:
-            y_target = target(x, intervention=iv)
+        batched_iv = Intervention(patches={batched_patch: ("add", values_expanded)})
+
+        # Run single forward pass for all interventions
+        with torch.inference_mode():
+            target_acts_batched = target(
+                x_expanded, intervention=batched_iv, return_activations=True
+            )
+            y_target_batched = target_acts_batched[-1]  # [n_ivs * N, output_dim]
+
             if not out_circuit:
-                y_proxy = proxy(x, intervention=iv)
-            patch_results.append(calculate_intervention_effect(iv, y_target, y_proxy))
+                proxy_acts_batched = proxy(
+                    x_expanded, intervention=batched_iv, return_activations=True
+                )
+                y_proxy_batched = proxy_acts_batched[-1]
+
+        # Reshape outputs: [n_ivs * N, ...] -> [n_ivs, N, ...]
+        y_target_per_iv = y_target_batched.view(n_ivs, N, -1)
+        if not out_circuit:
+            y_proxy_per_iv = y_proxy_batched.view(n_ivs, N, -1)
+
+        # Reshape activations per layer
+        target_acts_per_iv = [
+            a.view(n_ivs, N, -1) for a in target_acts_batched
+        ]
+        if not out_circuit:
+            proxy_acts_per_iv = [
+                a.view(n_ivs, N, -1) for a in proxy_acts_batched
+            ]
+
+        # Build per-intervention results
+        patch_results = []
+        for i in range(n_ivs):
+            # Extract this intervention's values
+            iv_values = batched_values[i]  # [k]
+            single_iv = Intervention(
+                patches={batched_patch: ("add", iv_values.unsqueeze(0))}
+            )
+
+            # Extract outputs for this intervention (mean over samples)
+            y_target_i = y_target_per_iv[i]  # [N, output_dim]
+            if out_circuit:
+                y_proxy_i = y_proxy_base
+                proxy_acts_i = [a for a in proxy_acts_base]
+            else:
+                y_proxy_i = y_proxy_per_iv[i]
+                proxy_acts_i = [a[i] for a in proxy_acts_per_iv]
+
+            target_acts_i = [a[i] for a in target_acts_per_iv]
+
+            patch_results.append(
+                calculate_intervention_effect(
+                    single_iv,
+                    y_target_i,
+                    y_proxy_i,
+                    target_activations=target_acts_i,
+                    proxy_activations=proxy_acts_i,
+                    original_target_activations=original_target_acts,
+                    original_proxy_activations=original_proxy_acts,
+                )
+            )
+
         intervention_results[str(patch)] = patch_results
+
     return intervention_results
 
 
@@ -446,13 +560,24 @@ def _create_intervention_samples(
         bit_agree = round(y_target_val) == round(y_proxy_val)
 
         # Convert tensor activations to lists for JSON serialization
+        # Use MEAN across batch for efficiency - visualization shows representative values
         gate_acts_list = []
         subcircuit_acts_list = []
+        original_gate_acts_list = []
+        original_subcircuit_acts_list = []
         if effect.target_activations is not None:
-            gate_acts_list = [a.squeeze(0).tolist() for a in effect.target_activations]
+            gate_acts_list = [a.mean(dim=0).tolist() for a in effect.target_activations]
         if effect.proxy_activations is not None:
             subcircuit_acts_list = [
-                a.squeeze(0).tolist() for a in effect.proxy_activations
+                a.mean(dim=0).tolist() for a in effect.proxy_activations
+            ]
+        if effect.original_target_activations is not None:
+            original_gate_acts_list = [
+                a.mean(dim=0).tolist() for a in effect.original_target_activations
+            ]
+        if effect.original_proxy_activations is not None:
+            original_subcircuit_acts_list = [
+                a.mean(dim=0).tolist() for a in effect.original_proxy_activations
             ]
 
         samples.append(
@@ -468,6 +593,8 @@ def _create_intervention_samples(
                 mse=mse,
                 gate_activations=gate_acts_list,
                 subcircuit_activations=subcircuit_acts_list,
+                original_gate_activations=original_gate_acts_list,
+                original_subcircuit_activations=original_subcircuit_acts_list,
             )
         )
 
@@ -738,7 +865,9 @@ def calculate_faithfulness_metrics(
 
             # Run FULL MODEL with intervention and capture activations
             with torch.inference_mode():
-                intervened_acts = model(pair.x_clean, intervention=iv, return_activations=True)
+                intervened_acts = model(
+                    pair.x_clean, intervention=iv, return_activations=True
+                )
                 y_intervened = intervened_acts[-1]  # Last activation is output
 
             denominator = pair.y_clean - pair.y_corrupted
@@ -746,9 +875,13 @@ def calculate_faithfulness_metrics(
 
             faith_score = None
             if score_type == "necessity":
-                faith_score = ((y_intervened - pair.y_corrupted) / denominator).mean().item()
+                faith_score = (
+                    ((pair.y_clean - y_intervened) / denominator).mean().item()
+                )
             if score_type == "sufficiency":
-                faith_score = ((pair.y_clean - y_intervened) / denominator).mean().item()
+                faith_score = (
+                    ((y_intervened - pair.y_corrupted) / denominator).mean().item()
+                )
 
             assert faith_score is not None, f"Unknown score_type: {score_type}"
 

@@ -136,6 +136,12 @@ def load_tensors(trial_dir: str | Path, device: str = "cpu") -> dict:
             for label, acts in data["canonical_activations"].items()
         }
 
+    if "mean_activations_by_range" in data:
+        result["mean_activations_by_range"] = {
+            label: [a.to(device) for a in acts]
+            for label, acts in data["mean_activations_by_range"].items()
+        }
+
     if "layer_weights" in data:
         result["layer_weights"] = [w.to(device) for w in data["layer_weights"]]
 
@@ -214,6 +220,7 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
         trial.test_y_pred = tensors.get("test_y_pred")
         trial.activations = tensors.get("activations")
         trial.canonical_activations = tensors.get("canonical_activations")
+        trial.mean_activations_by_range = tensors.get("mean_activations_by_range")
         trial.layer_weights = tensors.get("layer_weights")
 
         # Load circuits

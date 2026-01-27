@@ -118,6 +118,11 @@ def _save_tensors(trial, trial_dir: Path, logger=None):
             label: [a.cpu() for a in acts]
             for label, acts in trial.canonical_activations.items()
         }
+    if trial.mean_activations_by_range is not None:
+        data["mean_activations_by_range"] = {
+            label: [a.cpu() for a in acts]
+            for label, acts in trial.mean_activations_by_range.items()
+        }
     if trial.layer_weights is not None:
         data["layer_weights"] = [w.cpu() for w in trial.layer_weights]
 

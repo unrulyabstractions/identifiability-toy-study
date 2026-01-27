@@ -28,8 +28,8 @@ from .common.schemas import (
 from .common.utils import set_seeds
 from .parallelization import ParallelTasks
 from .parameter_decomposition import decompose_mlp
-from .spd_subcircuits import estimate_spd_subcircuits
 from .profiler import profile
+from .spd_subcircuits import estimate_spd_subcircuits
 
 
 def _get_eval_device(parallel_config: ParallelConfig, default_device: str) -> str:
@@ -114,6 +114,25 @@ def run_trial(
             label: [a.clone() for a in model(inp, return_activations=True)]
             for label, inp in canonical_inputs.items()
         }
+
+        # Pre-compute mean activations for different input ranges (for visualization)
+        # This shows how the network behaves on average for different input distributions
+        n_samples = 100
+        input_ranges = {
+            "0_1": (0.0, 1.0),
+            "-1_0": (-1.0, 0.0),
+            "-2_2": (-2.0, 2.0),
+            "-100_100": (-100.0, 100.0),
+        }
+        trial_result.mean_activations_by_range = {}
+        for label, (low, high) in input_ranges.items():
+            # Generate random inputs in the range
+            random_inputs = torch.rand(n_samples, input_size, device=device) * (high - low) + low
+            # Get activations for all samples
+            all_activations = model(random_inputs, return_activations=True)
+            # Compute mean per layer (mean over batch dimension)
+            mean_activations = [a.mean(dim=0, keepdim=True).clone() for a in all_activations]
+            trial_result.mean_activations_by_range[label] = mean_activations
 
     # Store layer weights for visualization
     trial_result.layer_weights = [
@@ -202,8 +221,6 @@ def run_trial(
         bit_gate = bit_pred[..., [gate_idx]]
 
         # ===== Calculate Gate Metrics (Batched) =====
-        # Use batched GPU evaluation for all subcircuits at once
-        # This is 6-12x faster than sequential evaluation
         update_status(f"STARTED_GATE_METRICS:{gate_idx}")
         gate_acc = calculate_match_rate(bit_gate, bit_gate_gt).item()
 
@@ -302,7 +319,7 @@ def run_trial(
             return calculate_robustness_metrics(
                 subcircuit=subcircuit_model,
                 full_model=gate_model,
-                n_samples_per_base=100,
+                n_samples_per_base=200,  # Increased for better visualization
                 device=device,
             )
 

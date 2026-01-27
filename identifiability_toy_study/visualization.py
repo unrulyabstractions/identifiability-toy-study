@@ -117,11 +117,51 @@ _layout_cache = GraphLayoutCache()
 # ------------------ HELPERS ------------------
 
 
-def _activation_to_color(val: float, vmin: float, vmax: float) -> tuple:
-    """RdYlGn colormap: red=neg, yellow=0, green=pos."""
-    normalized = (val - vmin) / (vmax - vmin)
-    normalized = min(max(normalized, 0), 1)
-    return plt.cm.RdYlGn(normalized)
+def _activation_to_color(val: float, vmin: float = -2, vmax: float = 2) -> tuple:
+    """
+    Pastel color gradient for activation values:
+    - 0.5 = beige/cream
+    - 1.0 = light mint green
+    - >1.0 = green -> teal (more saturated)
+    - 0.0 = light peach/orange
+    - -1.0 = coral/salmon
+    - <-1.0 = deeper coral -> rose
+    """
+    # Pastel colors (RGB tuples, 0-1 range)
+    colors = {
+        "deep_rose": (0.85, 0.45, 0.55),      # < -1.0
+        "coral": (0.95, 0.65, 0.60),           # -1.0
+        "peach": (0.98, 0.82, 0.70),           # 0.0
+        "cream": (0.98, 0.95, 0.80),           # 0.5
+        "mint": (0.75, 0.92, 0.78),            # 1.0
+        "teal": (0.55, 0.82, 0.78),            # > 1.0
+    }
+
+    def lerp(c1, c2, t):
+        return tuple(c1[i] + (c2[i] - c1[i]) * t for i in range(3))
+
+    if val <= -1.0:
+        # Deep rose to coral
+        t = min(1.0, (-1.0 - val) / 1.0)  # How far below -1
+        rgb = lerp(colors["coral"], colors["deep_rose"], t)
+    elif val <= 0.0:
+        # Coral to peach
+        t = (val + 1.0) / 1.0  # -1 -> 0 maps to 0 -> 1
+        rgb = lerp(colors["coral"], colors["peach"], t)
+    elif val <= 0.5:
+        # Peach to cream
+        t = val / 0.5  # 0 -> 0.5 maps to 0 -> 1
+        rgb = lerp(colors["peach"], colors["cream"], t)
+    elif val <= 1.0:
+        # Cream to mint
+        t = (val - 0.5) / 0.5  # 0.5 -> 1 maps to 0 -> 1
+        rgb = lerp(colors["cream"], colors["mint"], t)
+    else:
+        # Mint to teal
+        t = min(1.0, (val - 1.0) / 1.0)  # How far above 1
+        rgb = lerp(colors["mint"], colors["teal"], t)
+
+    return (*rgb, 1.0)
 
 
 def _text_color_for_background(bg_color: tuple) -> str:
@@ -169,6 +209,212 @@ def _get_spd_component_weights(decomposed: DecomposedMLP) -> np.ndarray | None:
 
     weights = np.array(weights)
     return weights / weights.max() if weights.max() > 0 else weights
+
+
+# ------------------ REUSABLE INTERVENED CIRCUIT DRAWING ------------------
+
+
+def draw_intervened_circuit(
+    ax,
+    layer_sizes: list[int],
+    weights: list[np.ndarray],
+    current_activations: list[list[float]],
+    original_activations: list[list[float]] | None = None,
+    intervened_nodes: set[str] | None = None,
+    circuit: Circuit | None = None,
+    title: str | None = None,
+    node_size: int = 400,
+    show_edge_labels: bool = True,
+):
+    """
+    Draw a circuit showing intervention effects with pastel colors.
+
+    Border colors for node types:
+    - Regular nodes: thin dark grey
+    - Affected nodes (changed): medium purple border
+    - Intervened nodes: thick magenta border
+
+    Edge colors: warm brown for positive, cool slate for negative (subtle)
+    """
+    if intervened_nodes is None:
+        intervened_nodes = set()
+
+    if circuit is None:
+        circuit = Circuit.full(layer_sizes)
+
+    G = nx.DiGraph()
+    pos = _layout_cache.get_positions(tuple(layer_sizes))
+
+    # Build nodes
+    node_data = {}
+
+    for layer_idx, n_nodes in enumerate(layer_sizes):
+        for node_idx in range(n_nodes):
+            name = f"({layer_idx},{node_idx})"
+            G.add_node(name)
+
+            # Get current activation value
+            current_val = None
+            if layer_idx < len(current_activations):
+                layer = current_activations[layer_idx]
+                if isinstance(layer, (list, tuple)) and node_idx < len(layer):
+                    v = layer[node_idx]
+                    if isinstance(v, (int, float)):
+                        current_val = float(v)
+
+            # Get original activation value
+            original_val = None
+            if original_activations and layer_idx < len(original_activations):
+                layer = original_activations[layer_idx]
+                if isinstance(layer, (list, tuple)) and node_idx < len(layer):
+                    v = layer[node_idx]
+                    if isinstance(v, (int, float)):
+                        original_val = float(v)
+
+            # Compute color from current value (uses new pastel gradient)
+            if current_val is not None:
+                color = _activation_to_color(current_val)
+                text_color = _text_color_for_background(color)
+            else:
+                color = (0.92, 0.92, 0.92, 1.0)
+                text_color = "black"
+
+            # Check if value changed
+            is_intervened = name in intervened_nodes
+            value_changed = (
+                original_val is not None and
+                current_val is not None and
+                abs(current_val - original_val) > 0.01
+            )
+            is_affected = value_changed and not is_intervened
+
+            node_data[name] = {
+                "color": color,
+                "current_val": current_val,
+                "original_val": original_val,
+                "text_color": text_color,
+                "is_intervened": is_intervened,
+                "is_affected": is_affected,
+                "value_changed": value_changed,
+            }
+
+    # Build edges with weights and track sign
+    edges = []
+    edge_labels = {}
+    edge_weights = {}
+    edge_signs = {}  # Track positive/negative
+
+    for layer_idx, mask in enumerate(circuit.edge_masks):
+        if layer_idx >= len(weights):
+            continue
+        w = weights[layer_idx]
+
+        for out_idx, row in enumerate(mask):
+            for in_idx, active in enumerate(row):
+                if active:
+                    e = (f"({layer_idx},{in_idx})", f"({layer_idx + 1},{out_idx})")
+                    edges.append(e)
+                    G.add_edge(e[0], e[1])
+
+                    if out_idx < w.shape[0] and in_idx < w.shape[1]:
+                        weight_val = float(w[out_idx, in_idx])
+                        edge_labels[e] = f"{weight_val:.2f}"
+                        edge_weights[e] = abs(weight_val)
+                        edge_signs[e] = weight_val >= 0
+
+    # Compute edge widths and colors
+    if edge_weights:
+        max_w = max(edge_weights.values()) if edge_weights.values() else 1.0
+        max_w = max(max_w, 0.01)
+        edge_widths = [0.5 + 2.0 * (edge_weights.get(e, 0) / max_w) for e in edges]
+    else:
+        edge_widths = [1.0] * len(edges)
+
+    # Subtle edge colors: warm for positive, cool for negative
+    edge_colors = [
+        "#8B7355" if edge_signs.get(e, True) else "#5F6A7D"  # warm brown vs cool slate
+        for e in edges
+    ]
+
+    # Categorize nodes by border type
+    regular_nodes = [n for n in G.nodes()
+                     if not node_data[n]["is_intervened"] and not node_data[n]["is_affected"]]
+    affected_nodes = [n for n in G.nodes() if node_data[n]["is_affected"]]
+    intervened_list = [n for n in G.nodes() if node_data[n]["is_intervened"]]
+
+    # Draw regular nodes (thin dark grey border)
+    if regular_nodes:
+        colors = [node_data[n]["color"] for n in regular_nodes]
+        nx.draw_networkx_nodes(
+            G, pos, nodelist=regular_nodes, node_color=colors,
+            node_size=node_size, ax=ax, edgecolors="#555555", linewidths=0.8
+        )
+
+    # Draw affected nodes (medium purple border - good contrast)
+    if affected_nodes:
+        colors = [node_data[n]["color"] for n in affected_nodes]
+        nx.draw_networkx_nodes(
+            G, pos, nodelist=affected_nodes, node_color=colors,
+            node_size=node_size, ax=ax, edgecolors="#7B68EE", linewidths=2.0
+        )
+
+    # Draw intervened nodes (thick magenta border - high contrast)
+    if intervened_list:
+        colors = [node_data[n]["color"] for n in intervened_list]
+        nx.draw_networkx_nodes(
+            G, pos, nodelist=intervened_list, node_color=colors,
+            node_size=node_size, ax=ax, edgecolors="#C71585", linewidths=2.5
+        )
+
+    # Draw edges with color by sign
+    if edges:
+        nx.draw_networkx_edges(
+            G, pos, edgelist=edges, edge_color=edge_colors,
+            width=edge_widths, arrows=True, arrowstyle="-|>",
+            arrowsize=8, connectionstyle="arc3,rad=0.1", ax=ax
+        )
+
+    # Draw edge labels
+    if show_edge_labels and edge_labels:
+        nx.draw_networkx_edge_labels(
+            G, pos, edge_labels=edge_labels, font_size=4,
+            font_color="#666666", alpha=0.7, label_pos=0.3,
+            bbox=dict(boxstyle="round,pad=0.1", facecolor="white",
+                      alpha=0.6, edgecolor="none"), ax=ax
+        )
+
+    # Draw node labels - smaller text, tighter spacing
+    for node, (x, y) in pos.items():
+        data = node_data[node]
+        current_val = data["current_val"]
+        original_val = data["original_val"]
+        text_color = data["text_color"]
+        value_changed = data["value_changed"]
+
+        if current_val is not None:
+            if value_changed:
+                # Current value slightly above, original below (use va for tight control)
+                ax.text(
+                    x, y, f"{current_val:.2f}",
+                    ha="center", va="bottom",
+                    fontsize=5, fontweight="bold", color=text_color
+                )
+                ax.text(
+                    x, y, f"({original_val:.2f})",
+                    ha="center", va="top",
+                    fontsize=4, color=text_color, alpha=0.5
+                )
+            else:
+                # Just current value centered
+                ax.text(
+                    x, y, f"{current_val:.2f}",
+                    ha="center", va="center",
+                    fontsize=5, fontweight="bold", color=text_color
+                )
+
+    if title:
+        ax.set_title(title, fontsize=8, fontweight="bold")
+    ax.axis("off")
 
 
 # ------------------ CIRCUIT GRAPH ------------------
@@ -543,7 +789,59 @@ def visualize_circuit_activations_from_data(
 
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
-    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def visualize_circuit_activations_mean(
+    mean_activations_by_range: dict[str, list[torch.Tensor]],
+    layer_weights: list[torch.Tensor],
+    circuit: Circuit,
+    output_dir: str,
+    filename: str = "circuit_activations_mean.png",
+    gate_name: str = "",
+) -> str:
+    """
+    1x4 grid: mean circuit activations for different input ranges.
+
+    Shows how the network behaves on average for inputs from:
+    - [0, 1]: Normal operating range
+    - [-1, 0]: Negative inputs
+    - [-2, 2]: Extended range
+    - [-100, 100]: Far out-of-distribution
+
+    Uses pre-computed mean activations - NO model execution.
+    """
+    labels_map = {
+        "0_1": "[0, 1]",
+        "-1_0": "[-1, 0]",
+        "-2_2": "[-2, 2]",
+        "-100_100": "[-100, 100]",
+    }
+
+    fig, axes = plt.subplots(1, 4, figsize=(24, 6))
+    weights = [w.numpy() for w in layer_weights]
+
+    for i, (key, label) in enumerate(labels_map.items()):
+        activations = mean_activations_by_range.get(key, [])
+        if activations:
+            _draw_circuit_from_data(
+                axes[i], activations, circuit, weights, f"Input Range: {label}"
+            )
+        else:
+            axes[i].text(0.5, 0.5, "No data", ha="center", va="center")
+            axes[i].axis("off")
+
+    if gate_name:
+        fig.suptitle(
+            f"{gate_name} - Mean Activations by Input Range", fontsize=14, fontweight="bold"
+        )
+    plt.tight_layout()
+
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, filename)
+    plt.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return path
 
@@ -551,53 +849,13 @@ def visualize_circuit_activations_from_data(
 # ------------------ ROBUSTNESS VISUALIZATION ------------------
 
 
-def _bin_samples_by_magnitude(
-    samples: list, n_bins: int = 20, log_scale: bool = False
-) -> tuple[list[float], list[float], list[float], list[float], list[float]]:
-    """Bin samples by noise magnitude and compute stats per bin."""
-    if not samples:
-        return [], [], [], [], []
-
-    sorted_samples = sorted(samples, key=lambda s: s.noise_magnitude)
-    magnitudes = [s.noise_magnitude for s in sorted_samples]
-
-    min_mag, max_mag = min(magnitudes), max(magnitudes)
-    if log_scale and min_mag > 0:
-        bin_edges = np.logspace(np.log10(min_mag), np.log10(max_mag), n_bins + 1)
-    else:
-        bin_edges = np.linspace(min_mag, max_mag, n_bins + 1)
-
-    bin_centers = []
-    gate_accs = []
-    sc_accs = []
-    bit_agrees = []
-    mse_means = []
-
-    for i in range(n_bins):
-        bin_samples = [
-            s
-            for s in sorted_samples
-            if bin_edges[i] <= s.noise_magnitude < bin_edges[i + 1]
-        ]
-        if not bin_samples:
-            continue
-        bin_centers.append((bin_edges[i] + bin_edges[i + 1]) / 2)
-        gate_accs.append(
-            sum(1 for s in bin_samples if s.gate_correct) / len(bin_samples)
-        )
-        sc_accs.append(
-            sum(1 for s in bin_samples if s.subcircuit_correct) / len(bin_samples)
-        )
-        bit_agrees.append(
-            sum(1 for s in bin_samples if s.agreement_bit) / len(bin_samples)
-        )
-        mse_means.append(sum(s.mse for s in bin_samples) / len(bin_samples))
-
-    return bin_centers, gate_accs, sc_accs, bit_agrees, mse_means
-
-
 def _generate_robustness_circuit_figure(args):
-    """Worker function for parallel robustness circuit generation."""
+    """Worker function for parallel robustness circuit generation.
+
+    Uses draw_intervened_circuit for consistent visualization.
+    Input nodes are marked as intervened since robustness tests vary inputs.
+    Shows original (canonical) activations below current values for comparison.
+    """
     (
         samples,
         circuit_dict,
@@ -608,11 +866,19 @@ def _generate_robustness_circuit_figure(args):
         gt,
         output_path,
         n_samples,
+        base_activations,
     ) = args
 
     # Reconstruct circuits from dicts
     circuit = Circuit.from_dict(circuit_dict)
     full_circuit = Circuit.from_dict(full_circuit_dict)
+
+    # Get layer sizes from circuit
+    layer_sizes = [len(nm) for nm in circuit.node_masks]
+
+    # Input nodes are intervened (layer 0)
+    input_size = layer_sizes[0] if layer_sizes else 2
+    intervened_nodes = {f"(0,{i})" for i in range(input_size)}
 
     fig, axes = plt.subplots(n_samples, 2, figsize=(8, n_samples * 3))
     if n_samples == 1:
@@ -623,51 +889,43 @@ def _generate_robustness_circuit_figure(args):
             for col in range(2):
                 axes[i, col].set_facecolor("#FFEEEE")
 
-        # Convert stored list activations back to tensors
-        sc_acts = [
-            torch.tensor(a).unsqueeze(0) for a in sample["subcircuit_activations"]
-        ]
-        full_acts = [torch.tensor(a).unsqueeze(0) for a in sample["gate_activations"]]
+        # Get activations as flat lists
+        sc_acts = sample["subcircuit_activations"]
+        full_acts = sample["gate_activations"]
 
-        # Left: subcircuit
-        vmin, vmax = _symmetric_range(sc_acts)
-        G, pos, colors, labels, text_colors, edge_labels, edge_w = _build_graph_fast(
-            sc_acts, circuit, weights, vmin, vmax
-        )
-        _draw_graph_with_output_highlight(
+        # Left: subcircuit (use base_activations as original for comparison)
+        draw_intervened_circuit(
             axes[i, 0],
-            G,
-            pos,
-            colors,
-            labels,
-            text_colors,
-            edge_labels,
-            edge_w,
-            sample["subcircuit_correct"],
+            layer_sizes=layer_sizes,
+            weights=weights,
+            current_activations=sc_acts,
+            original_activations=base_activations,
+            intervened_nodes=intervened_nodes,
+            circuit=circuit,
+            title=None,
+            node_size=500,
+            show_edge_labels=True,
         )
 
-        # Right: full model
-        vmin, vmax = _symmetric_range(full_acts)
-        G, pos, colors, labels, text_colors, edge_labels, edge_w = _build_graph_fast(
-            full_acts, full_circuit, weights, vmin, vmax
-        )
-        _draw_graph_with_output_highlight(
+        # Right: full model (use base_activations as original for comparison)
+        draw_intervened_circuit(
             axes[i, 1],
-            G,
-            pos,
-            colors,
-            labels,
-            text_colors,
-            edge_labels,
-            edge_w,
-            sample["gate_correct"],
+            layer_sizes=layer_sizes,
+            weights=weights,
+            current_activations=full_acts,
+            original_activations=base_activations,
+            intervened_nodes=intervened_nodes,
+            circuit=full_circuit,
+            title=None,
+            node_size=500,
+            show_edge_labels=True,
         )
 
         if not sample["agreement_bit"]:
             axes[i, 0].text(
                 0.02,
                 0.98,
-                "⚠ DISAGREE",
+                "DISAGREE",
                 transform=axes[i, 0].transAxes,
                 fontsize=8,
                 color="red",
@@ -689,7 +947,7 @@ def _generate_robustness_circuit_figure(args):
     )
     plt.tight_layout()
 
-    plt.savefig(output_path, dpi=100)  # Lower DPI for faster generation
+    plt.savefig(output_path, dpi=300)
     plt.close(fig)
     return output_path
 
@@ -700,6 +958,7 @@ def visualize_robustness_circuit_samples(
     layer_weights: list[torch.Tensor],
     output_dir: str,
     n_samples_per_grid: int = 8,
+    canonical_activations: dict[str, list] | None = None,
 ) -> dict[str, str]:
     """Visualize circuit diagrams comparing subcircuit vs full model under noise."""
     circuit_viz_dir = os.path.join(output_dir, "circuit_viz")
@@ -790,6 +1049,16 @@ def visualize_robustness_circuit_samples(
                 for s in samples
             ]
 
+            # Get canonical activations for this base input (for showing original values)
+            base_acts = None
+            if canonical_activations and base_key in canonical_activations:
+                acts = canonical_activations[base_key]
+                # Convert tensors to lists for pickling
+                if acts and isinstance(acts[0], torch.Tensor):
+                    base_acts = [a.squeeze(0).tolist() for a in acts]
+                else:
+                    base_acts = acts
+
             tasks.append(
                 (
                     sample_dicts,
@@ -801,6 +1070,7 @@ def visualize_robustness_circuit_samples(
                     gt,
                     output_path,
                     n_samples,
+                    base_acts,
                 )
             )
             paths[filename] = output_path
@@ -817,193 +1087,294 @@ def visualize_robustness_circuit_samples(
     return paths
 
 
-def visualize_robustness_summary(
-    robustness: RobustnessMetrics,
-    output_dir: str,
-    gate_name: str = "",
-) -> str:
-    """Visualize robustness summary as a single overview chart."""
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    prefix = f"{gate_name} - " if gate_name else ""
-
-    # Top-left: Noise stats summary
-    ax = axes[0, 0]
-    categories = ["Gate\nAcc", "SC\nAcc", "Bit\nAgree"]
-    values = [
-        robustness.noise_gate_accuracy,
-        robustness.noise_subcircuit_accuracy,
-        robustness.noise_agreement_bit,
-    ]
-    colors = ["steelblue", "coral", "purple"]
-    ax.bar(categories, values, color=colors, alpha=0.8)
-    ax.set_ylim(0, 1.1)
-    ax.set_ylabel("Rate")
-    ax.set_title(
-        f"Noise Summary (MSE: {robustness.noise_mse_mean:.4f})", fontweight="bold"
-    )
-    ax.axhline(y=1.0, color="green", linestyle="--", alpha=0.5)
-    for i, v in enumerate(values):
-        ax.text(i, v + 0.02, f"{v:.1%}", ha="center", fontsize=9)
-
-    # Top-right: OOD stats summary
-    ax = axes[0, 1]
-    values = [
-        robustness.ood_gate_accuracy,
-        robustness.ood_subcircuit_accuracy,
-        robustness.ood_agreement_bit,
-    ]
-    ax.bar(categories, values, color=colors, alpha=0.8)
-    ax.set_ylim(0, 1.1)
-    ax.set_ylabel("Rate")
-    ax.set_title(f"OOD Summary (MSE: {robustness.ood_mse_mean:.4f})", fontweight="bold")
-    ax.axhline(y=1.0, color="green", linestyle="--", alpha=0.5)
-    for i, v in enumerate(values):
-        ax.text(i, v + 0.02, f"{v:.1%}", ha="center", fontsize=9)
-
-    # Bottom-left: Overall comparison
-    ax = axes[1, 0]
-    x = np.arange(3)
-    width = 0.35
-    noise_vals = [
-        robustness.noise_gate_accuracy,
-        robustness.noise_subcircuit_accuracy,
-        robustness.noise_agreement_bit,
-    ]
-    ood_vals = [
-        robustness.ood_gate_accuracy,
-        robustness.ood_subcircuit_accuracy,
-        robustness.ood_agreement_bit,
-    ]
-    ax.bar(
-        x - width / 2, noise_vals, width, label="Noise", color="steelblue", alpha=0.8
-    )
-    ax.bar(x + width / 2, ood_vals, width, label="OOD", color="coral", alpha=0.8)
-    ax.set_xticks(x)
-    ax.set_xticklabels(["Gate Acc", "SC Acc", "Agreement"])
-    ax.set_ylim(0, 1.1)
-    ax.set_ylabel("Rate")
-    ax.set_title("Noise vs OOD Comparison", fontweight="bold")
-    ax.legend()
-    ax.axhline(y=1.0, color="green", linestyle="--", alpha=0.5)
-
-    # Bottom-right: Overall robustness score
-    ax = axes[1, 1]
-    score = robustness.overall_robustness
-    ax.pie([score, 1 - score], colors=["green", "#e0e0e0"], startangle=90)
-    ax.text(
-        0, 0, f"{score:.1%}", ha="center", va="center", fontsize=24, fontweight="bold"
-    )
-    ax.set_title("Overall Robustness", fontweight="bold")
-
-    fig.suptitle(f"{prefix}Robustness Analysis", fontsize=14, fontweight="bold")
-    plt.tight_layout()
-
-    os.makedirs(output_dir, exist_ok=True)
-    path = os.path.join(output_dir, "summary.png")
-    plt.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return path
-
-
 def visualize_robustness_curves(
     robustness: RobustnessMetrics,
     output_dir: str,
     gate_name: str = "",
 ) -> dict[str, str]:
-    """Visualize accuracy/agreement curves vs noise magnitude."""
+    """Visualize robustness showing raw output values colored by correctness."""
     paths = {}
     prefix = f"{gate_name} - " if gate_name else ""
 
-    # Per-input breakdown for noise samples
-    with profile("robust_curves.per_input"):
-        base_to_key = {
-            (0.0, 0.0): "0_0",
-            (0.0, 1.0): "0_1",
-            (1.0, 0.0): "1_0",
-            (1.0, 1.0): "1_1",
-        }
+    def _compute_signed_noise(sample):
+        """Compute signed noise value: sum of (perturbed - base) per dimension."""
+        return sum(
+            p - b for p, b in zip(sample.input_values, sample.base_input)
+        )
 
-        samples_by_base = {k: [] for k in base_to_key.values()}
+    def _plot_output_values(ax, samples, x_values, gt_value, x_label_fmt=".2f"):
+        """Plot raw output values colored by correctness (green=correct, red=incorrect)."""
+        if not samples or not x_values:
+            return
+
+        # Sort by x_values
+        sorted_pairs = sorted(zip(x_values, samples), key=lambda p: p[0])
+        sorted_x = [p[0] for p in sorted_pairs]
+        sorted_samples = [p[1] for p in sorted_pairs]
+
+        # Extract outputs and correctness
+        gate_outputs = [s.gate_output for s in sorted_samples]
+        sc_outputs = [s.subcircuit_output for s in sorted_samples]
+        gate_colors = ["#4CAF50" if s.gate_correct else "#E53935" for s in sorted_samples]
+        sc_colors = ["#4CAF50" if s.subcircuit_correct else "#E53935" for s in sorted_samples]
+
+        # Plot gate outputs (circles) and subcircuit outputs (squares)
+        ax.scatter(sorted_x, gate_outputs, s=20, c=gate_colors, alpha=0.7, label="Gate", marker="o", edgecolors="none")
+        ax.scatter(sorted_x, sc_outputs, s=20, c=sc_colors, alpha=0.7, label="SC", marker="s", edgecolors="none")
+
+        # Add horizontal line at ground truth and 0.5 threshold
+        ax.axhline(y=gt_value, color="#333333", linestyle="--", linewidth=1, alpha=0.5, label=f"GT={gt_value:.0f}")
+        ax.axhline(y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+
+        # Add x-axis labels
+        ax.set_xlim(min(sorted_x) - 0.1, max(sorted_x) + 0.1)
+
+    base_to_key = {
+        (0.0, 0.0): "0_0",
+        (0.0, 1.0): "0_1",
+        (1.0, 0.0): "1_0",
+        (1.0, 1.0): "1_1",
+    }
+    input_keys = list(base_to_key.values())  # ["0_0", "0_1", "1_0", "1_1"]
+
+    def _plot_single_model(ax, samples, x_values, gt_value, outputs, correct_flags):
+        """Plot single model outputs colored by correctness."""
+        if not samples or not x_values:
+            return
+        sorted_pairs = sorted(zip(x_values, outputs, correct_flags), key=lambda p: p[0])
+        sorted_x = [p[0] for p in sorted_pairs]
+        sorted_outputs = [p[1] for p in sorted_pairs]
+        sorted_correct = [p[2] for p in sorted_pairs]
+        colors = ["#4CAF50" if c else "#E53935" for c in sorted_correct]
+        ax.scatter(sorted_x, sorted_outputs, s=25, c=colors, alpha=0.7, edgecolors="none")
+        ax.axhline(y=gt_value, color="#333333", linestyle="--", linewidth=1, alpha=0.5)
+        ax.axhline(y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+
+    def _plot_agreement_binned(ax, samples, x_values, n_bins=10):
+        """Plot binned agreement rate and output difference."""
+        if not samples or not x_values:
+            return
+
+        # Create bins
+        x_min, x_max = min(x_values), max(x_values)
+        if x_min == x_max:
+            x_min, x_max = x_min - 0.5, x_max + 0.5
+        bin_edges = np.linspace(x_min, x_max, n_bins + 1)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+        # Compute per-bin statistics
+        agreement_rates = []
+        output_diffs = []
+        bin_counts = []
+
+        for i in range(n_bins):
+            lo, hi = bin_edges[i], bin_edges[i + 1]
+            bin_samples = [
+                (s, x) for s, x in zip(samples, x_values)
+                if lo <= x < hi or (i == n_bins - 1 and x == hi)
+            ]
+            if bin_samples:
+                agrees = [s.agreement_bit for s, _ in bin_samples]
+                diffs = [abs(s.gate_output - s.subcircuit_output) for s, _ in bin_samples]
+                agreement_rates.append(np.mean(agrees))
+                output_diffs.append(np.mean(diffs))
+                bin_counts.append(len(bin_samples))
+            else:
+                agreement_rates.append(np.nan)
+                output_diffs.append(np.nan)
+                bin_counts.append(0)
+
+        # Plot agreement rate (left y-axis)
+        color1 = "#2196F3"
+        ax.bar(bin_centers, agreement_rates, width=(x_max - x_min) / n_bins * 0.8,
+               color=color1, alpha=0.6, label="Agree %")
+        ax.set_ylim(0, 1.1)
+        ax.set_ylabel("Agreement Rate", color=color1, fontsize=8)
+        ax.tick_params(axis="y", labelcolor=color1)
+
+        # Plot output difference (right y-axis)
+        ax2 = ax.twinx()
+        color2 = "#FF5722"
+        ax2.plot(bin_centers, output_diffs, "o-", color=color2, markersize=4,
+                 linewidth=1.5, label="Δ Output")
+        ax2.set_ylim(0, max(0.5, np.nanmax(output_diffs) * 1.2) if output_diffs else 0.5)
+        ax2.set_ylabel("Avg |Δ Output|", color=color2, fontsize=8)
+        ax2.tick_params(axis="y", labelcolor=color2)
+
+    # Per-input breakdown for noise samples (4 rows x 3 cols: SC | Gate | Agreement)
+    with profile("robust_curves.per_input"):
+        samples_by_base = {k: [] for k in input_keys}
         for sample in robustness.noise_samples:
             base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
             if base_key:
                 samples_by_base[base_key].append(sample)
 
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        axes = axes.flatten()
+        fig, axes = plt.subplots(4, 3, figsize=(15, 14))
 
-        for i, key in enumerate(base_to_key.values()):
-            ax = axes[i]
+        for row, key in enumerate(input_keys):
             samples = samples_by_base.get(key, [])
+            gt = samples[0].ground_truth if samples else 0
+
+            # Column 0: Subcircuit
+            ax = axes[row, 0]
             if samples:
-                bin_centers, gate_acc, sc_acc, bit_agree, mse = (
-                    _bin_samples_by_magnitude(samples)
-                )
-                if bin_centers:
-                    ax.plot(
-                        bin_centers, gate_acc, "o-", label="Gate Acc", color="steelblue"
-                    )
-                    ax.plot(bin_centers, sc_acc, "s-", label="SC Acc", color="coral")
-                    ax.plot(
-                        bin_centers, bit_agree, "^-", label="Agreement", color="purple"
-                    )
-            ax.set_xlabel("Noise Magnitude")
-            ax.set_ylabel("Rate")
-            ax.set_ylim(0, 1.1)
-            ax.legend(loc="lower left")
-            ax.set_title(f"Input: ({key.replace('_', ', ')})", fontweight="bold")
+                signed_noise = [_compute_signed_noise(s) for s in samples]
+                sc_outputs = [s.subcircuit_output for s in samples]
+                sc_correct = [s.subcircuit_correct for s in samples]
+                _plot_single_model(ax, samples, signed_noise, gt, sc_outputs, sc_correct)
+            ax.set_ylabel(f"({key.replace('_', ',')})", fontsize=10, fontweight="bold")
+            ax.set_ylim(-0.2, 1.2)
             ax.grid(alpha=0.3)
+            if row == 0:
+                ax.set_title("Subcircuit", fontsize=11, fontweight="bold")
+            if row == 3:
+                ax.set_xlabel("Signed Noise", fontsize=9)
+
+            # Column 1: Gate
+            ax = axes[row, 1]
+            if samples:
+                signed_noise = [_compute_signed_noise(s) for s in samples]
+                gate_outputs = [s.gate_output for s in samples]
+                gate_correct = [s.gate_correct for s in samples]
+                _plot_single_model(ax, samples, signed_noise, gt, gate_outputs, gate_correct)
+            ax.set_ylim(-0.2, 1.2)
+            ax.grid(alpha=0.3)
+            if row == 0:
+                ax.set_title("Full Gate", fontsize=11, fontweight="bold")
+            if row == 3:
+                ax.set_xlabel("Signed Noise", fontsize=9)
+
+            # Column 2: Agreement (binned)
+            ax = axes[row, 2]
+            if samples:
+                signed_noise = [_compute_signed_noise(s) for s in samples]
+                _plot_agreement_binned(ax, samples, signed_noise, n_bins=20)
+            ax.grid(alpha=0.3, axis="y")
+            if row == 0:
+                ax.set_title("Agreement", fontsize=11, fontweight="bold")
+            if row == 3:
+                ax.set_xlabel("Signed Noise", fontsize=9)
 
         fig.suptitle(
-            f"{prefix}Noise Robustness by Input", fontsize=14, fontweight="bold"
+            f"{prefix}Noise Robustness (green=correct, red=incorrect)",
+            fontsize=14, fontweight="bold"
         )
         plt.tight_layout()
         path = os.path.join(output_dir, "noise_by_input.png")
-        plt.savefig(path, dpi=150, bbox_inches="tight")
+        plt.savefig(path, dpi=300, bbox_inches="tight")
         plt.close(fig)
         paths["noise_by_input"] = path
 
-    # Aggregate curves
+    # Per-input breakdown for OOD samples (3 rows x 3 cols, skip 0_0)
+    with profile("robust_curves.ood_per_input"):
+        samples_by_base = {k: [] for k in input_keys}
+        for sample in robustness.ood_samples:
+            base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
+            if base_key:
+                samples_by_base[base_key].append(sample)
+
+        # Skip 0_0 for OOD
+        ood_input_keys = [k for k in input_keys if k != "0_0"]
+        fig, axes = plt.subplots(3, 3, figsize=(15, 11))
+
+        for row, key in enumerate(ood_input_keys):
+            samples = samples_by_base.get(key, [])
+            gt = samples[0].ground_truth if samples else 0
+
+            # Column 0: Subcircuit
+            ax = axes[row, 0]
+            if samples:
+                ood_scales = [s.noise_magnitude for s in samples]
+                sc_outputs = [s.subcircuit_output for s in samples]
+                sc_correct = [s.subcircuit_correct for s in samples]
+                _plot_single_model(ax, samples, ood_scales, gt, sc_outputs, sc_correct)
+            ax.set_ylabel(f"({key.replace('_', ',')})", fontsize=10, fontweight="bold")
+            ax.set_ylim(-0.2, 1.2)
+            ax.grid(alpha=0.3)
+            if row == 0:
+                ax.set_title("Subcircuit", fontsize=11, fontweight="bold")
+            if row == 2:
+                ax.set_xlabel("OOD Scale", fontsize=9)
+
+            # Column 1: Gate
+            ax = axes[row, 1]
+            if samples:
+                ood_scales = [s.noise_magnitude for s in samples]
+                gate_outputs = [s.gate_output for s in samples]
+                gate_correct = [s.gate_correct for s in samples]
+                _plot_single_model(ax, samples, ood_scales, gt, gate_outputs, gate_correct)
+            ax.set_ylim(-0.2, 1.2)
+            ax.grid(alpha=0.3)
+            if row == 0:
+                ax.set_title("Full Gate", fontsize=11, fontweight="bold")
+            if row == 2:
+                ax.set_xlabel("OOD Scale", fontsize=9)
+
+            # Column 2: Agreement (binned)
+            ax = axes[row, 2]
+            if samples:
+                ood_scales = [s.noise_magnitude for s in samples]
+                _plot_agreement_binned(ax, samples, ood_scales, n_bins=20)
+            ax.grid(alpha=0.3, axis="y")
+            if row == 0:
+                ax.set_title("Agreement", fontsize=11, fontweight="bold")
+            if row == 2:
+                ax.set_xlabel("OOD Scale", fontsize=9)
+
+        fig.suptitle(
+            f"{prefix}OOD Robustness (green=correct, red=incorrect)",
+            fontsize=14, fontweight="bold"
+        )
+        plt.tight_layout()
+        path = os.path.join(output_dir, "ood_by_input.png")
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        paths["ood_by_input"] = path
+
+    # Aggregate curves (keep simple scatter for overview)
     with profile("robust_curves.aggregate"):
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
         # Noise aggregate
         ax = axes[0]
-        bin_centers, gate_acc, sc_acc, bit_agree, mse = _bin_samples_by_magnitude(
-            robustness.noise_samples
-        )
-        if bin_centers:
-            ax.plot(bin_centers, gate_acc, "o-", label="Gate Acc", color="steelblue")
-            ax.plot(bin_centers, sc_acc, "s-", label="SC Acc", color="coral")
-            ax.plot(bin_centers, bit_agree, "^-", label="Agreement", color="purple")
-        ax.set_xlabel("Noise Magnitude")
-        ax.set_ylabel("Rate")
-        ax.set_ylim(0, 1.1)
-        ax.legend()
+        if robustness.noise_samples:
+            signed_noise = [_compute_signed_noise(s) for s in robustness.noise_samples]
+            gate_outputs = [s.gate_output for s in robustness.noise_samples]
+            sc_outputs = [s.subcircuit_output for s in robustness.noise_samples]
+            gate_colors = ["#4CAF50" if s.gate_correct else "#E53935" for s in robustness.noise_samples]
+            sc_colors = ["#4CAF50" if s.subcircuit_correct else "#E53935" for s in robustness.noise_samples]
+            ax.scatter(signed_noise, gate_outputs, s=15, c=gate_colors, alpha=0.6, label="Gate", marker="o", edgecolors="none")
+            ax.scatter(signed_noise, sc_outputs, s=15, c=sc_colors, alpha=0.6, label="SC", marker="s", edgecolors="none")
+            ax.axhline(y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+            ax.legend(fontsize=8)
+        ax.set_xlabel("Signed Noise", fontsize=9)
+        ax.set_ylabel("Output Value", fontsize=9)
+        ax.set_ylim(-0.2, 1.2)
         ax.set_title("Noise (All Inputs)", fontweight="bold")
         ax.grid(alpha=0.3)
 
         # OOD aggregate
         ax = axes[1]
-        bin_centers, gate_acc, sc_acc, bit_agree, mse = _bin_samples_by_magnitude(
-            robustness.ood_samples, log_scale=True
-        )
-        if bin_centers:
-            ax.plot(bin_centers, gate_acc, "o-", label="Gate Acc", color="steelblue")
-            ax.plot(bin_centers, sc_acc, "s-", label="SC Acc", color="coral")
-            ax.plot(bin_centers, bit_agree, "^-", label="Agreement", color="purple")
-        ax.set_xlabel("Scale Factor (log)")
-        ax.set_xscale("log")
-        ax.set_ylabel("Rate")
-        ax.set_ylim(0, 1.1)
-        ax.legend()
+        if robustness.ood_samples:
+            ood_scales = [s.noise_magnitude for s in robustness.ood_samples]
+            gate_outputs = [s.gate_output for s in robustness.ood_samples]
+            sc_outputs = [s.subcircuit_output for s in robustness.ood_samples]
+            gate_colors = ["#4CAF50" if s.gate_correct else "#E53935" for s in robustness.ood_samples]
+            sc_colors = ["#4CAF50" if s.subcircuit_correct else "#E53935" for s in robustness.ood_samples]
+            ax.scatter(ood_scales, gate_outputs, s=15, c=gate_colors, alpha=0.6, label="Gate", marker="o", edgecolors="none")
+            ax.scatter(ood_scales, sc_outputs, s=15, c=sc_colors, alpha=0.6, label="SC", marker="s", edgecolors="none")
+            ax.axhline(y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+            ax.legend(fontsize=8)
+        ax.set_xlabel("OOD Scale", fontsize=9)
+        ax.set_ylabel("Output Value", fontsize=9)
+        ax.set_ylim(-0.2, 1.2)
         ax.set_title("OOD (All Inputs)", fontweight="bold")
         ax.grid(alpha=0.3)
 
-        fig.suptitle(f"{prefix}Aggregate Robustness", fontsize=14, fontweight="bold")
+        fig.suptitle(f"{prefix}Aggregate Robustness (green=correct, red=incorrect)", fontsize=14, fontweight="bold")
         plt.tight_layout()
         path = os.path.join(output_dir, "aggregate.png")
-        plt.savefig(path, dpi=150, bbox_inches="tight")
+        plt.savefig(path, dpi=300, bbox_inches="tight")
         plt.close(fig)
         paths["aggregate"] = path
 
@@ -1013,13 +1384,448 @@ def visualize_robustness_curves(
 # ------------------ FAITHFULNESS VISUALIZATION ------------------
 
 
+def _patch_key_to_filename(patch_key: str) -> str:
+    """Convert patch key to readable filename."""
+    import re
+
+    layer_match = re.search(r"layers=\((\d+),?\)", patch_key)
+    indices_match = re.search(r"indices=\(([^)]*)\)", patch_key)
+
+    layer = layer_match.group(1) if layer_match else "0"
+    indices_str = indices_match.group(1).replace(" ", "") if indices_match else ""
+
+    if indices_str:
+        indices_clean = indices_str.rstrip(",").replace(",", "_")
+        return f"L{layer}_n{indices_clean}"
+    else:
+        return f"L{layer}_all"
+
+
+def _faithfulness_score_to_color(score: float) -> tuple:
+    """Color gradient for faithfulness score: red (0) -> yellow (0.5) -> green (1)."""
+    score = max(0, min(1, score))
+    if score < 0.5:
+        # Red to yellow
+        t = score * 2
+        return (0.9, 0.3 + 0.5 * t, 0.3, 1.0)
+    else:
+        # Yellow to green
+        t = (score - 0.5) * 2
+        return (0.9 - 0.5 * t, 0.8, 0.3, 1.0)
+
+
+def visualize_faithfulness_intervention_effects(
+    faithfulness: FaithfulnessMetrics,
+    output_dir: str,
+    gate_name: str = "",
+) -> dict[str, str]:
+    """
+    Comprehensive faithfulness visualization suite.
+
+    Creates:
+    - stats/in_circuit/[patch].png - per-patch intervention plots
+    - stats/out_circuit/[patch].png - per-patch intervention plots
+    - intervention_summary.png - overview of all patches
+    - counterfactual_summary.png - circuit with faithfulness scores
+    - counterfactual_per_input.png - per-input faithfulness circuits
+    """
+    paths = {}
+    prefix = f"{gate_name} - " if gate_name else ""
+
+    def _plot_intervention_scatter(ax, samples, title, show_xlabel=True):
+        """Plot intervention values vs outputs colored by agreement."""
+        if not samples:
+            ax.text(0.5, 0.5, "No samples", ha="center", va="center", transform=ax.transAxes)
+            ax.set_title(title, fontsize=10, fontweight="bold")
+            return
+
+        x_vals = [np.mean(s.intervention_values) if s.intervention_values else 0 for s in samples]
+        outputs = [s.subcircuit_output if "SC" in title else s.gate_output for s in samples]
+        correct = [s.bit_agreement for s in samples]
+
+        sorted_data = sorted(zip(x_vals, outputs, correct), key=lambda d: d[0])
+        sorted_x = [d[0] for d in sorted_data]
+        sorted_out = [d[1] for d in sorted_data]
+        sorted_correct = [d[2] for d in sorted_data]
+
+        colors = ["#4CAF50" if c else "#E53935" for c in sorted_correct]
+        ax.scatter(sorted_x, sorted_out, s=25, c=colors, alpha=0.7, edgecolors="none")
+        ax.axhline(y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+        ax.set_ylim(-0.2, 1.2)
+        ax.set_title(title, fontsize=10, fontweight="bold")
+        if show_xlabel:
+            ax.set_xlabel("Intervention Value (mode: add)", fontsize=9)
+        ax.grid(alpha=0.3)
+
+    def _plot_agreement_binned(ax, samples, n_bins=15, show_xlabel=True):
+        """Plot binned agreement rate and output difference."""
+        if not samples:
+            ax.text(0.5, 0.5, "No samples", ha="center", va="center", transform=ax.transAxes)
+            ax.set_title("Agreement", fontsize=10, fontweight="bold")
+            return
+
+        x_vals = [np.mean(s.intervention_values) if s.intervention_values else 0 for s in samples]
+        x_min, x_max = min(x_vals), max(x_vals)
+        if x_min == x_max:
+            x_min, x_max = x_min - 0.5, x_max + 0.5
+        bin_edges = np.linspace(x_min, x_max, n_bins + 1)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+        agreement_rates = []
+        output_diffs = []
+
+        for i in range(n_bins):
+            lo, hi = bin_edges[i], bin_edges[i + 1]
+            bin_samples = [s for s, x in zip(samples, x_vals) if lo <= x < hi or (i == n_bins - 1 and x == hi)]
+            if bin_samples:
+                agreement_rates.append(np.mean([s.bit_agreement for s in bin_samples]))
+                output_diffs.append(np.mean([abs(s.gate_output - s.subcircuit_output) for s in bin_samples]))
+            else:
+                agreement_rates.append(np.nan)
+                output_diffs.append(np.nan)
+
+        color1 = "#2196F3"
+        ax.bar(bin_centers, agreement_rates, width=(x_max - x_min) / n_bins * 0.8, color=color1, alpha=0.6)
+        ax.set_ylim(0, 1.1)
+        ax.set_ylabel("Agreement", color=color1, fontsize=8)
+        ax.tick_params(axis="y", labelcolor=color1)
+
+        ax2 = ax.twinx()
+        color2 = "#FF5722"
+        ax2.plot(bin_centers, output_diffs, "o-", color=color2, markersize=3, linewidth=1.5)
+        max_diff = np.nanmax(output_diffs) if output_diffs and not np.all(np.isnan(output_diffs)) else 0.5
+        ax2.set_ylim(0, max(0.5, max_diff * 1.2))
+        ax2.set_ylabel("|Δ Output|", color=color2, fontsize=8)
+        ax2.tick_params(axis="y", labelcolor=color2)
+
+        ax.set_title("Agreement", fontsize=10, fontweight="bold")
+        if show_xlabel:
+            ax.set_xlabel("Intervention Value", fontsize=9)
+        ax.grid(alpha=0.3, axis="y")
+
+    # === 1. Per-patch intervention plots in stats/[in|out]_circuit/ ===
+    def _create_patch_figures(patch_stats_dict, circuit_type, base_dir):
+        """Create figures for all patches of a given type."""
+        patch_paths = {}
+        stats_dir = os.path.join(base_dir, "stats", circuit_type)
+        os.makedirs(stats_dir, exist_ok=True)
+
+        for patch_key, patch_stats in patch_stats_dict.items():
+            samples = patch_stats.samples
+            if not samples:
+                continue
+
+            filename = _patch_key_to_filename(patch_key)
+
+            fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+            _plot_intervention_scatter(axes[0], samples, "Subcircuit")
+            _plot_intervention_scatter(axes[1], samples, "Full Gate")
+            _plot_agreement_binned(axes[2], samples)
+
+            layer = samples[0].patch_layer if samples else "?"
+            indices = samples[0].patch_indices if samples else []
+            indices_str = ",".join(map(str, indices)) if indices else "all"
+            n_nodes = len(indices) if indices else 0
+
+            fig.suptitle(
+                f"{prefix}{circuit_type} | L{layer} nodes=[{indices_str}] ({n_nodes} nodes) | mode=add",
+                fontsize=12, fontweight="bold"
+            )
+            plt.tight_layout()
+
+            path = os.path.join(stats_dir, f"{filename}.png")
+            plt.savefig(path, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+            patch_paths[f"stats/{circuit_type}/{filename}"] = path
+
+        return patch_paths
+
+    if faithfulness.in_circuit_stats:
+        paths.update(_create_patch_figures(faithfulness.in_circuit_stats, "in_circuit", output_dir))
+    if faithfulness.out_circuit_stats:
+        paths.update(_create_patch_figures(faithfulness.out_circuit_stats, "out_circuit", output_dir))
+
+    # === 2. Intervention Summary (grouped bars per patch with multiple metrics) ===
+    all_patches_id = []
+    for pk, ps in faithfulness.in_circuit_stats.items():
+        all_patches_id.append(("in", pk, ps))
+    for pk, ps in faithfulness.out_circuit_stats.items():
+        all_patches_id.append(("out", pk, ps))
+
+    def sort_key(item):
+        import re
+        layer_match = re.search(r"layers=\((\d+)", item[1])
+        idx_match = re.search(r"indices=\((\d+)", item[1])
+        return (int(layer_match.group(1)) if layer_match else 0,
+                int(idx_match.group(1)) if idx_match else 0)
+
+    all_patches_id.sort(key=sort_key)
+
+    if all_patches_id:
+        n_patches = len(all_patches_id)
+        labels = [_patch_key_to_filename(p[1]) for p in all_patches_id]
+
+        # Extract all metrics
+        bit_sim = [p[2].mean_bit_similarity for p in all_patches_id]
+        logit_sim = [p[2].mean_logit_similarity for p in all_patches_id]
+        best_sim = [p[2].mean_best_similarity for p in all_patches_id]
+        n_samples = [p[2].n_interventions for p in all_patches_id]
+        is_in_circuit = [p[0] == "in" for p in all_patches_id]
+
+        # Create figure with grouped bars
+        fig, ax = plt.subplots(1, 1, figsize=(max(14, n_patches * 1.5), 7))
+
+        x = np.arange(n_patches)
+        width = 0.25
+
+        # Grouped bars for each metric
+        bars1 = ax.bar(x - width, bit_sim, width, label="Bit Agreement", color="#4CAF50", alpha=0.8)
+        bars2 = ax.bar(x, logit_sim, width, label="Logit Similarity", color="#2196F3", alpha=0.8)
+        bars3 = ax.bar(x + width, best_sim, width, label="Best Similarity", color="#FF9800", alpha=0.8)
+
+        # Add markers for in-circuit vs out-circuit
+        for i, is_in in enumerate(is_in_circuit):
+            marker = "▲" if is_in else "▼"
+            color = "#2E7D32" if is_in else "#1565C0"
+            ax.text(x[i], -0.08, marker, ha="center", va="top", fontsize=10, color=color)
+
+        ax.set_ylabel("Score", fontsize=11)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+        ax.set_ylim(-0.15, 1.15)
+        ax.axhline(y=0, color="#888888", linestyle="-", alpha=0.3)
+        ax.axhline(y=0.5, color="#888888", linestyle="--", alpha=0.3)
+        ax.axhline(y=1.0, color="#888888", linestyle="-", alpha=0.3)
+        ax.legend(loc="upper right", fontsize=9)
+        ax.grid(alpha=0.3, axis="y")
+
+        # Add sample count annotations
+        for i, (xi, n) in enumerate(zip(x, n_samples)):
+            ax.text(xi, 1.05, f"n={n}", ha="center", va="bottom", fontsize=7, color="#666666")
+
+        ax.set_title(f"{prefix}Intervention Summary by Patch\n(▲=in-circuit, ▼=out-circuit)",
+                     fontsize=13, fontweight="bold")
+
+        plt.tight_layout()
+        path = os.path.join(output_dir, "intervention_summary.png")
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        paths["intervention_summary"] = path
+
+    # === 3. Counterfactual Summary (circuit diagrams with faithfulness scores) ===
+    out_cf = faithfulness.out_counterfactual_effects  # Sufficiency
+    in_cf = faithfulness.in_counterfactual_effects    # Necessity
+
+    # Build per-node faithfulness scores from intervention stats
+    # Key: (layer, node_idx) -> score
+    def _build_node_scores(stats_dict):
+        """Extract per-node agreement scores from patch statistics."""
+        import re
+        scores = {}
+        for patch_key, patch_stats in stats_dict.items():
+            layer_match = re.search(r"layers=\((\d+),?\)", patch_key)
+            idx_match = re.search(r"indices=\((\d+),?\)", patch_key)
+            if layer_match and idx_match:
+                layer = int(layer_match.group(1))
+                node = int(idx_match.group(1))
+                scores[(layer, node)] = patch_stats.mean_bit_similarity
+        return scores
+
+    in_scores = _build_node_scores(faithfulness.in_circuit_stats)
+    out_scores = _build_node_scores(faithfulness.out_circuit_stats)
+
+    # Infer layer sizes from stats (find max layer and max node per layer)
+    all_keys = list(in_scores.keys()) + list(out_scores.keys())
+    if all_keys:
+        max_layer = max(k[0] for k in all_keys)
+        layer_sizes = [2]  # Input layer
+        for l in range(1, max_layer + 1):
+            nodes_in_layer = [k[1] for k in all_keys if k[0] == l]
+            layer_sizes.append(max(nodes_in_layer) + 1 if nodes_in_layer else 3)
+        layer_sizes.append(1)  # Output layer
+
+        def _draw_faithfulness_circuit(ax, scores_dict, title, layer_sizes, score_type="necessity"):
+            """Draw circuit with nodes colored by faithfulness score."""
+            G = nx.DiGraph()
+            pos = _layout_cache.get_positions(tuple(layer_sizes))
+
+            # Build nodes with scores as values
+            node_colors = []
+            node_labels = {}
+
+            for layer_idx, n_nodes in enumerate(layer_sizes):
+                for node_idx in range(n_nodes):
+                    name = f"({layer_idx},{node_idx})"
+                    G.add_node(name)
+
+                    score = scores_dict.get((layer_idx, node_idx))
+                    if score is not None:
+                        # Color by score: red (0) -> yellow (0.5) -> green (1)
+                        node_colors.append(_faithfulness_score_to_color(score))
+                        node_labels[name] = f"{score:.2f}"
+                    else:
+                        # Grey for nodes without scores (input/output)
+                        node_colors.append((0.85, 0.85, 0.85, 1.0))
+                        node_labels[name] = ""
+
+            # Add edges
+            for l in range(len(layer_sizes) - 1):
+                for i in range(layer_sizes[l]):
+                    for j in range(layer_sizes[l + 1]):
+                        G.add_edge(f"({l},{i})", f"({l+1},{j})")
+
+            # Draw
+            nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.3, edge_color="#888888", width=0.5)
+            nx.draw_networkx_nodes(G, pos, ax=ax, node_color=node_colors, node_size=500,
+                                   edgecolors="#555555", linewidths=1)
+            nx.draw_networkx_labels(G, pos, labels=node_labels, ax=ax, font_size=7, font_weight="bold")
+
+            ax.set_title(title, fontsize=11, fontweight="bold")
+            ax.axis("off")
+
+        # Create summary figure with 2 circuits
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        # Sufficiency: out-circuit interventions (how robust is circuit without these nodes)
+        # For out-circuit nodes, high agreement = circuit doesn't need them
+        _draw_faithfulness_circuit(axes[0], out_scores, "Sufficiency (out-circuit)\nhigh=not needed",
+                                   layer_sizes, "sufficiency")
+
+        # Necessity: in-circuit interventions (how necessary are these nodes)
+        # For in-circuit nodes, high agreement = subcircuit matches full model when patched
+        _draw_faithfulness_circuit(axes[1], in_scores, "Necessity (in-circuit)\nhigh=robust to perturbation",
+                                   layer_sizes, "necessity")
+
+        fig.suptitle(f"{prefix}Counterfactual Summary - Per-Node Agreement Scores",
+                     fontsize=14, fontweight="bold", y=0.98)
+
+        # Add colorbar at bottom (outside axes to avoid blocking)
+        from matplotlib.colors import LinearSegmentedColormap
+        colors = [(0.9, 0.3, 0.3), (0.9, 0.8, 0.3), (0.4, 0.8, 0.3)]
+        cmap = LinearSegmentedColormap.from_list("faith", colors)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(0, 1))
+        sm.set_array([])
+        # Position colorbar below the figure
+        cbar_ax = fig.add_axes([0.15, 0.02, 0.7, 0.02])
+        cbar = fig.colorbar(sm, cax=cbar_ax, orientation="horizontal")
+        cbar.set_label("Agreement Score (0=disagree, 1=agree)", fontsize=10)
+
+        plt.subplots_adjust(bottom=0.12, top=0.92)
+        path = os.path.join(output_dir, "counterfactual_summary.png")
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        paths["counterfactual_summary"] = path
+
+    # === 4. Counterfactual Per Input (4 circuit diagrams by input combination) ===
+    if out_cf or in_cf:
+        base_to_key = {"(0, 0)": "0_0", "(0, 1)": "0_1", "(1, 0)": "1_0", "(1, 1)": "1_1"}
+
+        # Group counterfactuals by clean_input and compute mean per input
+        cf_by_input = {k: {"sufficiency": [], "necessity": []} for k in base_to_key.values()}
+
+        for e in out_cf:
+            input_str = f"({int(e.clean_input[0])}, {int(e.clean_input[1])})"
+            key = base_to_key.get(input_str)
+            if key:
+                cf_by_input[key]["sufficiency"].append(e.faithfulness_score)
+
+        for e in in_cf:
+            input_str = f"({int(e.clean_input[0])}, {int(e.clean_input[1])})"
+            key = base_to_key.get(input_str)
+            if key:
+                cf_by_input[key]["necessity"].append(e.faithfulness_score)
+
+        # Create 4 circuit diagrams
+        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+        axes = axes.flatten()
+
+        for i, input_key in enumerate(["0_0", "0_1", "1_0", "1_1"]):
+            ax = axes[i]
+
+            suff_scores = cf_by_input[input_key]["sufficiency"]
+            nec_scores = cf_by_input[input_key]["necessity"]
+            suff_mean = np.mean(suff_scores) if suff_scores else 0.5
+            nec_mean = np.mean(nec_scores) if nec_scores else 0.5
+
+            # Combine: use sufficiency for out-circuit nodes, necessity for in-circuit nodes
+            combined_scores = {}
+            for k, v in out_scores.items():
+                combined_scores[k] = suff_mean  # Overall sufficiency for this input
+            for k, v in in_scores.items():
+                combined_scores[k] = nec_mean  # Overall necessity for this input
+
+            if layer_sizes:
+                G = nx.DiGraph()
+                pos = _layout_cache.get_positions(tuple(layer_sizes))
+                node_colors = []
+                node_labels = {}
+
+                for layer_idx, n_nodes in enumerate(layer_sizes):
+                    for node_idx in range(n_nodes):
+                        name = f"({layer_idx},{node_idx})"
+                        G.add_node(name)
+
+                        # Check if in-circuit or out-circuit
+                        if (layer_idx, node_idx) in in_scores:
+                            score = nec_mean
+                            node_colors.append(_faithfulness_score_to_color(score))
+                            node_labels[name] = f"{score:.2f}"
+                        elif (layer_idx, node_idx) in out_scores:
+                            score = suff_mean
+                            node_colors.append(_faithfulness_score_to_color(score))
+                            node_labels[name] = f"{score:.2f}"
+                        else:
+                            node_colors.append((0.85, 0.85, 0.85, 1.0))
+                            node_labels[name] = ""
+
+                for l in range(len(layer_sizes) - 1):
+                    for ii in range(layer_sizes[l]):
+                        for jj in range(layer_sizes[l + 1]):
+                            G.add_edge(f"({l},{ii})", f"({l+1},{jj})")
+
+                nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.3, edge_color="#888888", width=0.5)
+                nx.draw_networkx_nodes(G, pos, ax=ax, node_color=node_colors, node_size=400,
+                                       edgecolors="#555555", linewidths=1)
+                nx.draw_networkx_labels(G, pos, labels=node_labels, ax=ax, font_size=6, font_weight="bold")
+
+            input_label = input_key.replace("_", ", ")
+            ax.set_title(f"Input: ({input_label})\nSuff={suff_mean:.2f}, Nec={nec_mean:.2f}",
+                        fontsize=10, fontweight="bold")
+            ax.axis("off")
+
+        fig.suptitle(f"{prefix}Counterfactual Faithfulness by Input",
+                     fontsize=14, fontweight="bold", y=0.98)
+
+        # Add colorbar at bottom (outside axes to avoid blocking)
+        from matplotlib.colors import LinearSegmentedColormap
+        colors = [(0.9, 0.3, 0.3), (0.9, 0.8, 0.3), (0.4, 0.8, 0.3)]
+        cmap = LinearSegmentedColormap.from_list("faith", colors)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(0, 1))
+        sm.set_array([])
+        cbar_ax = fig.add_axes([0.15, 0.02, 0.7, 0.015])
+        cbar = fig.colorbar(sm, cax=cbar_ax, orientation="horizontal")
+        cbar.set_label("Faithfulness Score (red=0, green=1)", fontsize=10)
+
+        plt.subplots_adjust(bottom=0.1, top=0.93)
+        path = os.path.join(output_dir, "counterfactual_per_input.png")
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        paths["counterfactual_per_input"] = path
+
+    return paths
+
+
 def _generate_faithfulness_circuit_figure(args):
-    """Worker function for parallel faithfulness circuit generation."""
+    """Worker function for parallel faithfulness circuit generation.
+
+    Uses draw_intervened_circuit for consistent visualization across all circuit_viz.
+    Shows intervened network with original values (grey, small) below modified values.
+    """
     (
         effect_dict,
         circuit_dict,
         weights,
-        out_circuit_nodes,
+        intervened_nodes,
         output_path,
         fig_type,
         index,
@@ -1027,204 +1833,64 @@ def _generate_faithfulness_circuit_figure(args):
 
     circuit = Circuit.from_dict(circuit_dict)
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    # Get activations as flat lists [layer][node]
+    clean_acts = effect_dict["clean_activations"]
+    corrupt_acts = effect_dict["corrupted_activations"]
+    intervened_acts = effect_dict.get("intervened_activations", clean_acts)
 
-    clean_acts = [
-        torch.tensor(a).unsqueeze(0) for a in effect_dict["clean_activations"]
-    ]
-    corrupt_acts = [
-        torch.tensor(a).unsqueeze(0) for a in effect_dict["corrupted_activations"]
-    ]
+    # Compute layer sizes from activations
+    layer_sizes = [len(layer) for layer in clean_acts]
 
-    all_acts = clean_acts + corrupt_acts
-    vmin, vmax = _symmetric_range(all_acts)
+    fig, axes = plt.subplots(1, 3, figsize=(15, 6))
 
-    def draw_cf_circuit(ax, acts, patched_nodes, title, output_correct, weights_per_layer):
-        G = nx.DiGraph()
-        layer_sizes = tuple(a.shape[-1] for a in acts)
-        pos = _layout_cache.get_positions(layer_sizes)
-
-        # Build graph
-        node_colors = []
-        labels = {}
-        text_colors = {}
-
-        all_nodes = []
-        for layer_idx, layer_act in enumerate(acts):
-            n = layer_act.shape[-1]
-            for node_idx in range(n):
-                name = f"({layer_idx},{node_idx})"
-                all_nodes.append(name)
-        G.add_nodes_from(all_nodes)
-
-        for layer_idx, layer_act in enumerate(acts):
-            n = layer_act.shape[-1]
-            for node_idx in range(n):
-                name = f"({layer_idx},{node_idx})"
-                val = layer_act[0, node_idx].item()
-                labels[name] = f"{val:.2f}"
-
-                color = _activation_to_color(val, vmin, vmax)
-                node_colors.append(color)
-                text_colors[name] = _text_color_for_background(color)
-
-        # Add edges with weights
-        edges = []
-        edge_labels = {}
-        edge_weights = {}
-        for layer_idx, mask in enumerate(circuit.edge_masks):
-            w = weights_per_layer[layer_idx] if layer_idx < len(weights_per_layer) else None
-            for out_idx, row in enumerate(mask):
-                for in_idx, active in enumerate(row):
-                    if active:
-                        e = (f"({layer_idx},{in_idx})", f"({layer_idx + 1},{out_idx})")
-                        edges.append(e)
-                        # Get weight value if available
-                        if w is not None and out_idx < w.shape[0] and in_idx < w.shape[1]:
-                            weight_val = w[out_idx, in_idx]
-                            edge_labels[e] = f"{weight_val:.2f}"
-                            edge_weights[e] = abs(weight_val)
-        G.add_edges_from(edges)
-
-        # Compute edge widths (linear scale: min 0.5, max 3)
-        if edge_weights:
-            max_w = max(edge_weights.values()) if edge_weights.values() else 1.0
-            max_w = max(max_w, 0.01)
-            edge_widths = [0.5 + 2.5 * (edge_weights.get(e, 0) / max_w) for e in edges]
-        else:
-            edge_widths = [1.0] * len(edges)
-
-        # Draw
-        max_layer = max(int(n.split(",")[0][1:]) for n in G.nodes())
-        output_nodes = [n for n in G.nodes() if n.startswith(f"({max_layer},")]
-        patched_list = [n for n in G.nodes() if n in patched_nodes]
-        regular_nodes = [
-            n for n in G.nodes() if n not in output_nodes and n not in patched_list
-        ]
-
-        if regular_nodes:
-            reg_colors = [node_colors[list(G.nodes()).index(n)] for n in regular_nodes]
-            nx.draw_networkx_nodes(
-                G,
-                pos,
-                nodelist=regular_nodes,
-                node_color=reg_colors,
-                node_size=500,
-                ax=ax,
-                edgecolors="black",
-                linewidths=1,
-            )
-
-        if patched_list:
-            p_colors = [node_colors[list(G.nodes()).index(n)] for n in patched_list]
-            nx.draw_networkx_nodes(
-                G,
-                pos,
-                nodelist=patched_list,
-                node_color=p_colors,
-                node_size=500,
-                ax=ax,
-                edgecolors="#9C27B0",
-                linewidths=4,
-            )
-
-        if output_nodes:
-            out_colors = [node_colors[list(G.nodes()).index(n)] for n in output_nodes]
-            border = "green" if output_correct else "red"
-            nx.draw_networkx_nodes(
-                G,
-                pos,
-                nodelist=output_nodes,
-                node_color=out_colors,
-                node_size=500,
-                ax=ax,
-                edgecolors=border,
-                linewidths=4,
-            )
-
-        # Draw edges with variable thickness
-        if edges:
-            nx.draw_networkx_edges(
-                G,
-                pos,
-                edgelist=edges,
-                edge_color="#333333",
-                width=edge_widths,
-                arrows=True,
-                arrowstyle="-|>",
-                arrowsize=10,
-                connectionstyle="arc3,rad=0.1",
-                ax=ax,
-            )
-
-        for node, (x, y) in pos.items():
-            ax.text(
-                x,
-                y,
-                labels[node],
-                ha="center",
-                va="center",
-                fontsize=6,
-                fontweight="bold",
-                color=text_colors[node],
-            )
-
-        # Draw edge labels
-        if edge_labels:
-            nx.draw_networkx_edge_labels(
-                G,
-                pos,
-                edge_labels=edge_labels,
-                font_size=5,
-                font_color="#666666",
-                alpha=0.8,
-                label_pos=0.3,
-                bbox=dict(
-                    boxstyle="round,pad=0.1", facecolor="white", alpha=0.7, edgecolor="none"
-                ),
-                ax=ax,
-            )
-
-        ax.set_title(title, fontsize=9, fontweight="bold")
-        ax.axis("off")
-
-    # Draw three circuits
-    draw_cf_circuit(
+    # Panel 1: Clean (no intervention markers)
+    draw_intervened_circuit(
         axes[0],
-        clean_acts,
-        set(),
-        f"Clean → {effect_dict['expected_clean_output']:.2f}",
-        True,
-        weights,
+        layer_sizes=layer_sizes,
+        weights=weights,
+        current_activations=clean_acts,
+        original_activations=None,
+        intervened_nodes=set(),
+        circuit=circuit,
+        title=f"Clean → {effect_dict['expected_clean_output']:.2f}",
     )
-    draw_cf_circuit(
+
+    # Panel 2: Corrupted (no intervention markers)
+    draw_intervened_circuit(
         axes[1],
-        corrupt_acts,
-        set(),
-        f"Corrupted → {effect_dict['expected_corrupted_output']:.2f}",
-        True,
-        weights,
+        layer_sizes=layer_sizes,
+        weights=weights,
+        current_activations=corrupt_acts,
+        original_activations=None,
+        intervened_nodes=set(),
+        circuit=circuit,
+        title=f"Corrupted → {effect_dict['expected_corrupted_output']:.2f}",
     )
-    draw_cf_circuit(
+
+    # Panel 3: Intervened (show original values below modified, mark intervened nodes)
+    draw_intervened_circuit(
         axes[2],
-        clean_acts,
-        out_circuit_nodes,
-        f"Clean+Patch → {effect_dict['actual_output']:.2f}",
-        not effect_dict["output_changed_to_corrupted"],
-        weights,
+        layer_sizes=layer_sizes,
+        weights=weights,
+        current_activations=intervened_acts,
+        original_activations=clean_acts,
+        intervened_nodes=intervened_nodes,
+        circuit=circuit,
+        title=f"Intervened → {effect_dict['actual_output']:.2f}",
     )
 
     clean_str = ",".join(f"{v:.0f}" for v in effect_dict["clean_input"])
     corrupt_str = ",".join(f"{v:.0f}" for v in effect_dict["corrupted_input"])
+    score_type = "Necessity" if "In" in fig_type else "Sufficiency"
     fig.suptitle(
         f"{fig_type} Counterfactual #{index} | ({clean_str})→({corrupt_str}) | "
-        f"Faith: {effect_dict['faithfulness_score']:.2f}",
+        f"{score_type} Faith: {effect_dict['faithfulness_score']:.2f}",
         fontsize=11,
         fontweight="bold",
     )
     plt.tight_layout()
 
-    plt.savefig(output_path, dpi=100)  # Lower DPI for faster generation
+    plt.savefig(output_path, dpi=300)
     plt.close(fig)
     return output_path
 
@@ -1242,7 +1908,10 @@ def visualize_faithfulness_circuit_samples(
     paths = {}
 
     weights = [w.numpy() for w in layer_weights]
-    circuit_dict = circuit.to_dict()
+    # Use full circuit for counterfactual viz (we run full model with interventions)
+    layer_sizes = [layer_weights[0].shape[1]] + [w.shape[0] for w in layer_weights]
+    full_circuit = Circuit.full(layer_sizes)
+    circuit_dict = full_circuit.to_dict()
 
     # Get out-circuit nodes
     out_circuit_nodes = set()
@@ -1273,6 +1942,7 @@ def visualize_faithfulness_circuit_samples(
             effect_dict = {
                 "clean_activations": effect.clean_activations,
                 "corrupted_activations": effect.corrupted_activations,
+                "intervened_activations": effect.intervened_activations,
                 "expected_clean_output": effect.expected_clean_output,
                 "expected_corrupted_output": effect.expected_corrupted_output,
                 "actual_output": effect.actual_output,
@@ -1308,6 +1978,7 @@ def visualize_faithfulness_circuit_samples(
             effect_dict = {
                 "clean_activations": effect.clean_activations,
                 "corrupted_activations": effect.corrupted_activations,
+                "intervened_activations": effect.intervened_activations,
                 "expected_clean_output": effect.expected_clean_output,
                 "expected_corrupted_output": effect.expected_corrupted_output,
                 "actual_output": effect.actual_output,
@@ -1342,6 +2013,11 @@ def visualize_faithfulness_circuit_samples(
 
     # In-circuit/out-circuit patch visualizations (simpler, do sequentially)
     def visualize_patch_circuits(stats: dict, circuit_type: str, out_dir: str) -> dict:
+        """Visualize patch intervention circuits using reusable draw_intervened_circuit.
+
+        Shows the intervened circuit with marked nodes (orange border).
+        No text labels - just the circuit with activation values in nodes.
+        """
         os.makedirs(out_dir, exist_ok=True)
         type_paths = {}
 
@@ -1368,6 +2044,9 @@ def visualize_faithfulness_circuit_samples(
                 ]
             patch_label = f"L{patch_layer}_{'_'.join(map(str, patch_indices))}"
 
+            # Build intervened nodes set
+            intervened_nodes = {f"({patch_layer},{idx})" for idx in patch_indices}
+
             # Select samples
             disagree = [s for s in samples if not s.bit_agreement]
             agree = [s for s in samples if s.bit_agreement]
@@ -1390,89 +2069,56 @@ def visualize_faithfulness_circuit_samples(
                     for col in range(2):
                         axes[i, col].set_facecolor("#FFEEEE")
 
-                iv = sample.intervention_values
-                iv_val = iv[0] if iv else 0.0
+                # Get activations for this sample
+                # Structure is [layer][batch][node] - extract first batch sample
+                sc_acts = sample.subcircuit_activations if sample.subcircuit_activations else []
+                gate_acts = sample.gate_activations if sample.gate_activations else []
+                # Original (unpatched) activations for two-value display
+                orig_sc_acts = getattr(sample, 'original_subcircuit_activations', None) or []
+                orig_gate_acts = getattr(sample, 'original_gate_activations', None) or []
 
-                # Simple drawing without full activation visualization
-                for col, (label, output) in enumerate(
+                def extract_first_sample(acts):
+                    """Convert [layer][batch][node] to [layer][node] using first batch."""
+                    if not acts:
+                        return []
+                    result = []
+                    for layer in acts:
+                        if isinstance(layer, (list, tuple)) and len(layer) > 0:
+                            first_sample = layer[0]
+                            if isinstance(first_sample, (list, tuple)):
+                                result.append(list(first_sample))
+                            else:
+                                result.append([])
+                        else:
+                            result.append([])
+                    return result
+
+                sc_acts_flat = extract_first_sample(sc_acts)
+                gate_acts_flat = extract_first_sample(gate_acts)
+                orig_sc_acts_flat = extract_first_sample(orig_sc_acts)
+                orig_gate_acts_flat = extract_first_sample(orig_gate_acts)
+
+                for col, (label, acts_flat, orig_acts_flat, circ) in enumerate(
                     [
-                        ("Subcircuit", sample.subcircuit_output),
-                        ("Full", sample.gate_output),
+                        ("Subcircuit", sc_acts_flat, orig_sc_acts_flat, circuit),
+                        ("Full Model", gate_acts_flat, orig_gate_acts_flat, full_circuit),
                     ]
                 ):
                     ax = axes[i, col]
-                    circ = circuit if col == 0 else full_circuit
 
-                    # Draw circuit structure with edge weights
-                    G = nx.DiGraph()
-                    pos = _layout_cache.get_positions(tuple(layer_sizes))
-
-                    for layer_idx, n_nodes in enumerate(layer_sizes):
-                        for node_idx in range(n_nodes):
-                            G.add_node(f"({layer_idx},{node_idx})")
-
-                    edges = []
-                    edge_labels = {}
-                    edge_weights = {}
-                    for layer_idx, mask in enumerate(circ.edge_masks):
-                        w = weights[layer_idx] if layer_idx < len(weights) else None
-                        for out_idx, row in enumerate(mask):
-                            for in_idx, active in enumerate(row):
-                                if active:
-                                    e = (f"({layer_idx},{in_idx})", f"({layer_idx + 1},{out_idx})")
-                                    edges.append(e)
-                                    G.add_edge(e[0], e[1])
-                                    if w is not None and out_idx < w.shape[0] and in_idx < w.shape[1]:
-                                        weight_val = w[out_idx, in_idx]
-                                        edge_labels[e] = f"{weight_val:.2f}"
-                                        edge_weights[e] = abs(weight_val)
-
-                    # Compute edge widths
-                    if edge_weights:
-                        max_w = max(edge_weights.values()) if edge_weights.values() else 1.0
-                        max_w = max(max_w, 0.01)
-                        edge_widths = [0.5 + 2.5 * (edge_weights.get(e, 0) / max_w) for e in edges]
-                    else:
-                        edge_widths = [1.0] * len(edges)
-
-                    # Color patched nodes
-                    patched = {f"({patch_layer},{idx})" for idx in patch_indices}
-                    node_colors = []
-                    for n in G.nodes():
-                        if n in patched:
-                            node_colors.append("#FF6600")
-                        else:
-                            node_colors.append("lightblue")
-
-                    nx.draw_networkx_nodes(
-                        G, pos, node_color=node_colors, node_size=400, ax=ax
+                    # Use reusable function - pass original activations for two-value display
+                    draw_intervened_circuit(
+                        ax,
+                        layer_sizes=layer_sizes,
+                        weights=weights,
+                        current_activations=acts_flat,
+                        original_activations=orig_acts_flat if orig_acts_flat else None,
+                        intervened_nodes=intervened_nodes,
+                        circuit=circ,
+                        title=None,
+                        node_size=400,
+                        show_edge_labels=True,
                     )
-                    if edges:
-                        nx.draw_networkx_edges(
-                            G, pos, edgelist=edges, edge_color="#333333",
-                            width=edge_widths, arrows=True, arrowstyle="-|>",
-                            arrowsize=8, connectionstyle="arc3,rad=0.1", ax=ax
-                        )
-                    if edge_labels:
-                        nx.draw_networkx_edge_labels(
-                            G, pos, edge_labels=edge_labels, font_size=5,
-                            font_color="#666666", alpha=0.8, label_pos=0.3,
-                            bbox=dict(boxstyle="round,pad=0.1", facecolor="white",
-                                      alpha=0.7, edgecolor="none"), ax=ax
-                        )
-
-                    border_color = "green" if sample.bit_agreement else "red"
-                    ax.text(
-                        0.5,
-                        -0.05,
-                        f"IV:{iv_val:.2f} → {output:.2f}",
-                        transform=ax.transAxes,
-                        ha="center",
-                        fontsize=9,
-                        fontweight="bold",
-                        color=border_color,
-                    )
-                    ax.axis("off")
 
             axes[0, 0].set_title("Subcircuit", fontsize=10, fontweight="bold")
             axes[0, 1].set_title("Full Model", fontsize=10, fontweight="bold")
@@ -1486,7 +2132,7 @@ def visualize_faithfulness_circuit_samples(
             plt.tight_layout()
 
             path = os.path.join(out_dir, f"{patch_label}.png")
-            plt.savefig(path, dpi=150, bbox_inches="tight")
+            plt.savefig(path, dpi=300, bbox_inches="tight")
             plt.close(fig)
             type_paths[patch_label] = path
 
@@ -1505,219 +2151,6 @@ def visualize_faithfulness_circuit_samples(
             "out_circuit",
             os.path.join(circuit_viz_dir, "out_circuit"),
         )
-
-    return paths
-
-
-def visualize_faithfulness_summary(
-    faithfulness: FaithfulnessMetrics,
-    output_dir: str,
-    gate_name: str = "",
-) -> str:
-    """Visualize faithfulness summary."""
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    prefix = f"{gate_name} - " if gate_name else ""
-
-    # Top-left: In-circuit similarity
-    ax = axes[0, 0]
-    categories = ["In-Dist", "OOD"]
-    values = [
-        faithfulness.mean_in_circuit_similarity,
-        faithfulness.mean_in_circuit_similarity_ood,
-    ]
-    ax.bar(categories, values, color=[COLORS["in_circuit"], "#81C784"], alpha=0.8)
-    ax.set_ylim(0, 1.1)
-    ax.set_ylabel("Similarity")
-    ax.set_title("In-Circuit Intervention Similarity", fontweight="bold")
-    ax.axhline(y=1.0, color="green", linestyle="--", alpha=0.5)
-    for i, v in enumerate(values):
-        ax.text(i, v + 0.02, f"{v:.2f}", ha="center", fontsize=10)
-
-    # Top-right: Out-circuit similarity
-    ax = axes[0, 1]
-    values = [
-        faithfulness.mean_out_circuit_similarity,
-        faithfulness.mean_out_circuit_similarity_ood,
-    ]
-    ax.bar(categories, values, color=[COLORS["out_circuit"], "#EF9A9A"], alpha=0.8)
-    ax.set_ylim(0, 1.1)
-    ax.set_ylabel("Similarity")
-    ax.set_title("Out-Circuit Intervention Similarity", fontweight="bold")
-    ax.axhline(y=1.0, color="green", linestyle="--", alpha=0.5)
-    for i, v in enumerate(values):
-        ax.text(i, v + 0.02, f"{v:.2f}", ha="center", fontsize=10)
-
-    # Bottom-left: Counterfactual faithfulness
-    ax = axes[1, 0]
-    if faithfulness.counterfactual_effects:
-        scores = [e.faithfulness_score for e in faithfulness.counterfactual_effects]
-        ax.hist(
-            scores, bins=10, color=COLORS["faithfulness"], alpha=0.8, edgecolor="black"
-        )
-        ax.axvline(
-            x=faithfulness.mean_faithfulness_score,
-            color="red",
-            linestyle="--",
-            label=f"Mean: {faithfulness.mean_faithfulness_score:.2f}",
-        )
-        ax.set_xlabel("Faithfulness Score")
-        ax.set_ylabel("Count")
-        ax.legend()
-    ax.set_title("Counterfactual Faithfulness Distribution", fontweight="bold")
-
-    # Bottom-right: Overall score
-    ax = axes[1, 1]
-    score = faithfulness.overall_faithfulness
-    ax.pie([score, 1 - score], colors=["green", "#e0e0e0"], startangle=90)
-    ax.text(
-        0, 0, f"{score:.1%}", ha="center", va="center", fontsize=24, fontweight="bold"
-    )
-    ax.set_title("Overall Faithfulness", fontweight="bold")
-
-    fig.suptitle(f"{prefix}Faithfulness Analysis", fontsize=14, fontweight="bold")
-    plt.tight_layout()
-
-    os.makedirs(output_dir, exist_ok=True)
-    path = os.path.join(output_dir, "summary.png")
-    plt.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return path
-
-
-def visualize_faithfulness_stats(
-    faithfulness: FaithfulnessMetrics,
-    output_dir: str,
-    gate_name: str = "",
-) -> dict[str, str]:
-    """Visualize detailed faithfulness statistics."""
-    paths = {}
-    prefix = f"{gate_name} - " if gate_name else ""
-
-    # Patch statistics comparison
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-    def plot_patch_stats(ax, stats: dict, title: str, color: str):
-        if not stats:
-            ax.text(0.5, 0.5, "No data", ha="center", va="center")
-            ax.set_title(title, fontweight="bold")
-            return
-
-        patch_names = list(stats.keys())[:10]
-        means = [stats[p].mean_bit_similarity for p in patch_names]
-        stds = [stats[p].std_bit_similarity for p in patch_names]
-
-        x = np.arange(len(patch_names))
-        ax.bar(x, means, yerr=stds, color=color, alpha=0.8, capsize=3)
-        ax.set_xticks(x)
-        ax.set_xticklabels(
-            [
-                p.split("indices=")[1].split(")")[0] if "indices=" in p else p[:15]
-                for p in patch_names
-            ],
-            rotation=45,
-            ha="right",
-            fontsize=8,
-        )
-        ax.set_ylim(0, 1.1)
-        ax.set_ylabel("Bit Similarity")
-        ax.set_title(title, fontweight="bold")
-        ax.axhline(y=1.0, color="green", linestyle="--", alpha=0.5)
-
-    plot_patch_stats(
-        axes[0, 0],
-        faithfulness.in_circuit_stats,
-        "In-Circuit Patches (In-Dist)",
-        COLORS["in_circuit"],
-    )
-    plot_patch_stats(
-        axes[0, 1],
-        faithfulness.out_circuit_stats,
-        "Out-Circuit Patches (In-Dist)",
-        COLORS["out_circuit"],
-    )
-    plot_patch_stats(
-        axes[1, 0],
-        faithfulness.in_circuit_stats_ood,
-        "In-Circuit Patches (OOD)",
-        "#81C784",
-    )
-    plot_patch_stats(
-        axes[1, 1],
-        faithfulness.out_circuit_stats_ood,
-        "Out-Circuit Patches (OOD)",
-        "#EF9A9A",
-    )
-
-    fig.suptitle(
-        f"{prefix}Patch Intervention Statistics", fontsize=14, fontweight="bold"
-    )
-    plt.tight_layout()
-
-    path = os.path.join(output_dir, "patch_stats.png")
-    plt.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    paths["patch_stats"] = path
-
-    # Counterfactual analysis
-    if (
-        faithfulness.out_counterfactual_effects
-        or faithfulness.in_counterfactual_effects
-    ):
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-        # Sufficiency (out-circuit)
-        ax = axes[0]
-        if faithfulness.out_counterfactual_effects:
-            scores = [
-                e.faithfulness_score for e in faithfulness.out_counterfactual_effects
-            ]
-            changed = [
-                e.output_changed_to_corrupted
-                for e in faithfulness.out_counterfactual_effects
-            ]
-            colors = ["red" if c else "green" for c in changed]
-            ax.bar(range(len(scores)), scores, color=colors, alpha=0.8)
-            ax.axhline(
-                y=np.mean(scores),
-                color="blue",
-                linestyle="--",
-                label=f"Mean: {np.mean(scores):.2f}",
-            )
-            ax.set_xlabel("Counterfactual Pair")
-            ax.set_ylabel("Sufficiency Score")
-            ax.legend()
-        ax.set_title("Out-Circuit Counterfactuals (Sufficiency)", fontweight="bold")
-
-        # Necessity (in-circuit)
-        ax = axes[1]
-        if faithfulness.in_counterfactual_effects:
-            scores = [
-                e.faithfulness_score for e in faithfulness.in_counterfactual_effects
-            ]
-            changed = [
-                e.output_changed_to_corrupted
-                for e in faithfulness.in_counterfactual_effects
-            ]
-            colors = ["red" if c else "green" for c in changed]
-            ax.bar(range(len(scores)), scores, color=colors, alpha=0.8)
-            ax.axhline(
-                y=np.mean(scores),
-                color="blue",
-                linestyle="--",
-                label=f"Mean: {np.mean(scores):.2f}",
-            )
-            ax.set_xlabel("Counterfactual Pair")
-            ax.set_ylabel("Necessity Score")
-            ax.legend()
-        ax.set_title("In-Circuit Counterfactuals (Necessity)", fontweight="bold")
-
-        fig.suptitle(f"{prefix}Counterfactual Analysis", fontsize=14, fontweight="bold")
-        plt.tight_layout()
-
-        path = os.path.join(output_dir, "counterfactual_stats.png")
-        plt.savefig(path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        paths["counterfactual_stats"] = path
 
     return paths
 
@@ -1759,7 +2192,7 @@ def visualize_spd_components(
     plt.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
-    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return path
 
@@ -1805,7 +2238,7 @@ def visualize_profiling_timeline(
     plt.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
-    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return path
 
@@ -1859,7 +2292,7 @@ def visualize_profiling_phases(
     plt.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
-    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return path
 
@@ -1914,7 +2347,7 @@ def visualize_profiling_summary(
     plt.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
-    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return path
 
@@ -1968,6 +2401,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
 
         # Extract pre-computed data
         canonical_activations = trial.canonical_activations or {}
+        mean_activations_by_range = trial.mean_activations_by_range or {}
         layer_weights = trial.layer_weights or []
         gate_names = trial.setup.model_params.logic_gates
 
@@ -2018,6 +2452,17 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                 gate_name=gate_label,
             )
             viz_paths[trial_id][gname]["full"]["activations"] = act_path
+
+            # Mean activations for different input ranges
+            if mean_activations_by_range:
+                mean_act_path = visualize_circuit_activations_mean(
+                    mean_activations_by_range,
+                    layer_weights,
+                    full_circuit,
+                    folder,
+                    gate_name=gate_label,
+                )
+                viz_paths[trial_id][gname]["full"]["activations_mean"] = mean_act_path
 
             if gname in trial.decomposed_gate_models:
                 decomposed = trial.decomposed_gate_models[gname]
@@ -2083,61 +2528,20 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     os.makedirs(faithfulness_dir, exist_ok=True)
                     viz_paths[trial_id][gname][sc_idx]["faithfulness"] = {}
 
-                # Run quick visualizations (summary, curves, stats) in parallel
-                with ThreadPoolExecutor(max_workers=4) as executor:
-                    futures = {}
-                    if has_robust:
-                        futures["robust_summary"] = executor.submit(
-                            visualize_robustness_summary,
-                            robustness_data,
-                            robustness_dir,
-                            sc_label,
-                        )
-                        futures["robust_curves"] = executor.submit(
-                            visualize_robustness_curves,
-                            robustness_data,
-                            robustness_dir,
-                            sc_label,
-                        )
-                    if has_faith:
-                        futures["faith_summary"] = executor.submit(
-                            visualize_faithfulness_summary,
-                            faithfulness_data,
-                            faithfulness_dir,
-                            sc_label,
-                        )
-                        futures["faith_stats"] = executor.submit(
-                            visualize_faithfulness_stats,
-                            faithfulness_data,
-                            faithfulness_dir,
-                            sc_label,
-                        )
-
-                # Collect quick visualization results
+                # Run quick visualizations sequentially (matplotlib is not thread-safe)
                 if has_robust:
-                    with profile("robust_summary"):
-                        viz_paths[trial_id][gname][sc_idx]["robustness"]["summary"] = (
-                            futures["robust_summary"].result()
-                        )
                     with profile("robust_curves"):
                         viz_paths[trial_id][gname][sc_idx]["robustness"]["stats"] = (
-                            futures["robust_curves"].result()
+                            visualize_robustness_curves(
+                                robustness_data, robustness_dir, sc_label
+                            )
                         )
-                if has_faith:
-                    with profile("faith_summary"):
-                        viz_paths[trial_id][gname][sc_idx]["faithfulness"][
-                            "summary"
-                        ] = futures["faith_summary"].result()
-                    with profile("faith_stats"):
-                        viz_paths[trial_id][gname][sc_idx]["faithfulness"]["stats"] = (
-                            futures["faith_stats"].result()
-                        )
-
                 # Run expensive circuit visualizations sequentially (they use ProcessPoolExecutor internally)
                 if has_robust:
                     with profile("robust_circuit_viz"):
                         circuit_paths = visualize_robustness_circuit_samples(
-                            robustness_data, circuit, layer_weights, robustness_dir
+                            robustness_data, circuit, layer_weights, robustness_dir,
+                            canonical_activations=canonical_activations,
                         )
                     viz_paths[trial_id][gname][sc_idx]["robustness"]["circuit_viz"] = (
                         circuit_paths
@@ -2151,6 +2555,15 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     viz_paths[trial_id][gname][sc_idx]["faithfulness"][
                         "circuit_viz"
                     ] = circuit_paths
+
+                    # Add intervention effect plots (like noise_by_input for robustness)
+                    with profile("faith_intervention_effects"):
+                        intervention_paths = visualize_faithfulness_intervention_effects(
+                            faithfulness_data, faithfulness_dir, sc_label
+                        )
+                    viz_paths[trial_id][gname][sc_idx]["faithfulness"][
+                        "intervention_effects"
+                    ] = intervention_paths
 
                 # SPD
                 if gname in trial.decomposed_subcircuits:

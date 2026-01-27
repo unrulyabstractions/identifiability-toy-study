@@ -207,5 +207,9 @@ class InterventionEffect:
 
     # Pre-computed activations for visualization (NO model runs during viz!)
     # These are lists of tensors: [layer0_acts, layer1_acts, ...]
+    # AFTER intervention (for visualizing the intervened state)
     target_activations: list = None  # type: ignore
     proxy_activations: list = None  # type: ignore
+    # BEFORE intervention (for showing two-value comparison in viz)
+    original_target_activations: list = None  # type: ignore
+    original_proxy_activations: list = None  # type: ignore

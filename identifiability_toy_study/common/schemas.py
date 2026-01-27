@@ -143,8 +143,12 @@ class InterventionSample(SchemaClass):
     mse: float  # (gate_output - subcircuit_output)^2
 
     # Pre-computed activations for visualization (NO model runs during viz!)
+    # These are the activations AFTER the intervention/patch is applied
     gate_activations: list[list[float]] = field(default_factory=list)
     subcircuit_activations: list[list[float]] = field(default_factory=list)
+    # Original activations BEFORE the intervention (for showing two-value display)
+    original_gate_activations: list[list[float]] = field(default_factory=list)
+    original_subcircuit_activations: list[list[float]] = field(default_factory=list)
 
 
 @dataclass
@@ -211,8 +215,8 @@ class FaithfulnessConfig(SchemaClass):
     """Configuration for faithfulness analysis."""
 
     max_subcircuits_per_gate: int = 1
-    n_interventions_per_patch: int = 10
-    n_counterfactual_pairs: int = 10
+    n_interventions_per_patch: int = 50  # Increased for better statistics
+    n_counterfactual_pairs: int = 20  # Increased for better coverage
 
 
 @dataclass
@@ -431,6 +435,10 @@ class TrialResult(SchemaClass):
 
     # Weight matrices per layer (extracted from model, for visualization)
     layer_weights: Optional[list[torch.Tensor]] = None
+
+    # Mean activations for inputs from different ranges (for visualization)
+    # Dict mapping range_label (e.g., "0_1", "-1_0") -> list of mean activations per layer
+    mean_activations_by_range: Optional[dict[str, list[torch.Tensor]]] = None
 
     # Models stored at runtime (saved as model.pt, not in JSON)
     model: Optional["MLP"] = None
