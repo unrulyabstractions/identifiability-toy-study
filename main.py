@@ -96,12 +96,22 @@ if __name__ == "__main__":
     )
 
     # SPD sweep is enabled by default
+    # Configs designed for speed + variety based on SPD paper recommendations:
+    # - Paper uses 40k steps, but for 2->3->1 networks 1000 is enough
+    # - Paper recommends importance_coeff=3e-3 and p=1.0 (L1)
+    # - Varying p (sparsity shape) and importance_coeff (sparsity strength) matters most
     if not args.no_spd_sweep:
         base_config_id = cfg.base_trial.spd_config.get_config_id()
         sweep_configs = generate_spd_sweep_configs(
             base_config=cfg.base_trial.spd_config,
-            importance_coeff_list=[1e-5, 1e-4, 1e-3],
-            n_components_list=[10, 20],
+            # Fewer components for tiny network, one larger for comparison
+            n_components_list=[8, 20],
+            # Extended range including paper's recommended 3e-3
+            importance_coeff_list=[1e-4, 1e-3, 3e-3],
+            # Fast iteration - 1000 steps is enough for toy models
+            steps_list=[1000],
+            # Vary sparsity shape: 0.5=extreme, 1.0=L1 (paper default), 2.0=L2
+            importance_p_list=[0.5, 1.0, 2.0],
         )
         # Exclude configs that match the base config
         cfg.base_trial.spd_sweep_configs = [

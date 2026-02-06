@@ -143,6 +143,8 @@ def _save_tensors(trial, trial_dir: Path, logger=None):
         }
     if trial.layer_weights is not None:
         data["layer_weights"] = [w.cpu() for w in trial.layer_weights]
+    if trial.layer_biases is not None:
+        data["layer_biases"] = [b.cpu() for b in trial.layer_biases]
 
     if data:
         torch.save(data, tensors_path)

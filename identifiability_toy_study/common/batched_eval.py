@@ -207,9 +207,9 @@ def batch_compute_metrics(
     gate_idx: int = 0,
     precomputed_masks: list[torch.Tensor] | None = None,
     eval_device: str | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Compute accuracy, logit_similarity, bit_similarity for all circuits.
+    Compute accuracy, logit_similarity, bit_similarity, best_similarity for all circuits.
 
     Args:
         model: The full trained model
@@ -222,7 +222,7 @@ def batch_compute_metrics(
         eval_device: Device to run evaluation on (defaults to model.device)
 
     Returns:
-        Tuple of (accuracies, logit_similarities, bit_similarities) arrays
+        Tuple of (accuracies, logit_similarities, bit_similarities, best_similarities) arrays
     """
     device = eval_device if eval_device is not None else model.device
 
@@ -251,6 +251,10 @@ def batch_compute_metrics(
     # Compute metrics for all circuits at once
     bit_circuits = torch.round(y_circuits)  # [n_circuits, batch, 1]
 
+    # Best: clamp to binary [0,1] after rounding (handles out-of-range outputs)
+    best_circuits = torch.clamp(bit_circuits, 0, 1)  # [n_circuits, batch, 1]
+    best_pred = torch.clamp(bit_pred, 0, 1)  # [batch, 1]
+
     # Accuracy: match with ground truth
     # [n_circuits, batch, 1] == [1, batch, 1] -> [n_circuits, batch, 1]
     correct = bit_circuits.eq(bit_target.unsqueeze(0))
@@ -260,12 +264,16 @@ def batch_compute_metrics(
     same_as_model = bit_circuits.eq(bit_pred.unsqueeze(0))
     bit_similarities = same_as_model.float().mean(dim=(1, 2)).cpu().numpy()
 
+    # Best similarity: match after clamping to [0,1]
+    same_as_model_best = best_circuits.eq(best_pred.unsqueeze(0))
+    best_similarities = same_as_model_best.float().mean(dim=(1, 2)).cpu().numpy()
+
     # Logit similarity: 1 - MSE
     # y_circuits: [n_circuits, batch, 1], y_pred: [batch, 1]
     mse = ((y_circuits - y_pred.unsqueeze(0)) ** 2).mean(dim=(1, 2))
     logit_similarities = (1 - mse).detach().cpu().numpy()
 
-    return accuracies, logit_similarities, bit_similarities
+    return accuracies, logit_similarities, bit_similarities, best_similarities
 
 
 def batch_evaluate_edge_variants(
@@ -313,7 +321,7 @@ def batch_evaluate_edge_variants(
 
         # If only one variant (full connectivity), no exploration needed
         if len(edge_variants) == 1:
-            accs, logit_sims, bit_sims = batch_compute_metrics(
+            accs, logit_sims, bit_sims, _ = batch_compute_metrics(
                 model, edge_variants, x, y_target, y_pred,
                 gate_idx=gate_idx, eval_device=device
             )
@@ -324,7 +332,7 @@ def batch_evaluate_edge_variants(
             continue
 
         # Batch evaluate all edge variants
-        accs, logit_sims, bit_sims = batch_compute_metrics(
+        accs, logit_sims, bit_sims, _ = batch_compute_metrics(
             model, edge_variants, x, y_target, y_pred,
             gate_idx=gate_idx, eval_device=device
         )

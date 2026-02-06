@@ -27,6 +27,44 @@ from .common.schemas import (
     SubcircuitMetrics,
 )
 
+##########################################
+####### Faithfulness Metrics #############
+##########################################
+
+
+def compute_recovery(y_intervened: float, y_clean: float, y_corrupted: float) -> float:
+    """Raw recovery toward clean. Used for denoising experiments."""
+    delta = y_clean - y_corrupted
+    if abs(delta) < 1e-10:
+        return 0.0
+    return (y_intervened - y_corrupted) / delta
+
+
+def compute_disruption(
+    y_intervened: float, y_clean: float, y_corrupted: float
+) -> float:
+    """Raw disruption toward corrupt. Used for noising experiments."""
+    delta = y_clean - y_corrupted
+    if abs(delta) < 1e-10:
+        return 0.0
+    return (y_clean - y_intervened) / delta
+
+
+# Sufficiency  = recovery of in-circuit
+compute_sufficiency_score = compute_recovery
+
+# Necessity = disruption of in-circuit
+compute_necessity_score = compute_disruption
+
+# Completeness = disruption of out-circuit  (low out-circuit recovery → complete)
+compute_completeness_score = compute_disruption
+
+# Independence = recovery of out-circuit  (low out-circuit disruption → independent)
+compute_independence_score = compute_recovery
+
+##########################################
+##########################################
+
 
 def _node_masks_key(circuit: Circuit) -> tuple:
     """Convert node_masks to a hashable key for grouping by activation pattern."""
@@ -233,12 +271,17 @@ def _evaluate_samples(
         gate_bit = 1 if gate_output >= 0.5 else 0
         sc_bit = 1 if subcircuit_output >= 0.5 else 0
 
+        # Clamp to binary: round then clamp to [0, 1] (handles out-of-range outputs)
+        gate_best = max(0, min(1, round(gate_output)))
+        sc_best = max(0, min(1, round(subcircuit_output)))
+
         # Accuracy to ground truth
         gate_correct = gate_bit == ground_truth
         subcircuit_correct = sc_bit == ground_truth
 
         # Agreement between models (both interpret same class)
         agreement_bit = gate_bit == sc_bit
+        agreement_best = gate_best == sc_best
         mse = (gate_output - subcircuit_output) ** 2
 
         # Convert activations to lists for JSON serialization
@@ -256,6 +299,7 @@ def _evaluate_samples(
                 gate_correct=gate_correct,
                 subcircuit_correct=subcircuit_correct,
                 agreement_bit=agreement_bit,
+                agreement_best=agreement_best,
                 mse=mse,
                 gate_activations=gate_acts_list,
                 subcircuit_activations=sc_acts_list,
@@ -313,6 +357,7 @@ def calculate_robustness_metrics(
     noise_gate_acc = sum(1 for s in noise_samples if s.gate_correct) / n_noise
     noise_sc_acc = sum(1 for s in noise_samples if s.subcircuit_correct) / n_noise
     noise_agree_bit = sum(1 for s in noise_samples if s.agreement_bit) / n_noise
+    noise_agree_best = sum(1 for s in noise_samples if s.agreement_best) / n_noise
     noise_mse = sum(s.mse for s in noise_samples) / n_noise
 
     # Aggregate OOD stats
@@ -320,6 +365,7 @@ def calculate_robustness_metrics(
     ood_gate_acc = sum(1 for s in ood_samples if s.gate_correct) / n_ood
     ood_sc_acc = sum(1 for s in ood_samples if s.subcircuit_correct) / n_ood
     ood_agree_bit = sum(1 for s in ood_samples if s.agreement_bit) / n_ood
+    ood_agree_best = sum(1 for s in ood_samples if s.agreement_best) / n_ood
     ood_mse = sum(s.mse for s in ood_samples) / n_ood
 
     # Overall robustness: focus on agreement (models matching each other)
@@ -331,10 +377,12 @@ def calculate_robustness_metrics(
         noise_gate_accuracy=float(noise_gate_acc),
         noise_subcircuit_accuracy=float(noise_sc_acc),
         noise_agreement_bit=float(noise_agree_bit),
+        noise_agreement_best=float(noise_agree_best),
         noise_mse_mean=float(noise_mse),
         ood_gate_accuracy=float(ood_gate_acc),
         ood_subcircuit_accuracy=float(ood_sc_acc),
         ood_agreement_bit=float(ood_agree_bit),
+        ood_agreement_best=float(ood_agree_best),
         ood_mse_mean=float(ood_mse),
         overall_robustness=float(overall),
     )
@@ -477,13 +525,9 @@ def calculate_patches_causal_effect(
             y_proxy_per_iv = y_proxy_batched.view(n_ivs, N, -1)
 
         # Reshape activations per layer
-        target_acts_per_iv = [
-            a.view(n_ivs, N, -1) for a in target_acts_batched
-        ]
+        target_acts_per_iv = [a.view(n_ivs, N, -1) for a in target_acts_batched]
         if not out_circuit:
-            proxy_acts_per_iv = [
-                a.view(n_ivs, N, -1) for a in proxy_acts_batched
-            ]
+            proxy_acts_per_iv = [a.view(n_ivs, N, -1) for a in proxy_acts_batched]
 
         # Build per-intervention results
         patch_results = []

@@ -66,21 +66,26 @@ class ModelParams(SchemaClass):
 class SPDConfig(SchemaClass):
     """Config for Stochastic Parameter Decomposition.
 
-    Recommended sweep parameters (in order of importance):
-    1. n_components: 2-4× max(n_functions, max_hidden_width)
-       - For 2→3→1 network: [6, 10, 15, 20]
-       - For multi-gate: [10, 20, 30, 40]
+    Based on SPD paper (arXiv:2506.20790) and Goodfire's TMS experiments:
 
-    2. importance_coeff: Critical for sparsity (g values)
+    1. n_components: 2-4× max(n_functions, hidden_width)
+       - For 2→3→1 network: [4, 8, 15, 20]
+       - Paper TMS uses 20 subcomponents
+
+    2. importance_coeff: Critical for sparsity (controls g values)
+       - Paper uses 3e-3 for TMS experiments
        - Too low → all g≈1 (no sparsity), too high → all g→0
-       - Sweep: [1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3]
+       - Sweep: [1e-4, 1e-3, 3e-3]
 
-    3. steps: Training duration (100 is too few!)
-       - Minimum: 5000 for small models
-       - Recommended: 10000-30000 for proper convergence
+    3. steps: Training duration
+       - Paper uses 40k for TMS but tiny models converge much faster
+       - For 2→3→1: 1000 steps is usually sufficient
+       - Check loss convergence to tune
 
     4. importance_p (pnorm): Shape of sparsity penalty
-       - p=0.5: extreme sparsity, p=1.0: L1, p=2.0: L2 (softer)
+       - p=1.0: L1 (paper default, recommended)
+       - p=0.5: extreme sparsity
+       - p=2.0: L2 (softer, less sparse)
     """
 
     # Number of components per module
@@ -88,7 +93,9 @@ class SPDConfig(SchemaClass):
     n_components: int = 20  # Increased default for better decomposition
 
     # Training settings
-    steps: int = 10000  # Increased from 100 - need enough for convergence
+    steps: int = (
+        1000  # 1000 is enough for tiny 2->3->1 networks (paper uses 40k for larger)
+    )
     batch_size: int = 4096  # Large batch for MPS throughput
     eval_batch_size: int = 4096
     n_eval_steps: int = 10
@@ -99,8 +106,8 @@ class SPDConfig(SchemaClass):
     data_generation_type: str = "at_least_zero_active"
 
     # Loss coefficients
-    importance_coeff: float = 1e-4  # Key tuning param for sparsity
-    importance_p: float = 0.5  # pnorm: 0.5=extreme, 1.0=L1, 2.0=L2
+    importance_coeff: float = 1e-3  # Key tuning param for sparsity (paper uses 3e-3)
+    importance_p: float = 1.0  # pnorm: 0.5=extreme, 1.0=L1 (paper default), 2.0=L2
     recon_coeff: float = 1.0
 
     # Analysis settings (for post-training clustering)
@@ -132,8 +139,8 @@ def generate_spd_sweep_configs(
     Returns:
         List of SPDConfig objects for sweep
     """
-    from itertools import product
     import copy
+    from itertools import product
 
     if base_config is None:
         base_config = SPDConfig()
@@ -182,6 +189,7 @@ class SubcircuitMetrics(SchemaClass):
     # Observational
     logit_similarity: float
     bit_similarity: float
+    best_similarity: float = 0.0  # After clamping to binary [0,1]
 
 
 @dataclass
@@ -265,7 +273,9 @@ class CounterfactualEffect(SchemaClass):
 
     # Expected outputs (from original clean/corrupted runs, no intervention)
     expected_clean_output: float = 0.0  # y_clean (full model on clean input)
-    expected_corrupted_output: float = 0.0  # y_corrupted (full model on corrupted input)
+    expected_corrupted_output: float = (
+        0.0  # y_corrupted (full model on corrupted input)
+    )
 
     # Actual output from FULL MODEL with intervention (patched activations)
     actual_output: float = 0.0  # model(x_clean, intervention=patch)
@@ -385,6 +395,7 @@ class RobustnessSample(SchemaClass):
 
     # Agreement between models
     agreement_bit: bool  # round(gate_output) == round(subcircuit_output)
+    agreement_best: bool  # clamp_to_binary(gate) == clamp_to_binary(subcircuit)
     mse: float  # (gate_output - subcircuit_output)^2
 
     # Pre-computed activations for visualization (NO model runs during viz!)
@@ -405,11 +416,13 @@ class RobustnessMetrics(SchemaClass):
     noise_gate_accuracy: float = 0.0
     noise_subcircuit_accuracy: float = 0.0
     noise_agreement_bit: float = 0.0
+    noise_agreement_best: float = 0.0
     noise_mse_mean: float = 0.0
 
     ood_gate_accuracy: float = 0.0
     ood_subcircuit_accuracy: float = 0.0
     ood_agreement_bit: float = 0.0
+    ood_agreement_best: float = 0.0
     ood_mse_mean: float = 0.0
 
     overall_robustness: float = 0.0  # Combined score
@@ -512,14 +525,22 @@ class TrialResult(SchemaClass):
     # Weight matrices per layer (extracted from model, for visualization)
     layer_weights: Optional[list[torch.Tensor]] = None
 
+    # Bias vectors per layer (extracted from model, for visualization)
+    # Shows (weight + bias) on edge labels to reveal bias contribution when edges are patched
+    layer_biases: Optional[list[torch.Tensor]] = None
+
     # Mean activations for inputs from different ranges (for visualization)
     # Dict mapping range_label (e.g., "0_1", "-1_0") -> list of mean activations per layer
     mean_activations_by_range: Optional[dict[str, list[torch.Tensor]]] = None
 
     # Models stored at runtime (saved as model.pt, not in JSON)
     model: Optional["MLP"] = None
-    decomposed_model: Optional["DecomposedMLP"] = None  # Full multi-gate model (primary config)
-    spd_subcircuit_estimate: Optional[Any] = None  # SPD-based subcircuit clustering (primary config)
+    decomposed_model: Optional["DecomposedMLP"] = (
+        None  # Full multi-gate model (primary config)
+    )
+    spd_subcircuit_estimate: Optional[Any] = (
+        None  # SPD-based subcircuit clustering (primary config)
+    )
     # Multi-config SPD sweep results: maps config_id -> DecomposedMLP/estimate
     decomposed_models_sweep: dict[str, "DecomposedMLP"] = field(default_factory=dict)
     spd_subcircuit_estimates_sweep: dict[str, Any] = field(default_factory=dict)
