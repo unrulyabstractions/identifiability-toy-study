@@ -1,5 +1,6 @@
 import logging
 import random
+from dataclasses import asdict, is_dataclass
 from itertools import chain, combinations
 
 import numpy as np
@@ -168,8 +169,6 @@ from typing import Any
 
 def filter_non_serializable(obj):
     """Recursively filter out non-JSON-serializable objects (like nn.Module, Tensor)."""
-    from dataclasses import is_dataclass, asdict
-
     if isinstance(obj, dict):
         return {
             k: filter_non_serializable(v)

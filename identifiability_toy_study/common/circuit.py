@@ -15,6 +15,13 @@ from tqdm import tqdm
 from .causal import Intervention, PatchShape
 from .grounding import Grounding, compute_local_tts, enumerate_tts
 from .logic_gates import name_gate
+from .subcircuit import (
+    NodePattern,
+    count_node_patterns,
+    enumerate_edge_configs,
+    enumerate_node_patterns,
+    full_edge_config,
+)
 from .utils import get_node_size
 
 
@@ -872,16 +879,12 @@ def enumerate_all_valid_circuit(
     Returns:
         List of circuits, one per valid node pattern, with full edges.
     """
-    from .subcircuit import enumerate_node_patterns, full_edge_config
-
     layer_widths = model.layer_sizes
 
     all_circuits = []
     patterns = enumerate_node_patterns(layer_widths, min_sparsity)
 
     if use_tqdm:
-        from .subcircuit import count_node_patterns
-
         total = count_node_patterns(layer_widths)
         patterns = tqdm(patterns, total=total, desc="Enumerating node patterns")
 
@@ -906,8 +909,6 @@ def enumerate_edge_variants(circuit: Circuit) -> list[Circuit]:
     Returns:
         List of circuits with all valid edge configurations.
     """
-    from .subcircuit import NodePattern, enumerate_edge_configs
-
     # Convert circuit to NodePattern
     layer_masks = tuple(
         sum(int(b) << i for i, b in enumerate(mask)) for mask in circuit.node_masks

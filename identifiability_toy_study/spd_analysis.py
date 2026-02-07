@@ -33,10 +33,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 import json
 
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
 import torch
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
+
+from .common.logic_gates import ALL_LOGIC_GATES
 
 if TYPE_CHECKING:
     from .common.neural_model import DecomposedMLP, MLP
@@ -423,8 +426,6 @@ def map_clusters_to_functions(
     Returns:
         cluster_functions: cluster_idx -> function name
     """
-    from .common.logic_gates import ALL_LOGIC_GATES
-
     if importance_matrix.size == 0 or not cluster_assignments:
         return {}
 
@@ -854,8 +855,6 @@ def _draw_cluster_circuit(
     color,
 ):
     """Draw a single cluster's circuit diagram."""
-    import networkx as nx
-
     G = nx.DiGraph()
     pos = {}
     node_colors = []

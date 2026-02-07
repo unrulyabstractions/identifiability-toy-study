@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 
+from .circuit import enumerate_edge_variants
+
 if TYPE_CHECKING:
     from .circuit import Circuit
     from .neural_model import MLP
@@ -607,8 +609,6 @@ def batch_evaluate_edge_variants(
         List of (original_idx, best_circuit, accuracy, logit_sim, bit_sim)
         for each input circuit, with the best edge configuration found.
     """
-    from .circuit import enumerate_edge_variants
-
     device = eval_device if eval_device is not None else model.device
 
     # Collect all edge variants with their source indices

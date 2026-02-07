@@ -9,12 +9,20 @@ References:
 - SPD paper: https://arxiv.org/pdf/2506.20790
 """
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
-import json
 
 import numpy as np
+
+from .common.circuit import Circuit
+from .spd_analysis import (
+    cluster_components_hierarchical,
+    compute_coactivation_matrix,
+    compute_importance_matrix,
+    map_clusters_to_functions,
+)
 
 if TYPE_CHECKING:
     from .common.neural_model import DecomposedMLP, MLP
@@ -68,13 +76,6 @@ def estimate_spd_subcircuits(
     n_components = decomposed_model.get_n_components()
     if n_components == 0:
         return None
-
-    from .spd_analysis import (
-        compute_importance_matrix,
-        compute_coactivation_matrix,
-        cluster_components_hierarchical,
-        map_clusters_to_functions,
-    )
 
     # Compute importance matrix for all binary inputs
     importance_matrix, component_labels = compute_importance_matrix(
@@ -136,8 +137,6 @@ def spd_clusters_to_circuits(
     Returns:
         List of Circuit objects (one per cluster)
     """
-    from .common.circuit import Circuit
-
     if estimate.n_clusters == 0:
         return []
 

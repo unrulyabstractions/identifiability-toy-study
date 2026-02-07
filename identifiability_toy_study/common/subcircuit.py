@@ -7,9 +7,10 @@ Two-phase approach:
 """
 
 import itertools
-import numpy as np
 from dataclasses import dataclass
 from typing import Iterator
+
+import numpy as np
 
 
 @dataclass

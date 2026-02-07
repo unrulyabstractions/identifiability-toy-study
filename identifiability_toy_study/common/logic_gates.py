@@ -938,8 +938,6 @@ def print_truth_table_multiple(gates, logger):
     logger.info("-" * len(header))
 
     # Generate all input combinations based on the number of inputs
-    from itertools import product
-
     input_combinations = list(product([0, 1], repeat=n_inputs))
 
     # Log each row of the truth table for all gates

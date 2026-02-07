@@ -48,6 +48,8 @@ from pathlib import Path
 
 import torch
 
+from ..spd_subcircuits import save_spd_estimate
+
 from ..common.schemas import ExperimentResult
 from ..common.utils import filter_non_serializable
 
@@ -189,8 +191,6 @@ def _save_spd(trial, trial_dir: Path, logger=None):
         estimate.json       - Subcircuit clustering results
         visualizations/     - Analysis plots
     """
-    from ..spd_subcircuits import save_spd_estimate
-
     # Must have sweep results
     if not trial.decomposed_models_sweep:
         return

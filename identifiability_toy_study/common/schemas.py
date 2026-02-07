@@ -2,6 +2,7 @@ import copy
 import json
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field, fields
+from itertools import product
 from typing import TYPE_CHECKING, Any, Optional
 
 import torch
@@ -57,7 +58,7 @@ class DataParams(SchemaClass):
 
 @dataclass
 class ModelParams(SchemaClass):
-    logic_gates: list[str] = field(default_factory=lambda: ["XOR"])
+    logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
     width: int = 3
     depth: int = 2
 
@@ -139,9 +140,6 @@ def generate_spd_sweep_configs(
     Returns:
         List of SPDConfig objects for sweep
     """
-    import copy
-    from itertools import product
-
     if base_config is None:
         base_config = SPDConfig()
 
@@ -177,7 +175,7 @@ class TrainParams(SchemaClass):
 class IdentifiabilityConstraints(SchemaClass):
     # Max deviation from bit_similarity=1.0 to be considered "best"
     # 0.01 = only 99%+ similar, 0.1 = 90%+ similar, 0.2 = 80%+ similar
-    epsilon: float = 0.001  # More lenient to get more best circuits
+    epsilon: float = 0.1  # More lenient to get more best circuits
 
 
 @dataclass
@@ -572,6 +570,7 @@ class CounterfactualMetrics(SchemaClass):
 @dataclass
 class FaithfulnessCategoryScore(SchemaClass):
     """Score and epsilon for a single faithfulness category."""
+
     score: float = 0.0
     epsilon: float = 0.0  # min(1.0 - component_scores), always positive
 
@@ -585,9 +584,15 @@ class FaithfulnessSummary(SchemaClass):
     - epsilon: Minimum margin from 1.0 across component scores (always positive)
     """
 
-    observational: FaithfulnessCategoryScore = field(default_factory=FaithfulnessCategoryScore)
-    interventional: FaithfulnessCategoryScore = field(default_factory=FaithfulnessCategoryScore)
-    counterfactual: FaithfulnessCategoryScore = field(default_factory=FaithfulnessCategoryScore)
+    observational: FaithfulnessCategoryScore = field(
+        default_factory=FaithfulnessCategoryScore
+    )
+    interventional: FaithfulnessCategoryScore = field(
+        default_factory=FaithfulnessCategoryScore
+    )
+    counterfactual: FaithfulnessCategoryScore = field(
+        default_factory=FaithfulnessCategoryScore
+    )
     overall: float = 0.0  # Combined overall score
 
 

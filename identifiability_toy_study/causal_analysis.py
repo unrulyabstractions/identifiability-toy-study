@@ -4,6 +4,7 @@ Look at calculate_subcircuit_metrics to see high-level
 
 """
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -725,8 +726,6 @@ def _create_intervention_samples(
 
     # Parse patch info from key (e.g., "PatchShape(layers=(1,), indices=(0,), axis='neuron')")
     # Extract layer and indices using simple parsing
-    import re
-
     layer_match = re.search(r"layers=\((\d+),?\)", patch_key)
     indices_match = re.search(r"indices=\(([^)]*)\)", patch_key)
 

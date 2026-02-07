@@ -22,8 +22,10 @@
 Look at visualize_experiment for the main entry point.
 """
 
+import json
 import multiprocessing as mp
 import os
+import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
@@ -42,7 +44,9 @@ from .common.circuit import Circuit
 from .common.neural_model import DecomposedMLP
 from .common.schemas import (
     ExperimentResult,
+    FaithfulnessCategoryScore,
     FaithfulnessMetrics,
+    FaithfulnessSummary,
     ProfilingData,
     RobustnessMetrics,
 )
@@ -1699,8 +1703,6 @@ def visualize_robustness_curves(
 
 def _patch_key_to_filename(patch_key: str) -> str:
     """Convert patch key to readable filename."""
-    import re
-
     layer_match = re.search(r"layers=\((\d+),?\)", patch_key)
     indices_match = re.search(r"indices=\(([^)]*)\)", patch_key)
 
@@ -3179,9 +3181,6 @@ def save_faithfulness_json(
     faithfulness: "FaithfulnessMetrics | None",
 ) -> dict[str, str]:
     """Save result.json in each subfolder and summary.json in faithfulness/."""
-    import json
-    from identifiability_toy_study.common.schemas import FaithfulnessSummary
-
     paths = {}
     obs_overall = 0.0
     int_overall = 0.0
@@ -3216,7 +3215,6 @@ def save_faithfulness_json(
 
     # Compute epsilon from the SAME component scores used for overall score
     # Epsilon = min distance from 1.0 across components (always positive magnitude)
-    from identifiability_toy_study.common.schemas import FaithfulnessCategoryScore
 
     # Observational: epsilon from the 7 agreement rates that make up the overall
     obs_epsilon = 0.0

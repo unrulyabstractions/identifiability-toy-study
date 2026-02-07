@@ -8,9 +8,26 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import torch
 
+from ..common.circuit import Circuit
 from ..common.neural_model import MLP, DecomposedMLP
+from ..common.schemas import (
+    CounterfactualEffect,
+    ExperimentConfig,
+    ExperimentResult,
+    FaithfulnessMetrics,
+    GateMetrics,
+    InterventionSample,
+    PatchStatistics,
+    RobustnessMetrics,
+    RobustnessSample,
+    SubcircuitMetrics,
+    TrialResult,
+    TrialSetup,
+)
+from ..spd_subcircuits import load_spd_estimate as _load_spd_estimate
 
 
 def get_all_runs(output_dir: str | Path) -> list[Path]:
@@ -117,8 +134,6 @@ def load_decomposed_model(
 
 def load_spd_estimate(trial_dir: str | Path):
     """Load SPD subcircuit estimate from trial directory."""
-    from ..spd_subcircuits import load_spd_estimate as _load_spd_estimate
-
     trial_dir = Path(trial_dir)
     spd_dir = trial_dir / "spd"
     if spd_dir.exists():
@@ -135,8 +150,6 @@ def load_spd_analysis(trial_dir: str | Path) -> dict:
         - coactivation_matrix: Component coactivation matrix (numpy array)
         - visualization_paths: Paths to visualization files
     """
-    import numpy as np
-
     trial_dir = Path(trial_dir)
     spd_dir = trial_dir / "spd"
     result = {}
@@ -220,22 +233,6 @@ def load_tensors(trial_dir: str | Path, device: str = "cpu") -> dict:
 
 def load_results(run_dir: str | Path, device: str = "cpu"):
     """Load ExperimentResult from run directory for re-visualization."""
-    from ..common.schemas import (
-        ExperimentConfig,
-        ExperimentResult,
-        TrialResult,
-        TrialSetup,
-        GateMetrics,
-        SubcircuitMetrics,
-        RobustnessMetrics,
-        RobustnessSample,
-        FaithfulnessMetrics,
-        PatchStatistics,
-        CounterfactualEffect,
-        InterventionSample,
-    )
-    from ..common.circuit import Circuit
-
     run_dir = Path(run_dir)
     config_data = load_config(run_dir)
 
