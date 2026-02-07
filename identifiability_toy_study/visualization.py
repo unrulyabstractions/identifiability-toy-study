@@ -1826,10 +1826,10 @@ def visualize_faithfulness_intervention_effects(
     interventional_base = os.path.join(output_dir, "interventional")
 
     def _create_circuit_distribution_summary(patch_stats_dict, circuit_type, distribution_type, base_dir):
-        """Create consolidated stats figure for a circuit type and distribution.
+        """Create bar chart summary for a circuit type and distribution.
 
-        Format: rows per patch, columns for Subcircuit | Gate | Agreement
-        Similar to observational robustness visualizations.
+        Format: Bar chart with patches on x-axis, bit/logit/best similarity bars.
+        Same format as observational summaries for consistency.
         """
         if not patch_stats_dict:
             return None
@@ -1853,71 +1853,53 @@ def visualize_faithfulness_intervention_effects(
         out_dir = os.path.join(base_dir, circuit_type)
         os.makedirs(out_dir, exist_ok=True)
 
-        # Create figure with rows per patch
-        fig, axes = plt.subplots(n_patches, 3, figsize=(15, 4 * n_patches))
-        if n_patches == 1:
-            axes = axes.reshape(1, -1)
+        # Extract metrics from patch stats
+        labels = [_patch_key_to_filename(pk) for pk, _ in sorted_patches]
+        bit_sim = [ps.mean_bit_similarity for _, ps in sorted_patches]
+        logit_sim = [ps.mean_logit_similarity for _, ps in sorted_patches]
+        best_sim = [ps.mean_best_similarity for _, ps in sorted_patches]
+        n_samples = [ps.n_interventions for _, ps in sorted_patches]
 
-        for row, (patch_key, patch_stats) in enumerate(sorted_patches):
-            samples = patch_stats.samples
-            patch_label = _patch_key_to_filename(patch_key)
+        # Create bar chart (same format as observational/interventional summaries)
+        fig, ax = plt.subplots(1, 1, figsize=(max(12, n_patches * 1.2), 6))
 
-            # Column 0: Subcircuit outputs
-            ax = axes[row, 0]
-            if samples:
-                x_vals = [np.mean(s.intervention_values) if s.intervention_values else 0 for s in samples]
-                outputs = [s.subcircuit_output for s in samples]
-                correct = [s.bit_agreement for s in samples]
-                colors = ["#4CAF50" if c else "#E53935" for c in correct]
-                ax.scatter(x_vals, outputs, s=25, c=colors, alpha=0.7, edgecolors="none")
-                ax.axhline(y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
-            ax.set_ylim(-0.2, 1.2)
-            ax.set_ylabel(f"{patch_label}", fontsize=10, fontweight="bold")
-            ax.grid(alpha=0.3)
-            if row == 0:
-                ax.set_title("Subcircuit", fontsize=11, fontweight="bold")
-            if row == n_patches - 1:
-                ax.set_xlabel("Intervention Value", fontsize=9)
+        x = np.arange(n_patches)
+        width = 0.25
 
-            # Column 1: Gate outputs
-            ax = axes[row, 1]
-            if samples:
-                x_vals = [np.mean(s.intervention_values) if s.intervention_values else 0 for s in samples]
-                outputs = [s.gate_output for s in samples]
-                correct = [s.bit_agreement for s in samples]
-                colors = ["#4CAF50" if c else "#E53935" for c in correct]
-                ax.scatter(x_vals, outputs, s=25, c=colors, alpha=0.7, edgecolors="none")
-                ax.axhline(y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
-            ax.set_ylim(-0.2, 1.2)
-            ax.grid(alpha=0.3)
-            if row == 0:
-                ax.set_title("Full Gate", fontsize=11, fontweight="bold")
-            if row == n_patches - 1:
-                ax.set_xlabel("Intervention Value", fontsize=9)
+        # Bar colors matching observational format
+        ax.bar(x - width, bit_sim, width, label="Bit Agreement", color="#4CAF50", alpha=0.8)
+        ax.bar(x, logit_sim, width, label="Logit Similarity", color="#2196F3", alpha=0.8)
+        ax.bar(x + width, best_sim, width, label="Best Similarity", color="#FF9800", alpha=0.8)
 
-            # Column 2: Agreement (binned)
-            ax = axes[row, 2]
-            if samples:
-                _plot_agreement_binned(ax, samples, n_bins=10, show_xlabel=(row == n_patches - 1))
-            ax.grid(alpha=0.3, axis="y")
-            if row == 0:
-                ax.set_title("Agreement", fontsize=11, fontweight="bold")
+        ax.set_ylabel("Score", fontsize=11)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
 
-        # Title and layout
+        # Adapt y-axis based on distribution type
+        # OOD may have lower scores, so auto-scale with some padding
+        if distribution_type == "out_of_distribution":
+            all_scores = bit_sim + logit_sim + best_sim
+            y_min = min(0, min(all_scores) - 0.1) if all_scores else -0.15
+            y_max = max(1.0, max(all_scores) + 0.1) if all_scores else 1.15
+            ax.set_ylim(y_min, y_max)
+        else:
+            ax.set_ylim(-0.15, 1.15)
+
+        ax.axhline(y=0, color="#888888", linestyle="-", alpha=0.3)
+        ax.axhline(y=0.5, color="#888888", linestyle="--", alpha=0.3)
+        ax.axhline(y=1.0, color="#888888", linestyle="-", alpha=0.3)
+        ax.legend(loc="upper right", fontsize=9)
+        ax.grid(alpha=0.3, axis="y")
+
+        # Sample counts above bars
+        for i, (xi, n) in enumerate(zip(x, n_samples)):
+            y_pos = max(bit_sim[i], logit_sim[i], best_sim[i]) + 0.03
+            ax.text(xi, y_pos, f"n={n}", ha="center", va="bottom", fontsize=7, color="#666666")
+
+        # Title
         circuit_label = "In-Circuit" if circuit_type == "in_circuit" else "Out-of-Circuit"
         dist_label = "In-Distribution" if distribution_type == "in_distribution" else "Out-of-Distribution"
-        finalize_figure(fig, f"{prefix}{circuit_label} - {dist_label}", has_legend_below=True, fontsize=14)
-
-        # Add legend at bottom
-        from matplotlib.lines import Line2D
-        legend_elements = [
-            Line2D([0], [0], marker='o', color='w', markerfacecolor='#4CAF50',
-                   markersize=8, label='Agreement'),
-            Line2D([0], [0], marker='o', color='w', markerfacecolor='#E53935',
-                   markersize=8, label='Disagreement'),
-        ]
-        fig.legend(handles=legend_elements, loc='lower center', ncol=2,
-                   fontsize=9, framealpha=0.9, bbox_to_anchor=(0.5, 0.01))
+        finalize_figure(fig, f"{prefix}{circuit_label} - {dist_label}", fontsize=13)
 
         filename = f"{distribution_type}_stats.png"
         path = os.path.join(out_dir, filename)
