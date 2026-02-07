@@ -18,8 +18,8 @@ if TYPE_CHECKING:
     from .neural_model import MLP
 
 # Default max circuits per batch to avoid OOM
-# 512 is conservative; can be increased for smaller models/more memory
-DEFAULT_MAX_BATCH_SIZE = 512
+# 64 is very conservative for CPU; can be increased for GPU with more memory
+DEFAULT_MAX_BATCH_SIZE = 64
 
 
 def _evaluate_subcircuits_chunk(
@@ -97,17 +97,6 @@ def batch_evaluate_subcircuits(
     if x.device.type != device:
         x = x.to(device)
 
-    # Get pre-stacked masks or compute them
-    if precomputed_masks is not None:
-        layer_masks_list = precomputed_masks
-        # Verify masks are on correct device
-        if layer_masks_list[0].device.type != device:
-            layer_masks_list = [m.to(device) for m in layer_masks_list]
-    else:
-        layer_masks_list = precompute_circuit_masks(
-            circuits, n_layers, gate_idx, device
-        )
-
     # Run batched forward pass with masked weights
     with torch.inference_mode():
         # Get layer weights and move to eval device if needed
@@ -119,24 +108,53 @@ def batch_evaluate_subcircuits(
             weights[-1] = weights[-1][gate_idx : gate_idx + 1, :]
             biases[-1] = biases[-1][gate_idx : gate_idx + 1]
 
-        # If small enough, process in one batch
+        # If precomputed masks provided, use them
+        if precomputed_masks is not None:
+            layer_masks_list = precomputed_masks
+            if layer_masks_list[0].device.type != device:
+                layer_masks_list = [m.to(device) for m in layer_masks_list]
+
+            # If small enough, process in one batch
+            if n_circuits <= max_batch_size:
+                return _evaluate_subcircuits_chunk(x, weights, biases, layer_masks_list)
+
+            # Otherwise, chunk the circuits (masks already computed)
+            results = []
+            for start_idx in range(0, n_circuits, max_batch_size):
+                end_idx = min(start_idx + max_batch_size, n_circuits)
+                chunk_masks = [m[start_idx:end_idx] for m in layer_masks_list]
+                chunk_result = _evaluate_subcircuits_chunk(x, weights, biases, chunk_masks)
+                results.append(chunk_result)
+            return torch.cat(results, dim=0)
+
+        # No precomputed masks - compute per-chunk to avoid OOM on large circuit lists
+        # This is crucial for edge variant evaluation with millions of circuits
         if n_circuits <= max_batch_size:
+            # Small enough to compute all masks at once
+            layer_masks_list = precompute_circuit_masks(circuits, n_layers, gate_idx, device)
             return _evaluate_subcircuits_chunk(x, weights, biases, layer_masks_list)
 
-        # Otherwise, chunk the circuits
+        # Large circuit list - compute masks incrementally per chunk
         results = []
         for start_idx in range(0, n_circuits, max_batch_size):
             end_idx = min(start_idx + max_batch_size, n_circuits)
+            chunk_circuits = circuits[start_idx:end_idx]
 
-            # Slice masks for this chunk
-            chunk_masks = [m[start_idx:end_idx] for m in layer_masks_list]
+            # Compute masks only for this chunk
+            chunk_masks = precompute_circuit_masks(chunk_circuits, n_layers, gate_idx, device)
 
             # Evaluate chunk
             chunk_result = _evaluate_subcircuits_chunk(x, weights, biases, chunk_masks)
-            results.append(chunk_result)
+            results.append(chunk_result.cpu())  # Move to CPU to free GPU memory
 
-        # Concatenate all chunks
-        return torch.cat(results, dim=0)
+            # Explicitly delete chunk masks to free memory
+            del chunk_masks
+
+        # Concatenate all chunks (on CPU, then move back if needed)
+        result = torch.cat(results, dim=0)
+        if device != "cpu":
+            result = result.to(device)
+        return result
 
 
 def precompute_circuit_masks_base(
@@ -245,6 +263,36 @@ def precompute_circuit_masks(
     return layer_masks_list
 
 
+def _compute_chunk_metrics(
+    y_chunk: torch.Tensor,
+    bit_target: torch.Tensor,
+    bit_pred: torch.Tensor,
+    best_pred: torch.Tensor,
+    y_pred: torch.Tensor,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Compute metrics for a chunk of circuit outputs."""
+    bit_chunk = torch.round(y_chunk)
+    best_chunk = torch.clamp(bit_chunk, 0, 1)
+
+    # Accuracy
+    correct = bit_chunk.eq(bit_target.unsqueeze(0))
+    accuracies = correct.float().mean(dim=(1, 2)).cpu().numpy()
+
+    # Bit similarity
+    same_as_model = bit_chunk.eq(bit_pred.unsqueeze(0))
+    bit_sims = same_as_model.float().mean(dim=(1, 2)).cpu().numpy()
+
+    # Best similarity
+    same_best = best_chunk.eq(best_pred.unsqueeze(0))
+    best_sims = same_best.float().mean(dim=(1, 2)).cpu().numpy()
+
+    # Logit similarity
+    mse = ((y_chunk - y_pred.unsqueeze(0)) ** 2).mean(dim=(1, 2))
+    logit_sims = (1 - mse).detach().cpu().numpy()
+
+    return accuracies, logit_sims, bit_sims, best_sims
+
+
 def batch_compute_metrics(
     model: "MLP",
     circuits: list["Circuit"],
@@ -260,6 +308,7 @@ def batch_compute_metrics(
     Compute accuracy, logit_similarity, bit_similarity, best_similarity for all circuits.
 
     Large circuit lists are automatically chunked to avoid OOM errors.
+    Metrics are computed incrementally per chunk to avoid storing all outputs.
 
     Args:
         model: The full trained model
@@ -276,6 +325,8 @@ def batch_compute_metrics(
         Tuple of (accuracies, logit_similarities, bit_similarities, best_similarities) arrays
     """
     device = eval_device if eval_device is not None else model.device
+    n_circuits = len(circuits)
+    n_layers = len(model.layers)
 
     # Ensure all inputs are on the same device
     if x.device.type != device:
@@ -285,47 +336,65 @@ def batch_compute_metrics(
     if y_pred.device.type != device:
         y_pred = y_pred.to(device)
 
-    # Batch evaluate all circuits (with automatic chunking)
-    y_circuits = batch_evaluate_subcircuits(
-        model,
-        circuits,
-        x,
-        gate_idx,
-        precomputed_masks=precomputed_masks,
-        eval_device=device,
-        max_batch_size=max_batch_size,
+    # Precompute target values
+    bit_target = torch.round(y_target)
+    bit_pred = torch.round(y_pred)
+    best_pred = torch.clamp(bit_pred, 0, 1)
+
+    # If small enough and precomputed masks available, use fast path
+    if n_circuits <= max_batch_size:
+        y_circuits = batch_evaluate_subcircuits(
+            model, circuits, x, gate_idx,
+            precomputed_masks=precomputed_masks,
+            eval_device=device,
+            max_batch_size=max_batch_size,
+        )
+        return _compute_chunk_metrics(y_circuits, bit_target, bit_pred, best_pred, y_pred)
+
+    # Large circuit list - compute metrics incrementally per chunk
+    # This avoids storing all outputs at once
+    all_accs = []
+    all_logit_sims = []
+    all_bit_sims = []
+    all_best_sims = []
+
+    with torch.inference_mode():
+        # Get layer weights once
+        weights = [layer[0].weight.to(device) for layer in model.layers]
+        biases = [layer[0].bias.to(device) for layer in model.layers]
+        if model.output_size > 1:
+            weights[-1] = weights[-1][gate_idx : gate_idx + 1, :]
+            biases[-1] = biases[-1][gate_idx : gate_idx + 1]
+
+        for start_idx in range(0, n_circuits, max_batch_size):
+            end_idx = min(start_idx + max_batch_size, n_circuits)
+            chunk_circuits = circuits[start_idx:end_idx]
+
+            # Compute masks for this chunk
+            chunk_masks = precompute_circuit_masks(chunk_circuits, n_layers, gate_idx, device)
+
+            # Evaluate chunk
+            y_chunk = _evaluate_subcircuits_chunk(x, weights, biases, chunk_masks)
+
+            # Compute metrics for chunk
+            accs, logit_sims, bit_sims, best_sims = _compute_chunk_metrics(
+                y_chunk, bit_target, bit_pred, best_pred, y_pred
+            )
+
+            all_accs.append(accs)
+            all_logit_sims.append(logit_sims)
+            all_bit_sims.append(bit_sims)
+            all_best_sims.append(best_sims)
+
+            # Free memory
+            del chunk_masks, y_chunk
+
+    return (
+        np.concatenate(all_accs),
+        np.concatenate(all_logit_sims),
+        np.concatenate(all_bit_sims),
+        np.concatenate(all_best_sims),
     )
-    # y_circuits: [n_circuits, batch, 1]
-
-    bit_target = torch.round(y_target)  # [batch, 1]
-    bit_pred = torch.round(y_pred)  # [batch, 1]
-
-    # Compute metrics for all circuits at once
-    bit_circuits = torch.round(y_circuits)  # [n_circuits, batch, 1]
-
-    # Best: clamp to binary [0,1] after rounding (handles out-of-range outputs)
-    best_circuits = torch.clamp(bit_circuits, 0, 1)  # [n_circuits, batch, 1]
-    best_pred = torch.clamp(bit_pred, 0, 1)  # [batch, 1]
-
-    # Accuracy: match with ground truth
-    # [n_circuits, batch, 1] == [1, batch, 1] -> [n_circuits, batch, 1]
-    correct = bit_circuits.eq(bit_target.unsqueeze(0))
-    accuracies = correct.float().mean(dim=(1, 2)).cpu().numpy()
-
-    # Bit similarity: match with model predictions
-    same_as_model = bit_circuits.eq(bit_pred.unsqueeze(0))
-    bit_similarities = same_as_model.float().mean(dim=(1, 2)).cpu().numpy()
-
-    # Best similarity: match after clamping to [0,1]
-    same_as_model_best = best_circuits.eq(best_pred.unsqueeze(0))
-    best_similarities = same_as_model_best.float().mean(dim=(1, 2)).cpu().numpy()
-
-    # Logit similarity: 1 - MSE
-    # y_circuits: [n_circuits, batch, 1], y_pred: [batch, 1]
-    mse = ((y_circuits - y_pred.unsqueeze(0)) ** 2).mean(dim=(1, 2))
-    logit_similarities = (1 - mse).detach().cpu().numpy()
-
-    return accuracies, logit_similarities, bit_similarities, best_similarities
 
 
 def batch_evaluate_edge_variants(
@@ -337,6 +406,7 @@ def batch_evaluate_edge_variants(
     gate_idx: int = 0,
     eval_device: str | None = None,
     max_batch_size: int = DEFAULT_MAX_BATCH_SIZE,
+    max_memory_gb: float = 4.0,
 ) -> list[tuple[int, "Circuit", float, float, float]]:
     """
     For each node pattern, enumerate edge variants and find the best one.
@@ -353,6 +423,7 @@ def batch_evaluate_edge_variants(
         gate_idx: Which output gate
         eval_device: Device for evaluation
         max_batch_size: Maximum circuits per batch to avoid OOM errors.
+        max_memory_gb: Target max memory usage in GB. Batch size adapts to stay under this.
 
     Returns:
         List of (original_idx, best_circuit, accuracy, logit_sim, bit_sim)
@@ -380,11 +451,23 @@ def batch_evaluate_edge_variants(
 
     # Extract just the circuits for batch evaluation
     circuits_to_eval = [v[2] for v in all_variants]
+    n_variants = len(circuits_to_eval)
 
-    # Batch evaluate all variants at once (with chunking)
+    # Estimate memory per circuit and adapt batch size
+    # Memory ~ n_circuits * batch_size * hidden_size * 4 bytes * num_layers
+    batch_size = x.shape[0]
+    hidden_size = max(mask.shape[0] for mask in circuits_to_eval[0].edge_masks)
+    n_layers = len(circuits_to_eval[0].edge_masks)
+    bytes_per_circuit = batch_size * hidden_size * 4 * n_layers * 2  # factor of 2 for safety
+    max_circuits_in_memory = int((max_memory_gb * 1e9) / bytes_per_circuit)
+    adaptive_batch_size = max(1, min(max_batch_size, max_circuits_in_memory))
+
+    print(f"    [EdgeVariants] {len(base_circuits)} base -> {n_variants} variants, batch_size={adaptive_batch_size} (est. {bytes_per_circuit/1e6:.1f}MB/circuit)")
+
+    # Batch evaluate all variants at once (with adaptive chunking)
     accs, logit_sims, bit_sims, _ = batch_compute_metrics(
         model, circuits_to_eval, x, y_target, y_pred,
-        gate_idx=gate_idx, eval_device=device, max_batch_size=max_batch_size
+        gate_idx=gate_idx, eval_device=device, max_batch_size=adaptive_batch_size
     )
 
     # Find best variant for each original circuit
