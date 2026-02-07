@@ -571,11 +571,19 @@ class CounterfactualMetrics(SchemaClass):
 
 @dataclass
 class FaithfulnessSummary(SchemaClass):
-    """Summary of all faithfulness metrics for summary.json."""
+    """Summary of all faithfulness metrics for summary.json.
+
+    Epsilon values represent the minimum margin by which any individual
+    score falls short of 1.0 (perfect faithfulness).
+    epsilon = min(1.0 - individual_scores)
+    """
 
     observational: float = 0.0  # Overall observational score
+    observational_epsilon: float = 0.0  # Epsilon for observational (min margin from 1.0)
     interventional: float = 0.0  # Overall interventional score
+    interventional_epsilon: float = 0.0  # Epsilon for interventional
     counterfactual: float = 0.0  # Overall counterfactual score
+    counterfactual_epsilon: float = 0.0  # Epsilon for counterfactual
     overall: float = 0.0  # Combined overall score
 
 
@@ -724,6 +732,7 @@ class ExperimentConfig(SchemaClass):
     spd_device: str = (
         "cpu"  # CPU is fastest for small models (no GPU transfer overhead)
     )
+    run_spd: bool = False  # Enable SPD decomposition analysis
 
     base_trial: TrialSetup = field(default_factory=TrialSetup)
 

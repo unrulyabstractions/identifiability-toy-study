@@ -89,6 +89,7 @@ def run_experiment(cfg: ExperimentConfig, logger=None, max_parallel_trials: int 
             spd_device=cfg.spd_device,
             logger=logger,
             debug=cfg.debug,
+            run_spd=cfg.run_spd,
         )
         experiment_result.trials[trial_result.trial_id] = trial_result
     else:
@@ -105,6 +106,7 @@ def run_experiment(cfg: ExperimentConfig, logger=None, max_parallel_trials: int 
                 spd_device=cfg.spd_device,
                 logger=None,  # Disable logging in parallel to avoid interleaving
                 debug=cfg.debug,
+                run_spd=cfg.run_spd,
             )
 
         with ThreadPoolExecutor(max_workers=n_workers) as executor:

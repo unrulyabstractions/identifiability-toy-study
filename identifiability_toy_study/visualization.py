@@ -79,10 +79,10 @@ COLORS = {
     "mse": "teal",
     "correct": "green",
     "incorrect": "red",
-    # Faithfulness-specific
-    "in_circuit": "#2E7D32",  # Dark green
-    "out_circuit": "#C62828",  # Dark red
-    "faithfulness": "#6A1B9A",  # Purple
+    # Faithfulness-specific (pastel)
+    "in_circuit": "#77DD77",  # Pastel green
+    "out_circuit": "#DA70D6",  # Pastel orchid
+    "faithfulness": "#DA70D6",  # Pastel orchid (purple)
     "counterfactual": "#EF6C00",  # Orange
 }
 MARKERS = {"gate": "^", "subcircuit": "v", "agreement": "o", "mse": "s"}
@@ -1305,12 +1305,21 @@ def visualize_robustness_curves(
         if not samples or not x_values:
             return
 
-        # Create bins
+        # Create bins - use logarithmic binning when x_values span orders of magnitude
         x_min, x_max = min(x_values), max(x_values)
         if x_min == x_max:
             x_min, x_max = x_min - 0.5, x_max + 0.5
-        bin_edges = np.linspace(x_min, x_max, n_bins + 1)
-        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+        # Detect if logarithmic binning is appropriate:
+        # - All values positive (required for geomspace)
+        # - Span at least one order of magnitude (max/min > 10)
+        use_log_bins = x_min > 0 and x_max / x_min > 10
+        if use_log_bins:
+            bin_edges = np.geomspace(x_min, x_max, n_bins + 1)
+            bin_centers = np.sqrt(bin_edges[:-1] * bin_edges[1:])  # Geometric mean
+        else:
+            bin_edges = np.linspace(x_min, x_max, n_bins + 1)
+            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
         # Compute per-bin statistics
         bit_agreement_rates = []
@@ -1342,7 +1351,13 @@ def visualize_robustness_curves(
         bit_rates = np.array(bit_agreement_rates)
         best_rates = np.array(best_agreement_rates)
 
-        bar_width = (x_max - x_min) / n_bins * 0.8
+        # Compute bar widths - for log scale, use ratio-based width per bin
+        if use_log_bins:
+            ax.set_xscale('log')
+            # For log scale, bar width should be proportional to bin center
+            bar_widths = [(bin_edges[i+1] - bin_edges[i]) * 0.8 for i in range(n_bins)]
+        else:
+            bar_widths = [(x_max - x_min) / n_bins * 0.8] * n_bins
 
         # Pastel colors
         color_bit = "#FFB6C1"   # Pastel pink for Bit
@@ -1355,11 +1370,11 @@ def visualize_robustness_curves(
 
         # 1. Solid yellow for Best-only portion (above Bit)
         diff_rates = np.maximum(0, best_rates - bit_rates)
-        ax.bar(bin_centers, diff_rates, width=bar_width, bottom=bit_rates,
+        ax.bar(bin_centers, diff_rates, width=bar_widths, bottom=bit_rates,
                color=color_best, edgecolor="none")
 
         # 2. Overlap region: pink fill with yellow diagonal stripes
-        ax.bar(bin_centers, bit_rates, width=bar_width,
+        ax.bar(bin_centers, bit_rates, width=bar_widths,
                color=color_bit, edgecolor=color_best, hatch="//",
                linewidth=0.5)
 
@@ -1682,16 +1697,28 @@ def _patch_key_to_filename(patch_key: str) -> str:
 
 
 def _faithfulness_score_to_color(score: float) -> tuple:
-    """Color gradient for faithfulness score: red (0) -> yellow (0.5) -> green (1)."""
+    """Pastel color gradient for faithfulness score: red (0) -> yellow (0.5) -> green (1)."""
     score = max(0, min(1, score))
+
+    # Pastel colors (softer, less saturated)
+    pastel_red = (1.0, 0.8, 0.8)      # #FFCCCC - soft pink-red
+    pastel_yellow = (1.0, 0.98, 0.8)  # #FFFACD - lemon chiffon
+    pastel_green = (0.8, 1.0, 0.8)    # #CCFFCC - soft mint green
+
     if score < 0.5:
-        # Red to yellow
+        # Pastel red to pastel yellow
         t = score * 2
-        return (0.9, 0.3 + 0.5 * t, 0.3, 1.0)
+        r = pastel_red[0] + (pastel_yellow[0] - pastel_red[0]) * t
+        g = pastel_red[1] + (pastel_yellow[1] - pastel_red[1]) * t
+        b = pastel_red[2] + (pastel_yellow[2] - pastel_red[2]) * t
+        return (r, g, b, 1.0)
     else:
-        # Yellow to green
+        # Pastel yellow to pastel green
         t = (score - 0.5) * 2
-        return (0.9 - 0.5 * t, 0.8, 0.3, 1.0)
+        r = pastel_yellow[0] + (pastel_green[0] - pastel_yellow[0]) * t
+        g = pastel_yellow[1] + (pastel_green[1] - pastel_yellow[1]) * t
+        b = pastel_yellow[2] + (pastel_green[2] - pastel_yellow[2]) * t
+        return (r, g, b, 1.0)
 
 
 def visualize_faithfulness_intervention_effects(
@@ -1875,7 +1902,7 @@ def visualize_faithfulness_intervention_effects(
 
         for i, is_in in enumerate(is_in_circuit):
             marker = "▲" if is_in else "▼"
-            color = "#2E7D32" if is_in else "#1565C0"
+            color = "#77DD77" if is_in else "#6495ED"  # Pastel green/blue
             ax.text(x[i], -0.08, marker, ha="center", va="top", fontsize=10, color=color)
 
         ax.set_ylabel("Score", fontsize=11)
@@ -2070,23 +2097,24 @@ def visualize_faithfulness_intervention_effects(
         _draw_metric_circuit(axes[1, 1], ind_scores, {},
                             f"Independence: {ind_mean:.2f}", layer_sizes)
 
-        # Simple title with just gate name
+        # Apply tight_layout first to get proper subplot arrangement
+        plt.tight_layout(rect=[0.08, 0.03, 1.0, 0.90])
+
+        # Simple title with just gate name - positioned within the safe area
         fig.suptitle(prefix.strip(" -") if prefix else "Counterfactual Summary",
-                     fontsize=12, fontweight="bold", y=0.99)
+                     fontsize=12, fontweight="bold", y=0.96)
 
-        # Column labels at top (higher position)
-        fig.text(0.30, 0.965, "IN-CIRCUIT", ha="center", va="bottom", fontsize=11,
-                 fontweight="bold", color="#1565C0")
-        fig.text(0.73, 0.965, "OUT-CIRCUIT", ha="center", va="bottom", fontsize=11,
-                 fontweight="bold", color="#6A1B9A")
+        # Column labels at top (positioned to not get cut off)
+        fig.text(0.30, 0.92, "IN-CIRCUIT", ha="center", va="bottom", fontsize=11,
+                 fontweight="bold", color="#6495ED")
+        fig.text(0.73, 0.92, "OUT-CIRCUIT", ha="center", va="bottom", fontsize=11,
+                 fontweight="bold", color="#DA70D6")
 
-        # Row labels on left
-        fig.text(0.035, 0.72, "DENOISING", ha="center", va="center", fontsize=10,
-                 fontweight="bold", rotation=90, color="#2E7D32")
-        fig.text(0.035, 0.28, "NOISING", ha="center", va="center", fontsize=10,
-                 fontweight="bold", rotation=90, color="#C62828")
-
-        plt.subplots_adjust(left=0.08, bottom=0.05, top=0.92, hspace=0.15, wspace=0.12)
+        # Row labels on left (pastel colors)
+        fig.text(0.035, 0.68, "DENOISING", ha="center", va="center", fontsize=10,
+                 fontweight="bold", rotation=90, color="#77DD77")
+        fig.text(0.035, 0.26, "NOISING", ha="center", va="center", fontsize=10,
+                 fontweight="bold", rotation=90, color="#FFB6C1")
 
         # Save in counterfactual/ subdirectory
         counterfactual_dir = os.path.join(output_dir, "counterfactual")
@@ -2185,19 +2213,26 @@ def visualize_faithfulness_intervention_effects(
                     if out_circuit_nodes:
                         nx.draw_networkx_nodes(G, pos, ax=ax, nodelist=out_circuit_nodes,
                                                node_color=[node_colors_dict[n] for n in out_circuit_nodes],
-                                               node_size=400, edgecolors="#6A1B9A", linewidths=2.5)
+                                               node_size=400, edgecolors="#DA70D6", linewidths=2.5)
                     if in_circuit_nodes:
                         nx.draw_networkx_nodes(G, pos, ax=ax, nodelist=in_circuit_nodes,
                                                node_color=[node_colors_dict[n] for n in in_circuit_nodes],
-                                               node_size=400, edgecolors="#1565C0", linewidths=2.5)
+                                               node_size=400, edgecolors="#6495ED", linewidths=2.5)
 
                     nx.draw_networkx_labels(G, pos, labels=node_labels, ax=ax, font_size=6, font_weight="bold")
 
                 input_label = input_key.replace("_", ", ")
                 in_label = in_score_type.capitalize()[:4]
                 out_label = out_score_type.capitalize()[:4]
-                ax.set_title(f"({input_label})  |  {in_label}={in_mean:.2f}  {out_label}={out_mean:.2f}",
-                            fontsize=9, fontweight="bold")
+
+                # Create colored subtitle using multiple text elements
+                # Position at top of axes in axes coordinates
+                ax.text(0.5, 1.08, f"({input_label})  |  ", transform=ax.transAxes,
+                       fontsize=9, fontweight="bold", ha="right", va="bottom")
+                ax.text(0.5, 1.08, f"{in_label}={in_mean:.2f}", transform=ax.transAxes,
+                       fontsize=9, fontweight="bold", ha="left", va="bottom", color="#6495ED")
+                ax.text(0.72, 1.08, f"  {out_label}={out_mean:.2f}", transform=ax.transAxes,
+                       fontsize=9, fontweight="bold", ha="left", va="bottom", color="#DA70D6")
                 ax.axis("off")
 
             fig.suptitle(title, fontsize=13, fontweight="bold", y=0.98)
@@ -2863,20 +2898,39 @@ def visualize_profiling_summary(
 
 
 def compute_observational_metrics(robustness: "RobustnessMetrics") -> dict:
-    """Compute ObservationalMetrics from RobustnessMetrics."""
-    from identifiability_toy_study.common.schemas import ObservationalMetrics
+    """Compute ObservationalMetrics from RobustnessMetrics with nested structure.
 
-    metrics = ObservationalMetrics()
-
-    # Noise metrics
+    Returns nested dict structure:
+    {
+        "noise_perturbations": {
+            "n_samples": 100,
+            "gate_accuracy": 0.95,
+            "subcircuit_accuracy": 0.93,
+            "agreement_bit": 0.98,
+            "agreement_best": 0.99,
+            "mse_mean": 0.001
+        },
+        "out_distribution_transformations": {
+            "multiply": {
+                "positive": {"n_samples": 50, "agreement": 0.92},
+                "negative": {"n_samples": 50, "agreement": 0.88}
+            },
+            "add": {"n_samples": 100, "agreement": 0.95},
+            ...
+        },
+        "overall_score": 0.91
+    }
+    """
+    # Noise perturbation metrics
     noise_samples = robustness.noise_samples
-    if noise_samples:
-        metrics.noise_n_samples = len(noise_samples)
-        metrics.noise_gate_accuracy = robustness.noise_gate_accuracy
-        metrics.noise_subcircuit_accuracy = robustness.noise_subcircuit_accuracy
-        metrics.noise_agreement_bit = robustness.noise_agreement_bit
-        metrics.noise_agreement_best = robustness.noise_agreement_best
-        metrics.noise_mse_mean = robustness.noise_mse_mean
+    noise_metrics = {
+        "n_samples": len(noise_samples) if noise_samples else 0,
+        "gate_accuracy": robustness.noise_gate_accuracy,
+        "subcircuit_accuracy": robustness.noise_subcircuit_accuracy,
+        "agreement_bit": robustness.noise_agreement_bit,
+        "agreement_best": robustness.noise_agreement_best,
+        "mse_mean": robustness.noise_mse_mean,
+    }
 
     # Group OOD samples by type
     ood_by_type: dict[str, list] = {}
@@ -2885,126 +2939,150 @@ def compute_observational_metrics(robustness: "RobustnessMetrics") -> dict:
         ood_by_type.setdefault(st, []).append(sample)
 
     # Compute per-type metrics
-    for st, samples in ood_by_type.items():
+    def compute_ood_metrics(samples):
         n = len(samples)
         agreement = sum(s.agreement_bit for s in samples) / n if n > 0 else 0.0
+        return {"n_samples": n, "agreement": agreement}
 
-        if st == "multiply_positive":
-            metrics.multiply_positive_n_samples = n
-            metrics.multiply_positive_agreement = agreement
-        elif st == "multiply_negative":
-            metrics.multiply_negative_n_samples = n
-            metrics.multiply_negative_agreement = agreement
-        elif st == "add":
-            metrics.add_n_samples = n
-            metrics.add_agreement = agreement
-        elif st == "subtract":
-            metrics.subtract_n_samples = n
-            metrics.subtract_agreement = agreement
-        elif st == "bimodal":
-            metrics.bimodal_n_samples = n
-            metrics.bimodal_agreement = agreement
-        elif st == "bimodal_inv":
-            metrics.bimodal_inv_n_samples = n
-            metrics.bimodal_inv_agreement = agreement
+    multiply_pos = compute_ood_metrics(ood_by_type.get("multiply_positive", []))
+    multiply_neg = compute_ood_metrics(ood_by_type.get("multiply_negative", []))
+    add_metrics = compute_ood_metrics(ood_by_type.get("add", []))
+    subtract_metrics = compute_ood_metrics(ood_by_type.get("subtract", []))
+    bimodal_order = compute_ood_metrics(ood_by_type.get("bimodal", []))
+    bimodal_inv = compute_ood_metrics(ood_by_type.get("bimodal_inv", []))
+
+    ood_metrics = {
+        "multiply": {
+            "positive": multiply_pos,
+            "negative": multiply_neg,
+        },
+        "add": add_metrics,
+        "subtract": subtract_metrics,
+        "bimodal": {
+            "order_preserving": bimodal_order,
+            "inverted": bimodal_inv,
+        },
+    }
 
     # Overall score: average of all agreements
     agreements = [
-        metrics.noise_agreement_bit,
-        metrics.multiply_positive_agreement,
-        metrics.multiply_negative_agreement,
-        metrics.add_agreement,
-        metrics.subtract_agreement,
-        metrics.bimodal_agreement,
-        metrics.bimodal_inv_agreement,
+        noise_metrics["agreement_bit"],
+        multiply_pos["agreement"],
+        multiply_neg["agreement"],
+        add_metrics["agreement"],
+        subtract_metrics["agreement"],
+        bimodal_order["agreement"],
+        bimodal_inv["agreement"],
     ]
     n_valid = sum(1 for a in agreements if a > 0)
-    metrics.overall_observational = sum(agreements) / n_valid if n_valid > 0 else 0.0
+    overall = sum(agreements) / n_valid if n_valid > 0 else 0.0
 
-    return asdict(metrics)
+    return {
+        "noise_perturbations": noise_metrics,
+        "out_distribution_transformations": ood_metrics,
+        "overall_score": overall,
+    }
 
 
 def compute_interventional_metrics(faithfulness: "FaithfulnessMetrics") -> dict:
-    """Compute InterventionalMetrics from FaithfulnessMetrics."""
-    from identifiability_toy_study.common.schemas import InterventionalMetrics
+    """Compute InterventionalMetrics from FaithfulnessMetrics with nested structure.
 
-    metrics = InterventionalMetrics()
+    Returns nested dict structure:
+    {
+        "in_circuit": {
+            "in_distribution": {"n_interventions": 10, "mean_bit_similarity": 0.95, "mean_logit_similarity": 0.92},
+            "out_distribution": {"n_interventions": 10, "mean_bit_similarity": 0.88, "mean_logit_similarity": 0.85}
+        },
+        "out_circuit": {
+            "in_distribution": {...},
+            "out_distribution": {...}
+        },
+        "overall_score": 0.90
+    }
+    """
+    def compute_stats(stats_dict):
+        if not stats_dict:
+            return {"n_interventions": 0, "mean_bit_similarity": 0.0, "mean_logit_similarity": 0.0}
+        bit_sims = [ps.mean_bit_similarity for ps in stats_dict.values()]
+        logit_sims = [ps.mean_logit_similarity for ps in stats_dict.values()]
+        return {
+            "n_interventions": len(stats_dict),
+            "mean_bit_similarity": sum(bit_sims) / len(bit_sims) if bit_sims else 0.0,
+            "mean_logit_similarity": sum(logit_sims) / len(logit_sims) if logit_sims else 0.0,
+        }
 
-    # In-circuit in-distribution (use pre-computed stats)
-    in_circuit_stats = faithfulness.in_circuit_stats
-    if in_circuit_stats:
-        metrics.in_circuit_n_interventions = len(in_circuit_stats)
-        bit_sims = [ps.mean_bit_similarity for ps in in_circuit_stats.values()]
-        logit_sims = [ps.mean_logit_similarity for ps in in_circuit_stats.values()]
-        metrics.in_circuit_mean_bit_similarity = sum(bit_sims) / len(bit_sims) if bit_sims else 0.0
-        metrics.in_circuit_mean_logit_similarity = sum(logit_sims) / len(logit_sims) if logit_sims else 0.0
-
-    # In-circuit OOD
-    in_circuit_ood_stats = faithfulness.in_circuit_stats_ood
-    if in_circuit_ood_stats:
-        metrics.in_circuit_ood_n_interventions = len(in_circuit_ood_stats)
-        bit_sims = [ps.mean_bit_similarity for ps in in_circuit_ood_stats.values()]
-        logit_sims = [ps.mean_logit_similarity for ps in in_circuit_ood_stats.values()]
-        metrics.in_circuit_ood_mean_bit_similarity = sum(bit_sims) / len(bit_sims) if bit_sims else 0.0
-        metrics.in_circuit_ood_mean_logit_similarity = sum(logit_sims) / len(logit_sims) if logit_sims else 0.0
-
-    # Out-circuit in-distribution
-    out_circuit_stats = faithfulness.out_circuit_stats
-    if out_circuit_stats:
-        metrics.out_circuit_n_interventions = len(out_circuit_stats)
-        bit_sims = [ps.mean_bit_similarity for ps in out_circuit_stats.values()]
-        logit_sims = [ps.mean_logit_similarity for ps in out_circuit_stats.values()]
-        metrics.out_circuit_mean_bit_similarity = sum(bit_sims) / len(bit_sims) if bit_sims else 0.0
-        metrics.out_circuit_mean_logit_similarity = sum(logit_sims) / len(logit_sims) if logit_sims else 0.0
-
-    # Out-circuit OOD
-    out_circuit_ood_stats = faithfulness.out_circuit_stats_ood
-    if out_circuit_ood_stats:
-        metrics.out_circuit_ood_n_interventions = len(out_circuit_ood_stats)
-        bit_sims = [ps.mean_bit_similarity for ps in out_circuit_ood_stats.values()]
-        logit_sims = [ps.mean_logit_similarity for ps in out_circuit_ood_stats.values()]
-        metrics.out_circuit_ood_mean_bit_similarity = sum(bit_sims) / len(bit_sims) if bit_sims else 0.0
-        metrics.out_circuit_ood_mean_logit_similarity = sum(logit_sims) / len(logit_sims) if logit_sims else 0.0
+    in_circuit_id = compute_stats(faithfulness.in_circuit_stats)
+    in_circuit_ood = compute_stats(faithfulness.in_circuit_stats_ood)
+    out_circuit_id = compute_stats(faithfulness.out_circuit_stats)
+    out_circuit_ood = compute_stats(faithfulness.out_circuit_stats_ood)
 
     # Overall: average of bit similarities
     sims = [
-        metrics.in_circuit_mean_bit_similarity,
-        metrics.in_circuit_ood_mean_bit_similarity,
-        metrics.out_circuit_mean_bit_similarity,
-        metrics.out_circuit_ood_mean_bit_similarity,
+        in_circuit_id["mean_bit_similarity"],
+        in_circuit_ood["mean_bit_similarity"],
+        out_circuit_id["mean_bit_similarity"],
+        out_circuit_ood["mean_bit_similarity"],
     ]
     n_valid = sum(1 for s in sims if s > 0)
-    metrics.overall_interventional = sum(sims) / n_valid if n_valid > 0 else 0.0
+    overall = sum(sims) / n_valid if n_valid > 0 else 0.0
 
-    return asdict(metrics)
+    return {
+        "in_circuit": {
+            "in_distribution": in_circuit_id,
+            "out_distribution": in_circuit_ood,
+        },
+        "out_circuit": {
+            "in_distribution": out_circuit_id,
+            "out_distribution": out_circuit_ood,
+        },
+        "overall_score": overall,
+    }
 
 
 def compute_counterfactual_metrics(faithfulness: "FaithfulnessMetrics") -> dict:
-    """Compute CounterfactualMetrics from FaithfulnessMetrics."""
-    from identifiability_toy_study.common.schemas import CounterfactualMetrics
+    """Compute CounterfactualMetrics from FaithfulnessMetrics with nested structure.
 
-    metrics = CounterfactualMetrics()
+    Returns nested dict structure matching 2x2 matrix:
+    {
+        "denoising": {
+            "in_circuit": {"score": 0.95, "label": "sufficiency"},
+            "out_circuit": {"score": 0.92, "label": "completeness"},
+            "n_pairs": 40
+        },
+        "noising": {
+            "in_circuit": {"score": 0.88, "label": "necessity"},
+            "out_circuit": {"score": 0.90, "label": "independence"},
+            "n_pairs": 40
+        },
+        "overall_score": 0.91
+    }
+    """
+    suff = faithfulness.mean_sufficiency
+    comp = faithfulness.mean_completeness
+    nec = faithfulness.mean_necessity
+    ind = faithfulness.mean_independence
 
-    # Use pre-computed means from FaithfulnessMetrics
-    metrics.mean_sufficiency = faithfulness.mean_sufficiency
-    metrics.mean_completeness = faithfulness.mean_completeness
-    metrics.n_denoising_pairs = len(faithfulness.sufficiency_effects) + len(faithfulness.completeness_effects)
-
-    metrics.mean_necessity = faithfulness.mean_necessity
-    metrics.mean_independence = faithfulness.mean_independence
-    metrics.n_noising_pairs = len(faithfulness.necessity_effects) + len(faithfulness.independence_effects)
+    n_denoising = len(faithfulness.sufficiency_effects) + len(faithfulness.completeness_effects)
+    n_noising = len(faithfulness.necessity_effects) + len(faithfulness.independence_effects)
 
     # Overall: average of all counterfactual scores
-    scores = [
-        metrics.mean_sufficiency,
-        metrics.mean_completeness,
-        metrics.mean_necessity,
-        metrics.mean_independence,
-    ]
+    scores = [suff, comp, nec, ind]
     n_valid = sum(1 for s in scores if s > 0)
-    metrics.overall_counterfactual = sum(scores) / n_valid if n_valid > 0 else 0.0
+    overall = sum(scores) / n_valid if n_valid > 0 else 0.0
 
-    return asdict(metrics)
+    return {
+        "denoising": {
+            "in_circuit": {"score": suff, "label": "sufficiency"},
+            "out_circuit": {"score": comp, "label": "completeness"},
+            "n_pairs": n_denoising,
+        },
+        "noising": {
+            "in_circuit": {"score": nec, "label": "necessity"},
+            "out_circuit": {"score": ind, "label": "independence"},
+            "n_pairs": n_noising,
+        },
+        "overall_score": overall,
+    }
 
 
 def save_faithfulness_json(
@@ -3027,7 +3105,7 @@ def save_faithfulness_json(
     # Observational result.json
     if observational_dir and robustness:
         obs_metrics = compute_observational_metrics(robustness)
-        obs_overall = obs_metrics.get("overall_observational", 0.0)
+        obs_overall = obs_metrics.get("overall_score", 0.0)
         path = os.path.join(observational_dir, "result.json")
         with open(path, "w") as f:
             json.dump(obs_metrics, f, indent=2)
@@ -3036,7 +3114,7 @@ def save_faithfulness_json(
     # Interventional result.json
     if interventional_dir and faithfulness:
         int_metrics = compute_interventional_metrics(faithfulness)
-        int_overall = int_metrics.get("overall_interventional", 0.0)
+        int_overall = int_metrics.get("overall_score", 0.0)
         path = os.path.join(interventional_dir, "result.json")
         with open(path, "w") as f:
             json.dump(int_metrics, f, indent=2)
@@ -3045,23 +3123,173 @@ def save_faithfulness_json(
     # Counterfactual result.json
     if counterfactual_dir and faithfulness:
         cf_metrics = compute_counterfactual_metrics(faithfulness)
-        cf_overall = cf_metrics.get("overall_counterfactual", 0.0)
+        cf_overall = cf_metrics.get("overall_score", 0.0)
         path = os.path.join(counterfactual_dir, "result.json")
         with open(path, "w") as f:
             json.dump(cf_metrics, f, indent=2)
         paths["counterfactual/result.json"] = path
 
+    # Compute epsilon values (min margin from 1.0 for individual scores)
+    obs_epsilon = 0.0
+    int_epsilon = 0.0
+    cf_epsilon = 0.0
+
+    if robustness:
+        # For observational: epsilon is min(1.0 - agreement) across all agreement scores
+        obs_scores = []
+        if robustness.noise_samples:
+            obs_scores.append(robustness.noise_agreement_bit)
+        for sample in robustness.ood_samples:
+            obs_scores.append(1.0 if sample.agreement_bit else 0.0)
+        if obs_scores:
+            obs_epsilon = min(1.0 - s for s in obs_scores)
+
+    if faithfulness:
+        # For interventional: epsilon is min(1.0 - bit_similarity) across all patches
+        int_scores = []
+        for stats in faithfulness.in_circuit_stats.values():
+            int_scores.append(stats.mean_bit_similarity)
+        for stats in faithfulness.out_circuit_stats.values():
+            int_scores.append(stats.mean_bit_similarity)
+        for stats in faithfulness.in_circuit_stats_ood.values():
+            int_scores.append(stats.mean_bit_similarity)
+        for stats in faithfulness.out_circuit_stats_ood.values():
+            int_scores.append(stats.mean_bit_similarity)
+        if int_scores:
+            int_epsilon = min(1.0 - s for s in int_scores)
+
+        # For counterfactual: epsilon is min(1.0 - faithfulness_score) across all effects
+        cf_scores = []
+        for effects in [faithfulness.sufficiency_effects, faithfulness.completeness_effects,
+                       faithfulness.necessity_effects, faithfulness.independence_effects]:
+            for e in effects:
+                cf_scores.append(e.faithfulness_score)
+        if cf_scores:
+            cf_epsilon = min(1.0 - s for s in cf_scores)
+
     # Summary.json in faithfulness/
     summary = FaithfulnessSummary(
         observational=obs_overall,
+        observational_epsilon=obs_epsilon,
         interventional=int_overall,
+        interventional_epsilon=int_epsilon,
         counterfactual=cf_overall,
+        counterfactual_epsilon=cf_epsilon,
         overall=(obs_overall + int_overall + cf_overall) / 3.0 if (obs_overall + int_overall + cf_overall) > 0 else 0.0,
     )
     summary_path = os.path.join(faithfulness_dir, "summary.json")
     with open(summary_path, "w") as f:
         json.dump(asdict(summary), f, indent=2)
     paths["summary.json"] = summary_path
+
+    # Generate explanation.md
+    explanation_content = """# Faithfulness Metrics Explanation
+
+## Overview
+
+This folder contains faithfulness analysis results for a neural network subcircuit.
+Faithfulness measures how well the identified subcircuit captures the behavior of the full network.
+
+## Score Categories
+
+### 1. Observational (Robustness)
+
+Tests how well the subcircuit agrees with the full network under various input perturbations.
+
+**Noise Perturbations:**
+- Gaussian noise added to inputs
+- Measures stability under small input changes
+
+**Out-of-Distribution Transformations:**
+- **Multiply**: Scale inputs by factors (positive and negative)
+- **Add/Subtract**: Add or subtract values from inputs
+- **Bimodal**: Map inputs to [-1, 1] range (order-preserving and inverted)
+
+**Aggregation:** Average of agreement rates across all perturbation types.
+
+### 2. Interventional
+
+Tests how the subcircuit responds to internal activation interventions.
+
+**In-Circuit Interventions:**
+- Patch activations within the identified subcircuit
+- High similarity = subcircuit responds consistently to internal changes
+
+**Out-Circuit Interventions:**
+- Patch activations outside the subcircuit
+- High similarity = subcircuit is independent of non-circuit components
+
+**Distribution Types:**
+- In-distribution: Normal activation values
+- Out-of-distribution: Extreme or unusual activation values
+
+**Aggregation:** Average of bit similarities across all patch types and distributions.
+
+### 3. Counterfactual (2x2 Matrix)
+
+Tests causal faithfulness using the activation patching paradigm.
+
+```
+                | IN-Circuit Patch    | OUT-Circuit Patch
+----------------|---------------------|--------------------
+DENOISING       | Sufficiency         | Completeness
+(corrupt→clean) | (recovery → 1)      | (disruption → 1)
+----------------|---------------------|--------------------
+NOISING         | Necessity           | Independence
+(clean→corrupt) | (disruption → 1)    | (recovery → 1)
+```
+
+**Denoising Experiments** (run corrupted input, patch with clean activations):
+- **Sufficiency**: Patching clean in-circuit → behavior recovers to clean output
+- **Completeness**: Patching clean out-circuit → behavior stays corrupted (circuit is complete)
+
+**Noising Experiments** (run clean input, patch with corrupted activations):
+- **Necessity**: Patching corrupted in-circuit → behavior changes to corrupted output
+- **Independence**: Patching corrupted out-circuit → behavior stays clean (circuit is self-contained)
+
+**Aggregation:** Average of all four counterfactual scores.
+
+## Epsilon Values
+
+Epsilon represents the minimum margin by which any individual score falls short of 1.0:
+
+```
+epsilon = min(1.0 - individual_scores)
+```
+
+A lower epsilon means all individual scores are closer to perfect (1.0).
+Epsilon = 0 would mean all tests achieved perfect faithfulness.
+
+## File Structure
+
+```
+faithfulness/
+├── summary.json          # Overall scores and epsilons
+├── explanation.md        # This file
+├── observational/
+│   └── result.json       # Detailed robustness metrics
+├── interventional/
+│   └── result.json       # Detailed intervention metrics
+└── counterfactual/
+    └── result.json       # Detailed counterfactual metrics
+```
+
+## Interpretation
+
+| Score Range | Interpretation |
+|------------|----------------|
+| 0.95 - 1.0 | Excellent faithfulness |
+| 0.85 - 0.95 | Good faithfulness |
+| 0.70 - 0.85 | Moderate faithfulness |
+| < 0.70 | Poor faithfulness |
+
+A faithful circuit should score high (>0.85) on all three categories.
+"""
+
+    explanation_path = os.path.join(faithfulness_dir, "explanation.md")
+    with open(explanation_path, "w") as f:
+        f.write(explanation_content)
+    paths["explanation.md"] = explanation_path
 
     return paths
 

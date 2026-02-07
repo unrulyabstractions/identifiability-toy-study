@@ -51,6 +51,7 @@ def run_trial(
     spd_device: str = "cpu",
     logger: Any = None,
     debug: bool = False,
+    run_spd: bool = False,
 ) -> TrialResult:
     # This also sets deterministic behavior
     set_seeds(setup.seed)
@@ -153,8 +154,7 @@ def run_trial(
     trial_metrics.val_acc = val_acc
     trial_metrics.test_acc = calculate_match_rate(torch.round(y_pred), y_gt).item()
 
-    do_spd = False
-    if do_spd:
+    if run_spd:
         # ===== SPD (Multi-config sweep) =====
         # Get list of configs to run: primary + any sweep configs
         spd_configs_to_run = [setup.spd_config]

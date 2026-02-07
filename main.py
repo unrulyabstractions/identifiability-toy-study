@@ -50,6 +50,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Disable SPD parameter sweep (only run single config)",
     )
+    parser.add_argument(
+        "--spd",
+        action="store_true",
+        help="Enable SPD decomposition analysis (disabled by default)",
+    )
     args = parser.parse_args()
 
     # Output path
@@ -93,6 +98,7 @@ if __name__ == "__main__":
         debug=args.debug,
         device=args.device,
         spd_device=args.spd_device,
+        run_spd=args.spd,
     )
 
     # SPD sweep is enabled by default
