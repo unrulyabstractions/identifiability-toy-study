@@ -52,14 +52,13 @@ class DataParams(SchemaClass):
     n_samples_train: int = 2048
     n_samples_val: int = 128
     n_samples_test: int = 128
-    noise_std: float = 0.01
+    noise_std: float = 0.1
     skewed_distribution: bool = False
 
 
 @dataclass
 class ModelParams(SchemaClass):
-    # logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
-    logic_gates: list[str] = field(default_factory=lambda: ["XOR"])
+    logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
     width: int = 3
     depth: int = 2
 
@@ -176,7 +175,7 @@ class TrainParams(SchemaClass):
 class IdentifiabilityConstraints(SchemaClass):
     # Max deviation from bit_similarity=1.0 to be considered "best"
     # 0.01 = only 99%+ similar, 0.1 = 90%+ similar, 0.2 = 80%+ similar
-    epsilon: float = 0.01  # More lenient to get more best circuits
+    epsilon: float = 0.05  # More lenient to get more best circuits
 
 
 @dataclass

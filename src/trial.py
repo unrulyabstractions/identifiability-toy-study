@@ -17,6 +17,8 @@ from .common.batched_eval import (
 from .common.circuit import enumerate_all_valid_circuit
 from .common.helpers import calculate_match_rate, train_model, update_status_fx
 from .common.logic_gates import ALL_LOGIC_GATES
+from .common.parallelization import ParallelTasks
+from .common.profiler import profile, profile_fn
 from .common.schemas import (
     GateMetrics,
     ParallelConfig,
@@ -26,9 +28,7 @@ from .common.schemas import (
     TrialSetup,
 )
 from .common.utils import set_seeds
-from .common.parallelization import ParallelTasks
 from .parameter_decomposition import decompose_mlp
-from .common.profiler import profile, profile_fn
 from .spd_internal.subcircuits import estimate_spd_subcircuits
 
 
@@ -118,7 +118,9 @@ def _compute_activations_phase(model, data, device, input_size):
 
 
 @profile_fn("SPD Decomposition")
-def _spd_phase(setup, trial_result, model, x, y_pred, spd_device, input_size, gate_names):
+def _spd_phase(
+    setup, trial_result, model, x, y_pred, spd_device, input_size, gate_names
+):
     """Run SPD decomposition for all configs."""
     spd_configs_to_run = [setup.spd_config]
     if setup.spd_sweep_configs:
@@ -139,7 +141,9 @@ def _spd_phase(setup, trial_result, model, x, y_pred, spd_device, input_size, ga
     for config_idx, spd_config in enumerate(spd_configs_to_run):
         config_id = spd_config.get_config_id()
         decomposed = trial_result.decomposed_models_sweep[config_id]
-        print(f"    SPD subcircuit {config_idx + 1}/{len(spd_configs_to_run)}: {config_id}")
+        print(
+            f"    SPD subcircuit {config_idx + 1}/{len(spd_configs_to_run)}: {config_id}"
+        )
 
         with profile(f"spd_mlp_sc_{config_id}"):
             estimate = estimate_spd_subcircuits(
@@ -189,8 +193,16 @@ def _precompute_masks_phase(subcircuits, model, gate_names, eval_device, output_
 
 
 @profile_fn("Gate Metrics (Batched)")
-def _gate_metrics_phase(model, subcircuits, x_eval, bit_gate_gt_eval, y_gate_eval,
-                        gate_idx, precomputed, eval_device):
+def _gate_metrics_phase(
+    model,
+    subcircuits,
+    x_eval,
+    bit_gate_gt_eval,
+    y_gate_eval,
+    gate_idx,
+    precomputed,
+    eval_device,
+):
     """Compute metrics for all subcircuits for a gate."""
     accuracies, logit_sims, bit_sims, best_sims = batch_compute_metrics(
         model=model,
@@ -206,8 +218,15 @@ def _gate_metrics_phase(model, subcircuits, x_eval, bit_gate_gt_eval, y_gate_eva
 
 
 @profile_fn("Edge Variants")
-def _edge_variants_phase(model, best_circuits_for_gate, x_eval, bit_gate_gt_eval,
-                         y_gate_eval, gate_idx, eval_device):
+def _edge_variants_phase(
+    model,
+    best_circuits_for_gate,
+    x_eval,
+    bit_gate_gt_eval,
+    y_gate_eval,
+    gate_idx,
+    eval_device,
+):
     """Evaluate edge variants for best circuits."""
     return batch_evaluate_edge_variants(
         model=model,
@@ -221,9 +240,11 @@ def _edge_variants_phase(model, best_circuits_for_gate, x_eval, bit_gate_gt_eval
 
 
 @profile_fn("Robustness Analysis")
-def _robustness_phase(best_indices, best_subcircuit_models, gate_model, device,
-                      parallel_config):
+def _robustness_phase(
+    best_indices, best_subcircuit_models, gate_model, device, parallel_config
+):
     """Compute robustness metrics for best subcircuits."""
+
     def compute_single_robustness(subcircuit_idx):
         subcircuit_model = best_subcircuit_models[subcircuit_idx]
         return calculate_robustness_metrics(
@@ -248,10 +269,21 @@ def _robustness_phase(best_indices, best_subcircuit_models, gate_model, device,
 
 
 @profile_fn("Faithfulness Analysis")
-def _faithfulness_phase(best_indices, best_subcircuit_models, gate_model, x, y_gate,
-                        activations, subcircuit_structures, counterfactual_pairs,
-                        config, device, parallel_config):
+def _faithfulness_phase(
+    best_indices,
+    best_subcircuit_models,
+    gate_model,
+    x,
+    y_gate,
+    activations,
+    subcircuit_structures,
+    counterfactual_pairs,
+    config,
+    device,
+    parallel_config,
+):
     """Compute faithfulness metrics for best subcircuits."""
+
     def compute_single_faithfulness(subcircuit_idx):
         subcircuit_model = best_subcircuit_models[subcircuit_idx]
         return calculate_faithfulness_metrics(
@@ -269,8 +301,7 @@ def _faithfulness_phase(best_indices, best_subcircuit_models, gate_model, x, y_g
     if parallel_config.enable_parallel_faithfulness and len(best_indices) > 1:
         with ParallelTasks(max_workers=min(4, len(best_indices))) as tasks:
             futures = [
-                tasks.submit(compute_single_faithfulness, idx)
-                for idx in best_indices
+                tasks.submit(compute_single_faithfulness, idx) for idx in best_indices
             ]
         return [f.result() for f in futures]
     else:
@@ -346,13 +377,17 @@ def run_trial(
     # ===== SPD (if enabled) =====
     if run_spd:
         update_status("STARTED_SPD")
-        _spd_phase(setup, trial_result, model, x, y_pred, spd_device, input_size, gate_names)
+        _spd_phase(
+            setup, trial_result, model, x, y_pred, spd_device, input_size, gate_names
+        )
         update_status("FINISHED_SPD")
 
     # ===== Circuit Finding =====
     parallel_config = setup.parallel_config
     update_status("STARTED_CIRCUITS")
-    subcircuits, subcircuit_structures = _enumerate_circuits_phase(model, parallel_config)
+    subcircuits, subcircuit_structures = _enumerate_circuits_phase(
+        model, parallel_config
+    )
     update_status("FINISHED_CIRCUITS")
 
     trial_result.subcircuits = [
@@ -403,8 +438,14 @@ def run_trial(
         )
 
         accuracies, logit_sims, bit_sims, best_sims = _gate_metrics_phase(
-            model, subcircuits, x_eval, bit_gate_gt_eval, y_gate_eval,
-            gate_idx, precomputed, eval_device
+            model,
+            subcircuits,
+            x_eval,
+            bit_gate_gt_eval,
+            y_gate_eval,
+            gate_idx,
+            precomputed,
+            eval_device,
         )
 
         subcircuit_metrics = [
@@ -435,8 +476,13 @@ def run_trial(
         best_circuits_for_gate = [subcircuits[idx] for idx in best_indices]
 
         edge_results = _edge_variants_phase(
-            model, best_circuits_for_gate, x_eval, bit_gate_gt_eval,
-            y_gate_eval, gate_idx, eval_device
+            model,
+            best_circuits_for_gate,
+            x_eval,
+            bit_gate_gt_eval,
+            y_gate_eval,
+            gate_idx,
+            eval_device,
         )
 
         optimized_circuits = {
@@ -467,9 +513,17 @@ def run_trial(
 
         update_status(f"STARTED_FAITH:{gate_idx}")
         faithfulness_results = _faithfulness_phase(
-            best_indices, best_subcircuit_models, gate_model, x, y_gate,
-            activations, subcircuit_structures, counterfactual_pairs,
-            setup.faithfulness_config, device, parallel_config
+            best_indices,
+            best_subcircuit_models,
+            gate_model,
+            x,
+            y_gate,
+            activations,
+            subcircuit_structures,
+            counterfactual_pairs,
+            setup.faithfulness_config,
+            device,
+            parallel_config,
         )
         per_gate_bests_faith[gate_name].extend(faithfulness_results)
         update_status(f"FINISHED_FAITH:{gate_idx}")
