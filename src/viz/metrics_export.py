@@ -421,6 +421,74 @@ A faithful circuit should score high (>0.85) on all three categories.
     return paths
 
 
+def _compute_subcircuit_scores(
+    robustness: "RobustnessMetrics | None",
+    faithfulness: "FaithfulnessMetrics | None",
+) -> dict:
+    """Compute observational, interventional, counterfactual scores and epsilons for a subcircuit."""
+    # Observational score and epsilon
+    obs_score = 0.0
+    obs_epsilon = 0.0
+    if robustness:
+        obs_component_scores = [robustness.noise_agreement_bit]
+        ood_by_type: dict[str, list] = {}
+        for sample in robustness.ood_samples:
+            st = getattr(sample, "sample_type", "multiply_positive")
+            ood_by_type.setdefault(st, []).append(sample)
+        for st in ["multiply_positive", "multiply_negative", "add", "subtract", "bimodal", "bimodal_inv"]:
+            samples = ood_by_type.get(st, [])
+            if samples:
+                agreement = sum(s.agreement_bit for s in samples) / len(samples)
+                obs_component_scores.append(agreement)
+        obs_valid_scores = [s for s in obs_component_scores if s > 0]
+        if obs_valid_scores:
+            obs_score = sum(obs_valid_scores) / len(obs_valid_scores)
+            obs_epsilon = abs(min(1.0 - s for s in obs_valid_scores))
+
+    # Interventional score and epsilon
+    int_score = 0.0
+    int_epsilon = 0.0
+    if faithfulness:
+        int_component_scores = []
+        for stats_dict in [faithfulness.in_circuit_stats, faithfulness.out_circuit_stats,
+                          faithfulness.in_circuit_stats_ood, faithfulness.out_circuit_stats_ood]:
+            if stats_dict:
+                bit_sims = [ps.mean_bit_similarity for ps in stats_dict.values()]
+                if bit_sims:
+                    int_component_scores.append(sum(bit_sims) / len(bit_sims))
+        int_valid_scores = [s for s in int_component_scores if s > 0]
+        if int_valid_scores:
+            int_score = sum(int_valid_scores) / len(int_valid_scores)
+            int_epsilon = abs(min(1.0 - s for s in int_valid_scores))
+
+    # Counterfactual score and epsilon
+    cf_score = 0.0
+    cf_epsilon = 0.0
+    if faithfulness:
+        cf_component_scores = [
+            faithfulness.mean_sufficiency,
+            faithfulness.mean_completeness,
+            faithfulness.mean_necessity,
+            faithfulness.mean_independence,
+        ]
+        cf_valid_scores = [s for s in cf_component_scores if s > 0]
+        if cf_valid_scores:
+            cf_score = sum(cf_valid_scores) / len(cf_valid_scores)
+            cf_epsilon = abs(min(1.0 - s for s in cf_valid_scores))
+
+    # Overall score
+    all_scores = [obs_score, int_score, cf_score]
+    valid_scores = [s for s in all_scores if s > 0]
+    overall = sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
+
+    return {
+        "observational": {"score": obs_score, "epsilon": obs_epsilon},
+        "interventional": {"score": int_score, "epsilon": int_epsilon},
+        "counterfactual": {"score": cf_score, "epsilon": cf_epsilon},
+        "overall": overall,
+    }
+
+
 def save_gate_summary(
     gate_name: str,
     gate_dir: str,
@@ -431,43 +499,33 @@ def save_gate_summary(
     Creates a summary file with:
     - Gate name
     - Number of subcircuits
-    - List of subcircuit indices
-    - Per-subcircuit faithfulness summary (if available)
+    - List of subcircuit indices (ranked by overall score)
+    - Per-subcircuit scores (observational, interventional, counterfactual, overall)
     """
     best_indices = metrics.per_gate_bests.get(gate_name, [])
     bests_robust = metrics.per_gate_bests_robust.get(gate_name, [])
     bests_faith = metrics.per_gate_bests_faith.get(gate_name, [])
 
-    # Build subcircuit summaries
+    # Build subcircuit summaries with scores
     subcircuit_summaries = []
     for i, sc_idx in enumerate(best_indices):
-        sc_summary = {"index": sc_idx}
+        robust = bests_robust[i] if i < len(bests_robust) else None
+        faith = bests_faith[i] if i < len(bests_faith) else None
 
-        # Add robustness score if available
-        if i < len(bests_robust):
-            robust = bests_robust[i]
-            sc_summary["robustness"] = {
-                "noise_agreement_bit": robust.noise_agreement_bit,
-                "noise_agreement_best": robust.noise_agreement_best,
-                "overall_robustness": robust.overall_robustness,
-            }
-
-        # Add faithfulness summary if available
-        if i < len(bests_faith):
-            faith = bests_faith[i]
-            sc_summary["faithfulness"] = {
-                "sufficiency": faith.mean_sufficiency,
-                "completeness": faith.mean_completeness,
-                "necessity": faith.mean_necessity,
-                "independence": faith.mean_independence,
-            }
-
+        scores = _compute_subcircuit_scores(robust, faith)
+        sc_summary = {"index": sc_idx, **scores}
         subcircuit_summaries.append(sc_summary)
+
+    # Sort by overall score (descending)
+    subcircuit_summaries.sort(key=lambda x: x["overall"], reverse=True)
+
+    # Extract sorted indices
+    sorted_indices = [sc["index"] for sc in subcircuit_summaries]
 
     summary = {
         "gate": gate_name,
         "n_subcircuits": len(best_indices),
-        "subcircuit_indices": best_indices,
+        "subcircuit_indices": sorted_indices,
         "subcircuits": subcircuit_summaries,
     }
 
