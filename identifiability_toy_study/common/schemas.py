@@ -250,11 +250,19 @@ class PatchStatistics(SchemaClass):
 
 @dataclass
 class CounterfactualEffect(SchemaClass):
-    """Result of a single counterfactual test.
+    """Result of a single counterfactual test from the 2x2 patching matrix.
 
-    Counterfactual analysis runs the FULL MODEL with interventions that patch
-    specific neurons to corrupted values. This tests whether patching circuit
-    neurons changes the output.
+    The 2x2 matrix tests circuit faithfulness:
+
+    |                | IN-Circuit Patch     | OUT-Circuit Patch      |
+    |----------------|----------------------|------------------------|
+    | DENOISING      | Sufficiency          | Completeness           |
+    | (run corrupt,  | (recovery)           | (1 - recovery)         |
+    | patch clean)   |                      |                        |
+    |----------------|----------------------|------------------------|
+    | NOISING        | Necessity            | Independence           |
+    | (run clean,    | (disruption)         | (1 - disruption)       |
+    | patch corrupt) |                      |                        |
 
     NOTE: Activations are pre-computed here so visualization code
     NEVER needs to run models. Visualization is READ-ONLY.
@@ -262,10 +270,17 @@ class CounterfactualEffect(SchemaClass):
 
     faithfulness_score: float  # Score depends on score_type
 
-    # Score type: "sufficiency" or "necessity"
-    # - sufficiency: patch OUT-circuit neurons -> tests if in-circuit is sufficient
-    # - necessity: patch IN-circuit neurons -> tests if in-circuit is necessary
-    score_type: str = "sufficiency"
+    # Experiment type: which direction are we patching?
+    # - "denoising": Run corrupted input, patch with clean activations (Src: clean, Dest: corrupt)
+    # - "noising": Run clean input, patch with corrupted activations (Src: corrupt, Dest: clean)
+    experiment_type: str = "noising"
+
+    # Score type: which of the 4 experiments?
+    # - "sufficiency": Denoise in-circuit → tests if circuit can produce behavior
+    # - "completeness": Denoise out-circuit → tests if anything is missing from circuit
+    # - "necessity": Noise in-circuit → tests if circuit is required
+    # - "independence": Noise out-circuit → tests if circuit is self-contained
+    score_type: str = "necessity"
 
     # Clean/corrupted input info
     clean_input: list[float] = field(default_factory=list)  # e.g., [0, 1]
@@ -278,9 +293,9 @@ class CounterfactualEffect(SchemaClass):
     )
 
     # Actual output from FULL MODEL with intervention (patched activations)
-    actual_output: float = 0.0  # model(x_clean, intervention=patch)
+    actual_output: float = 0.0  # model(x_base, intervention=patch)
 
-    # Did patching change output toward corrupted?
+    # Did patching change output? (interpretation depends on experiment type)
     output_changed_to_corrupted: bool = False  # round(actual) == round(corrupted)
 
     # Pre-computed activations for visualization (NO model runs during viz!)
@@ -338,7 +353,22 @@ class ParallelConfig(SchemaClass):
 
 @dataclass
 class FaithfulnessMetrics(SchemaClass):
-    """Comprehensive faithfulness metrics for a subcircuit."""
+    """Comprehensive faithfulness metrics for a subcircuit.
+
+    Implements the 2x2 patching matrix:
+
+    |                | IN-Circuit Patch     | OUT-Circuit Patch      |
+    |----------------|----------------------|------------------------|
+    | DENOISING      | Sufficiency          | Completeness           |
+    | (run corrupt,  | (recovery → 1)       | (disruption → 1)       |
+    | patch clean)   |                      |                        |
+    |----------------|----------------------|------------------------|
+    | NOISING        | Necessity            | Independence           |
+    | (run clean,    | (disruption → 1)     | (recovery → 1)         |
+    | patch corrupt) |                      |                        |
+
+    A faithful circuit should score high on all 4 tests.
+    """
 
     # Per-patch statistics for in-circuit and out-circuit interventions
     in_circuit_stats: dict[str, PatchStatistics] = field(default_factory=dict)
@@ -356,15 +386,35 @@ class FaithfulnessMetrics(SchemaClass):
     mean_in_circuit_similarity_ood: float = 0.0
     mean_out_circuit_similarity_ood: float = 0.0
 
-    # Counterfactual analysis results - separate for in-circuit and out-circuit
-    # Out-circuit: patch out-of-circuit neurons with corrupted values (tests sufficiency)
-    # In-circuit: patch in-circuit neurons with corrupted values (tests necessity)
+    # ===== 2x2 Matrix Counterfactual Effects =====
+    # Denoising experiments (run corrupted, patch with clean)
+    sufficiency_effects: list[CounterfactualEffect] = field(
+        default_factory=list
+    )  # Denoise in-circuit
+    completeness_effects: list[CounterfactualEffect] = field(
+        default_factory=list
+    )  # Denoise out-circuit
+
+    # Noising experiments (run clean, patch with corrupted)
+    necessity_effects: list[CounterfactualEffect] = field(
+        default_factory=list
+    )  # Noise in-circuit
+    independence_effects: list[CounterfactualEffect] = field(
+        default_factory=list
+    )  # Noise out-circuit
+
+    # Legacy fields for backwards compatibility
     out_counterfactual_effects: list[CounterfactualEffect] = field(default_factory=list)
     in_counterfactual_effects: list[CounterfactualEffect] = field(default_factory=list)
-
-    # Legacy field for backwards compatibility (combines both)
     counterfactual_effects: list[CounterfactualEffect] = field(default_factory=list)
 
+    # ===== Aggregate Scores (2x2 Matrix) =====
+    mean_sufficiency: float = 0.0  # Denoise in-circuit: recovery
+    mean_completeness: float = 0.0  # Denoise out-circuit: 1 - recovery
+    mean_necessity: float = 0.0  # Noise in-circuit: disruption
+    mean_independence: float = 0.0  # Noise out-circuit: 1 - disruption
+
+    # Legacy aggregate scores
     mean_faithfulness_score: float = 0.0
     std_faithfulness_score: float = 0.0
 
@@ -378,11 +428,20 @@ class RobustnessSample(SchemaClass):
 
     NOTE: Activations are pre-computed here so visualization code
     NEVER needs to run models. Visualization is READ-ONLY.
+
+    Sample types:
+    - noise: Gaussian noise perturbation
+    - multiply_positive: Scale by factor > 1
+    - multiply_negative: Scale by factor < 0
+    - add: Add large positive value
+    - subtract: Subtract large value
+    - bimodal: Map [0,1] -> [-1,1] order-preserving (0->-1, 1->1)
+    - bimodal_inv: Map [0,1] -> [-1,1] inverted (0->1, 1->-1)
     """
 
     input_values: list[float]  # The perturbed input [x0, x1]
     base_input: list[float]  # The original binary input [0, 1]
-    noise_magnitude: float  # L2 norm of actual noise added: ||perturbed - base||
+    noise_magnitude: float  # L2 norm of noise or transformation magnitude
     ground_truth: float  # GT output for base input (e.g., XOR(0,1)=1)
 
     # Outputs from both models on the SAME perturbed input
@@ -397,6 +456,9 @@ class RobustnessSample(SchemaClass):
     agreement_bit: bool  # round(gate_output) == round(subcircuit_output)
     agreement_best: bool  # clamp_to_binary(gate) == clamp_to_binary(subcircuit)
     mse: float  # (gate_output - subcircuit_output)^2
+
+    # Sample type for organizing visualizations
+    sample_type: str = "noise"  # noise, multiply_positive, multiply_negative, add, subtract, bimodal, bimodal_inv
 
     # Pre-computed activations for visualization (NO model runs during viz!)
     # Each is a list of lists: [[layer0_acts], [layer1_acts], ...]
@@ -426,6 +488,95 @@ class RobustnessMetrics(SchemaClass):
     ood_mse_mean: float = 0.0
 
     overall_robustness: float = 0.0  # Combined score
+
+
+@dataclass
+class ObservationalMetrics(SchemaClass):
+    """Aggregated observational (robustness) metrics for result.json."""
+
+    # Noise perturbation metrics
+    noise_gate_accuracy: float = 0.0
+    noise_subcircuit_accuracy: float = 0.0
+    noise_agreement_bit: float = 0.0
+    noise_agreement_best: float = 0.0
+    noise_mse_mean: float = 0.0
+    noise_n_samples: int = 0
+
+    # Per-type OOD metrics
+    multiply_positive_agreement: float = 0.0
+    multiply_positive_n_samples: int = 0
+    multiply_negative_agreement: float = 0.0
+    multiply_negative_n_samples: int = 0
+
+    add_agreement: float = 0.0
+    add_n_samples: int = 0
+
+    subtract_agreement: float = 0.0
+    subtract_n_samples: int = 0
+
+    bimodal_agreement: float = 0.0
+    bimodal_n_samples: int = 0
+    bimodal_inv_agreement: float = 0.0
+    bimodal_inv_n_samples: int = 0
+
+    # Overall
+    overall_observational: float = 0.0
+
+
+@dataclass
+class InterventionalMetrics(SchemaClass):
+    """Aggregated interventional metrics for result.json."""
+
+    # In-circuit (in-distribution)
+    in_circuit_mean_bit_similarity: float = 0.0
+    in_circuit_mean_logit_similarity: float = 0.0
+    in_circuit_n_interventions: int = 0
+
+    # In-circuit (out-of-distribution)
+    in_circuit_ood_mean_bit_similarity: float = 0.0
+    in_circuit_ood_mean_logit_similarity: float = 0.0
+    in_circuit_ood_n_interventions: int = 0
+
+    # Out-circuit (in-distribution)
+    out_circuit_mean_bit_similarity: float = 0.0
+    out_circuit_mean_logit_similarity: float = 0.0
+    out_circuit_n_interventions: int = 0
+
+    # Out-circuit (out-of-distribution)
+    out_circuit_ood_mean_bit_similarity: float = 0.0
+    out_circuit_ood_mean_logit_similarity: float = 0.0
+    out_circuit_ood_n_interventions: int = 0
+
+    # Overall
+    overall_interventional: float = 0.0
+
+
+@dataclass
+class CounterfactualMetrics(SchemaClass):
+    """Aggregated counterfactual metrics for result.json (2x2 matrix)."""
+
+    # Denoising experiments
+    mean_sufficiency: float = 0.0  # Denoise in-circuit
+    mean_completeness: float = 0.0  # Denoise out-circuit
+    n_denoising_pairs: int = 0
+
+    # Noising experiments
+    mean_necessity: float = 0.0  # Noise in-circuit
+    mean_independence: float = 0.0  # Noise out-circuit
+    n_noising_pairs: int = 0
+
+    # Overall
+    overall_counterfactual: float = 0.0
+
+
+@dataclass
+class FaithfulnessSummary(SchemaClass):
+    """Summary of all faithfulness metrics for summary.json."""
+
+    observational: float = 0.0  # Overall observational score
+    interventional: float = 0.0  # Overall interventional score
+    counterfactual: float = 0.0  # Overall counterfactual score
+    overall: float = 0.0  # Combined overall score
 
 
 @dataclass

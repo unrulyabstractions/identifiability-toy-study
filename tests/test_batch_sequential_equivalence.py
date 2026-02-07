@@ -66,6 +66,7 @@ def sequential_compute_metrics(model, circuits, x, y_target, y_pred, gate_idx=0)
     accuracies = []
     logit_similarities = []
     bit_similarities = []
+    best_similarities = []
 
     bit_target = torch.round(y_target)
     bit_pred = torch.round(y_pred)
@@ -89,6 +90,13 @@ def sequential_compute_metrics(model, circuits, x, y_target, y_pred, gate_idx=0)
             bit_sim = same.float().mean().item()
             bit_similarities.append(bit_sim)
 
+            # Best similarity (clamped to [0,1])
+            best_circuit = torch.clamp(bit_circuit, 0, 1)
+            best_pred = torch.clamp(bit_pred, 0, 1)
+            same_best = best_circuit.eq(best_pred)
+            best_sim = same_best.float().mean().item()
+            best_similarities.append(best_sim)
+
             # Logit similarity
             mse = ((y_circuit - y_pred) ** 2).mean().item()
             logit_sim = 1 - mse
@@ -98,6 +106,7 @@ def sequential_compute_metrics(model, circuits, x, y_target, y_pred, gate_idx=0)
         np.array(accuracies),
         np.array(logit_similarities),
         np.array(bit_similarities),
+        np.array(best_similarities),
     )
 
 
@@ -218,10 +227,10 @@ class TestBatchedMetricsEqualsSequential:
         with torch.no_grad():
             y_pred = small_model(x)
 
-        seq_accs, _, _ = sequential_compute_metrics(
+        seq_accs, _, _, _ = sequential_compute_metrics(
             small_model, circuits, x, y_target, y_pred
         )
-        batch_accs, _, _ = batch_compute_metrics(
+        batch_accs, _, _, _ = batch_compute_metrics(
             small_model, circuits, x, y_target, y_pred
         )
 
@@ -236,10 +245,10 @@ class TestBatchedMetricsEqualsSequential:
         with torch.no_grad():
             y_pred = small_model(x)
 
-        _, _, seq_bits = sequential_compute_metrics(
+        _, _, seq_bits, _ = sequential_compute_metrics(
             small_model, circuits, x, y_target, y_pred
         )
-        _, _, batch_bits = batch_compute_metrics(
+        _, _, batch_bits, _ = batch_compute_metrics(
             small_model, circuits, x, y_target, y_pred
         )
 
@@ -254,10 +263,10 @@ class TestBatchedMetricsEqualsSequential:
         with torch.no_grad():
             y_pred = small_model(x)
 
-        _, seq_logits, _ = sequential_compute_metrics(
+        _, seq_logits, _, _ = sequential_compute_metrics(
             small_model, circuits, x, y_target, y_pred
         )
-        _, batch_logits, _ = batch_compute_metrics(
+        _, batch_logits, _, _ = batch_compute_metrics(
             small_model, circuits, x, y_target, y_pred
         )
 
@@ -272,10 +281,10 @@ class TestBatchedMetricsEqualsSequential:
         with torch.no_grad():
             y_pred = medium_model(x)
 
-        seq_accs, seq_logits, seq_bits = sequential_compute_metrics(
+        seq_accs, seq_logits, seq_bits, _ = sequential_compute_metrics(
             medium_model, circuits, x, y_target, y_pred
         )
-        batch_accs, batch_logits, batch_bits = batch_compute_metrics(
+        batch_accs, batch_logits, batch_bits, _ = batch_compute_metrics(
             medium_model, circuits, x, y_target, y_pred
         )
 
@@ -358,12 +367,12 @@ class TestCpuMpsEquivalence:
             y_pred = small_model(x)
 
         # CPU
-        accs_cpu, logits_cpu, bits_cpu = batch_compute_metrics(
+        accs_cpu, logits_cpu, bits_cpu, _ = batch_compute_metrics(
             small_model, circuits, x, y_target, y_pred, eval_device="cpu"
         )
 
         # MPS
-        accs_mps, logits_mps, bits_mps = batch_compute_metrics(
+        accs_mps, logits_mps, bits_mps, _ = batch_compute_metrics(
             small_model, circuits, x, y_target, y_pred, eval_device="mps"
         )
 

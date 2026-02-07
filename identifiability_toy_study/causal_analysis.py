@@ -33,7 +33,10 @@ from .common.schemas import (
 
 
 def compute_recovery(y_intervened: float, y_clean: float, y_corrupted: float) -> float:
-    """Raw recovery toward clean. Used for denoising experiments."""
+    """Raw recovery toward clean: R = (y_intervened - y_corrupted) / (y_clean - y_corrupted).
+
+    Used for denoising experiments where we want output to move toward clean.
+    """
     delta = y_clean - y_corrupted
     if abs(delta) < 1e-10:
         return 0.0
@@ -43,24 +46,80 @@ def compute_recovery(y_intervened: float, y_clean: float, y_corrupted: float) ->
 def compute_disruption(
     y_intervened: float, y_clean: float, y_corrupted: float
 ) -> float:
-    """Raw disruption toward corrupt. Used for noising experiments."""
+    """Raw disruption toward corrupt: D = (y_clean - y_intervened) / (y_clean - y_corrupted).
+
+    Used for noising experiments where we expect output to move away from clean.
+    Note: D = 1 - R (disruption and recovery are complements).
+    """
     delta = y_clean - y_corrupted
     if abs(delta) < 1e-10:
         return 0.0
     return (y_clean - y_intervened) / delta
 
 
-# Sufficiency  = recovery of in-circuit
-compute_sufficiency_score = compute_recovery
+# =============================================================================
+# 2x2 MATRIX OF FAITHFULNESS SCORES
+# =============================================================================
+#
+# |                | IN-Circuit Patch     | OUT-Circuit Patch      |
+# |----------------|----------------------|------------------------|
+# | DENOISING      | Sufficiency          | Completeness           |
+# | (run corrupt,  | (recovery → 1)       | (1 - recovery → 1)     |
+# | patch clean)   |                      |                        |
+# |----------------|----------------------|------------------------|
+# | NOISING        | Necessity            | Independence           |
+# | (run clean,    | (disruption → 1)     | (1 - disruption → 1)   |
+# | patch corrupt) |                      |                        |
+#
+# =============================================================================
 
-# Necessity = disruption of in-circuit
-compute_necessity_score = compute_disruption
 
-# Completeness = disruption of out-circuit  (low out-circuit recovery → complete)
-compute_completeness_score = compute_disruption
+def compute_sufficiency_score(
+    y_intervened: float, y_clean: float, y_corrupted: float
+) -> float:
+    """Sufficiency = Denoise In-Circuit → recovery.
 
-# Independence = recovery of out-circuit  (low out-circuit disruption → independent)
-compute_independence_score = compute_recovery
+    Run corrupted input, patch IN-circuit with clean activations.
+    High score (→1) means: circuit alone can recover the behavior.
+    """
+    return compute_recovery(y_intervened, y_clean, y_corrupted)
+
+
+def compute_completeness_score(
+    y_intervened: float, y_clean: float, y_corrupted: float
+) -> float:
+    """Completeness = Denoise Out-Circuit → 1 - recovery = disruption.
+
+    Run corrupted input, patch OUT-circuit with clean activations.
+    High score (→1) means: out-circuit doesn't help recover (circuit is complete).
+
+    We WANT low recovery from out-circuit, so we report disruption.
+    """
+    return compute_disruption(y_intervened, y_clean, y_corrupted)
+
+
+def compute_necessity_score(
+    y_intervened: float, y_clean: float, y_corrupted: float
+) -> float:
+    """Necessity = Noise In-Circuit → disruption.
+
+    Run clean input, patch IN-circuit with corrupted activations.
+    High score (→1) means: corrupting circuit breaks behavior (it's necessary).
+    """
+    return compute_disruption(y_intervened, y_clean, y_corrupted)
+
+
+def compute_independence_score(
+    y_intervened: float, y_clean: float, y_corrupted: float
+) -> float:
+    """Independence = Noise Out-Circuit → 1 - disruption = recovery.
+
+    Run clean input, patch OUT-circuit with corrupted activations.
+    High score (→1) means: corrupting out-circuit doesn't break behavior (circuit is independent).
+
+    We WANT low disruption from out-circuit noise, so we report recovery.
+    """
+    return compute_recovery(y_intervened, y_clean, y_corrupted)
 
 ##########################################
 ##########################################
@@ -180,79 +239,137 @@ GROUND_TRUTH = {
 
 def _generate_noise_samples(
     base_inputs: list[torch.Tensor], n_samples_per_base: int = 100
-) -> list[tuple[torch.Tensor, torch.Tensor, float]]:
+) -> list[tuple[torch.Tensor, torch.Tensor, float, str]]:
     """Generate noisy inputs with magnitude always < 0.5.
 
-    Samples target magnitude uniformly from [0.01, 0.5], then generates
-    noise scaled to exactly that magnitude.
-    Returns list of (perturbed_input, base_input, magnitude) tuples.
+    Returns list of (perturbed_input, base_input, magnitude, sample_type) tuples.
     """
     results = []
     for base_input in base_inputs:
         for _ in range(n_samples_per_base):
-            # Sample target magnitude uniformly from [0.01, 0.5]
             target_mag = 0.01 + torch.rand(1).item() * 0.49
-            # Generate random direction and scale to exact magnitude
             noise = torch.randn_like(base_input)
             noise = noise / (noise.norm() + 1e-8) * target_mag
             perturbed = base_input + noise
-            results.append((perturbed, base_input, target_mag))
+            results.append((perturbed, base_input, target_mag, "noise"))
     return results
 
 
-def _generate_ood_samples(
+def _generate_ood_multiply_samples(
     base_inputs: list[torch.Tensor], n_samples_per_base: int = 100
-) -> list[tuple[torch.Tensor, torch.Tensor, float]]:
-    """Generate OOD inputs via multiplicative scaling (preserves input relationships).
+) -> list[tuple[torch.Tensor, torch.Tensor, float, str]]:
+    """Generate OOD inputs via multiplicative scaling.
 
-    Two types of OOD (split evenly):
-    - Positive: scale > 1 pushes values above 1 (e.g., [1,0] * 2 = [2,0])
-    - Negative: scale < 0 pushes values below 0 (e.g., [1,0] * -2 = [-2,0])
-
-    Both preserve the relationship between input values (multiplicative, not additive).
-    Skips (0,0) base input since scaling it doesn't create OOD.
-
-    Returns list of (perturbed_input, base_input, scale) tuples.
-    Scale is positive (>1) for positive OOD, negative (<0) for negative OOD.
+    Returns (perturbed, base, scale, sample_type) tuples.
+    sample_type is "multiply_positive" or "multiply_negative".
     """
     results = []
     n_each = n_samples_per_base // 2
 
     for base_input in base_inputs:
-        # Skip (0,0) - scaling doesn't make it OOD
         if base_input[0].item() == 0.0 and base_input[1].item() == 0.0:
             continue
 
-        # Positive OOD: scale > 1 (values above 1)
+        # Positive: scale > 1
         for _ in range(n_each):
-            # Scale sampled logarithmically: 10^[0, 2] = [1, 100]
             scale = 10 ** (torch.rand(1).item() * 2)
             perturbed = base_input * scale
-            results.append((perturbed, base_input, scale))
+            results.append((perturbed, base_input, scale, "multiply_positive"))
 
-        # Negative OOD: scale < 0 (values below 0, preserves relationship)
+        # Negative: scale < 0
         for _ in range(n_samples_per_base - n_each):
-            # Scale sampled logarithmically: -10^[0, 2] = [-1, -100]
             scale = -(10 ** (torch.rand(1).item() * 2))
             perturbed = base_input * scale
-            results.append((perturbed, base_input, scale))
+            results.append((perturbed, base_input, abs(scale), "multiply_negative"))
 
     return results
+
+
+def _generate_ood_add_samples(
+    base_inputs: list[torch.Tensor], n_samples_per_base: int = 100
+) -> list[tuple[torch.Tensor, torch.Tensor, float, str]]:
+    """Generate OOD inputs by adding large positive values.
+
+    Returns (perturbed, base, magnitude, sample_type) tuples.
+    """
+    results = []
+    for base_input in base_inputs:
+        for _ in range(n_samples_per_base):
+            # Add value in range [2, 100] (outside [0,1] training range)
+            add_val = 2 + torch.rand(1).item() * 98
+            perturbed = base_input + add_val
+            results.append((perturbed, base_input, add_val, "add"))
+    return results
+
+
+def _generate_ood_subtract_samples(
+    base_inputs: list[torch.Tensor], n_samples_per_base: int = 100
+) -> list[tuple[torch.Tensor, torch.Tensor, float, str]]:
+    """Generate OOD inputs by subtracting large values (adding negative).
+
+    Returns (perturbed, base, magnitude, sample_type) tuples.
+    """
+    results = []
+    for base_input in base_inputs:
+        for _ in range(n_samples_per_base):
+            # Subtract value in range [2, 100]
+            sub_val = 2 + torch.rand(1).item() * 98
+            perturbed = base_input - sub_val
+            results.append((perturbed, base_input, sub_val, "subtract"))
+    return results
+
+
+def _generate_ood_bimodal_samples(
+    base_inputs: list[torch.Tensor], n_samples_per_base: int = 100
+) -> list[tuple[torch.Tensor, torch.Tensor, float, str]]:
+    """Generate OOD inputs by mapping [0,1] -> [-1,1].
+
+    Two isomorphic maps:
+    - Order-preserving: x -> 2x - 1 (0->-1, 1->1)
+    - Inverted: x -> 1 - 2x (0->1, 1->-1)
+
+    Returns (perturbed, base, scale, sample_type) tuples.
+    scale is 1.0 for order-preserving, -1.0 for inverted (used in ground_truth adjustment).
+    """
+    results = []
+    n_each = n_samples_per_base // 2
+
+    for base_input in base_inputs:
+        # Order-preserving: 0->-1, 1->1 (x -> 2x - 1)
+        for _ in range(n_each):
+            perturbed = 2 * base_input - 1
+            results.append((perturbed, base_input, 1.0, "bimodal"))
+
+        # Inverted: 0->1, 1->-1 (x -> 1 - 2x)
+        for _ in range(n_samples_per_base - n_each):
+            perturbed = 1 - 2 * base_input
+            results.append((perturbed, base_input, -1.0, "bimodal_inv"))
+
+    return results
+
+
+# Legacy wrapper for backward compatibility
+def _generate_ood_samples(
+    base_inputs: list[torch.Tensor], n_samples_per_base: int = 100
+) -> list[tuple[torch.Tensor, torch.Tensor, float, str]]:
+    """Generate OOD multiply samples (legacy compatibility)."""
+    return _generate_ood_multiply_samples(base_inputs, n_samples_per_base)
 
 
 def _evaluate_samples(
     gate_model: MLP,
     subcircuit: MLP,
-    samples: list[tuple[torch.Tensor, torch.Tensor, float]],
+    samples: list[tuple[torch.Tensor, torch.Tensor, float, str]],
     device: str,
 ) -> list[RobustnessSample]:
     """Evaluate gate_model and subcircuit on the same perturbed inputs.
 
     Pre-computes activations for circuit visualization (no model runs during viz).
+    Handles bimodal transformations by adjusting output interpretation.
     """
     results = []
 
-    for perturbed, base_input, magnitude in samples:
+    for perturbed, base_input, magnitude, sample_type in samples:
         perturbed_dev = perturbed.unsqueeze(0).to(device)
 
         # Get ground truth from base input
@@ -267,13 +384,28 @@ def _evaluate_samples(
             sc_acts = subcircuit(perturbed_dev, return_activations=True)
             subcircuit_output = sc_acts[-1].item()
 
-        # Interpret outputs as 0 or 1 (based on which is closest)
-        gate_bit = 1 if gate_output >= 0.5 else 0
-        sc_bit = 1 if subcircuit_output >= 0.5 else 0
-
-        # Clamp to binary: round then clamp to [0, 1] (handles out-of-range outputs)
-        gate_best = max(0, min(1, round(gate_output)))
-        sc_best = max(0, min(1, round(subcircuit_output)))
+        # For bimodal transformations, interpret outputs differently
+        # Order-preserving bimodal: output in [-1,1], threshold at 0
+        # Inverted bimodal: output in [-1,1], threshold at 0, then invert
+        if sample_type == "bimodal":
+            # Threshold at 0: negative -> 0, positive -> 1
+            gate_bit = 1 if gate_output >= 0 else 0
+            sc_bit = 1 if subcircuit_output >= 0 else 0
+            gate_best = 1 if gate_output >= 0 else 0
+            sc_best = 1 if subcircuit_output >= 0 else 0
+        elif sample_type == "bimodal_inv":
+            # Inverted: threshold at 0, then invert interpretation
+            # In bimodal_inv: -1 corresponds to original 1, 1 corresponds to original 0
+            gate_bit = 0 if gate_output >= 0 else 1
+            sc_bit = 0 if subcircuit_output >= 0 else 1
+            gate_best = 0 if gate_output >= 0 else 1
+            sc_best = 0 if subcircuit_output >= 0 else 1
+        else:
+            # Standard interpretation: threshold at 0.5
+            gate_bit = 1 if gate_output >= 0.5 else 0
+            sc_bit = 1 if subcircuit_output >= 0.5 else 0
+            gate_best = max(0, min(1, round(gate_output)))
+            sc_best = max(0, min(1, round(subcircuit_output)))
 
         # Accuracy to ground truth
         gate_correct = gate_bit == ground_truth
@@ -292,7 +424,7 @@ def _evaluate_samples(
             RobustnessSample(
                 input_values=[perturbed[0].item(), perturbed[1].item()],
                 base_input=[base_input[0].item(), base_input[1].item()],
-                noise_magnitude=magnitude,  # Pre-computed magnitude or scale
+                noise_magnitude=magnitude,
                 ground_truth=ground_truth,
                 gate_output=gate_output,
                 subcircuit_output=subcircuit_output,
@@ -301,6 +433,7 @@ def _evaluate_samples(
                 agreement_bit=agreement_bit,
                 agreement_best=agreement_best,
                 mse=mse,
+                sample_type=sample_type,
                 gate_activations=gate_acts_list,
                 subcircuit_activations=sc_acts_list,
             )
@@ -319,11 +452,15 @@ def calculate_robustness_metrics(
     Calculate robustness metrics by perturbing BOTH gate_model and subcircuit the SAME way.
 
     Generates many samples with varying perturbation magnitudes:
-    - Noise: Gaussian noise with std uniformly sampled from [0.01, 1.0]
-    - OOD: Offsets uniformly sampled from [-5, 5] per dimension
+    - Noise: Gaussian noise with std uniformly sampled from [0.01, 0.5]
+    - OOD transformations:
+      - Multiply: Scale by factors > 1 or < 0
+      - Add: Add large positive values [2, 100]
+      - Subtract: Subtract large values [2, 100]
+      - Bimodal: Map [0,1] -> [-1,1] (order-preserving and inverted)
 
     For each sample, we record:
-    - Actual noise magnitude (L2 norm of perturbation)
+    - Actual noise magnitude or transformation parameter
     - Gate and subcircuit outputs
     - Accuracy to ground truth
     - Bit agreement and MSE between models
@@ -346,7 +483,16 @@ def calculate_robustness_metrics(
 
     # Generate samples (quick, do sequentially)
     noise_input_pairs = _generate_noise_samples(base_inputs, n_samples_per_base)
-    ood_input_pairs = _generate_ood_samples(base_inputs, n_samples_per_base)
+
+    # Generate all OOD sample types
+    n_per_type = max(1, n_samples_per_base // 4)  # Split across 4 types
+    ood_multiply_pairs = _generate_ood_multiply_samples(base_inputs, n_per_type)
+    ood_add_pairs = _generate_ood_add_samples(base_inputs, n_per_type)
+    ood_subtract_pairs = _generate_ood_subtract_samples(base_inputs, n_per_type)
+    ood_bimodal_pairs = _generate_ood_bimodal_samples(base_inputs, n_per_type)
+
+    # Combine all OOD samples
+    ood_input_pairs = ood_multiply_pairs + ood_add_pairs + ood_subtract_pairs + ood_bimodal_pairs
 
     # Evaluate samples sequentially (GPU ops are not thread-safe)
     noise_samples = _evaluate_samples(full_model, subcircuit, noise_input_pairs, device)
@@ -829,25 +975,29 @@ def create_clean_corrupted_data(
 
 
 def create_patch_intervention(
-    patch: PatchShape, corrupted_activations: list[torch.Tensor]
+    patch: PatchShape, source_activations: list[torch.Tensor]
 ) -> Intervention:
     """
-    Create an intervention that patches with corrupted activation values.
+    Create an intervention that patches neurons with activation values.
+
+    This is the core patching operation used in both denoising and noising:
+    - Denoising: source_activations = clean activations (patch clean into corrupt run)
+    - Noising: source_activations = corrupted activations (patch corrupt into clean run)
 
     Args:
         patch: PatchShape specifying which neurons to patch
-        corrupted_activations: List of activation tensors from corrupted input
+        source_activations: List of activation tensors to patch FROM
 
     Returns:
-        Intervention that sets specified neurons to corrupted values
+        Intervention that sets specified neurons to source values
     """
     if patch is None:
         return Intervention(patches={})
 
     patches = {}
     for layer in patch.single_layers():
-        if layer < len(corrupted_activations):
-            layer_acts = corrupted_activations[layer]
+        if layer < len(source_activations):
+            layer_acts = source_activations[layer]
             if patch.indices:
                 vals = layer_acts[:, list(patch.indices)]
             else:
@@ -874,6 +1024,18 @@ def calculate_faithfulness_metrics(
     """
     Calculate comprehensive faithfulness metrics for a subcircuit.
 
+    Implements the full 2x2 patching matrix:
+
+    |                | IN-Circuit Patch     | OUT-Circuit Patch      |
+    |----------------|----------------------|------------------------|
+    | DENOISING      | Sufficiency          | Completeness           |
+    | (run corrupt,  | (recovery → 1)       | (1 - recovery → 1)     |
+    | patch clean)   |                      |                        |
+    |----------------|----------------------|------------------------|
+    | NOISING        | Necessity            | Independence           |
+    | (run clean,    | (disruption → 1)     | (1 - disruption → 1)   |
+    | patch corrupt) |                      |                        |
+
     Args:
         x: Input data
         y: Ground truth outputs
@@ -893,72 +1055,124 @@ def calculate_faithfulness_metrics(
 
     n_interventions_per_patch = config.n_interventions_per_patch
 
-    # ===== Define helper for counterfactual effects =====
-    def compute_counterfactual_effects(
-        patches: list[PatchShape], pairs: list[CleanCorruptedPair], score_type: str
-    ) -> list[CounterfactualEffect]:
-        """Compute counterfactual effects for a set of patches.
+    # ===== Helper: Build CounterfactualEffect from intervention =====
+    def _build_effect(
+        pair: CleanCorruptedPair,
+        y_intervened: torch.Tensor,
+        intervened_acts: list[torch.Tensor],
+        experiment_type: str,
+        score_type: str,
+    ) -> CounterfactualEffect:
+        """Build a CounterfactualEffect from intervention results."""
+        y_clean_val = pair.y_clean.mean().item()
+        y_corrupted_val = pair.y_corrupted.mean().item()
+        y_intervened_val = y_intervened.mean().item()
 
-        Runs the FULL MODEL with interventions that patch specific neurons
-        to corrupted values. Captures activations from the intervention run
-        for visualization.
+        # Compute the appropriate score based on experiment type
+        if score_type == "sufficiency":
+            # Denoise in-circuit: recovery
+            faith_score = compute_sufficiency_score(
+                y_intervened_val, y_clean_val, y_corrupted_val
+            )
+        elif score_type == "completeness":
+            # Denoise out-circuit: 1 - recovery = disruption
+            faith_score = compute_completeness_score(
+                y_intervened_val, y_clean_val, y_corrupted_val
+            )
+        elif score_type == "necessity":
+            # Noise in-circuit: disruption
+            faith_score = compute_necessity_score(
+                y_intervened_val, y_clean_val, y_corrupted_val
+            )
+        elif score_type == "independence":
+            # Noise out-circuit: 1 - disruption = recovery
+            faith_score = compute_independence_score(
+                y_intervened_val, y_clean_val, y_corrupted_val
+            )
+        else:
+            raise ValueError(f"Unknown score_type: {score_type}")
+
+        output_changed = round(y_intervened_val) == round(y_corrupted_val)
+
+        # Convert activations to lists for JSON serialization
+        clean_acts_list = [a.squeeze(0).tolist() for a in pair.act_clean]
+        corrupted_acts_list = [a.squeeze(0).tolist() for a in pair.act_corrupted]
+        intervened_acts_list = [a.squeeze(0).tolist() for a in intervened_acts]
+
+        return CounterfactualEffect(
+            faithfulness_score=faith_score,
+            experiment_type=experiment_type,
+            score_type=score_type,
+            clean_input=pair.x_clean.flatten().tolist(),
+            corrupted_input=pair.x_corrupted.flatten().tolist(),
+            expected_clean_output=y_clean_val,
+            expected_corrupted_output=y_corrupted_val,
+            actual_output=y_intervened_val,
+            output_changed_to_corrupted=output_changed,
+            clean_activations=clean_acts_list,
+            corrupted_activations=corrupted_acts_list,
+            intervened_activations=intervened_acts_list,
+        )
+
+    # ===== NOISING: Run clean input, patch with corrupted activations =====
+    def compute_noising_effects(
+        patches: list[PatchShape],
+        pairs: list[CleanCorruptedPair],
+        score_type: str,  # "necessity" (in-circuit) or "independence" (out-circuit)
+    ) -> list[CounterfactualEffect]:
+        """Noising: Run on CLEAN input, patch specified neurons with CORRUPTED values.
+
+        - Necessity (in-circuit): Does corrupting the circuit break behavior?
+        - Independence (out-circuit): Does corrupting outside the circuit break behavior?
         """
         effects = []
         for pair in pairs:
+            # Patch with corrupted activations
             iv = create_patch_intervention(patches, pair.act_corrupted)
 
-            # Run FULL MODEL with intervention and capture activations
+            # Run on CLEAN input with intervention
             with torch.inference_mode():
                 intervened_acts = model(
                     pair.x_clean, intervention=iv, return_activations=True
                 )
-                y_intervened = intervened_acts[-1]  # Last activation is output
-
-            denominator = pair.y_clean - pair.y_corrupted
-            assert torch.abs(denominator).mean() > 1e-6
-
-            faith_score = None
-            if score_type == "necessity":
-                faith_score = (
-                    ((pair.y_clean - y_intervened) / denominator).mean().item()
-                )
-            if score_type == "sufficiency":
-                faith_score = (
-                    ((y_intervened - pair.y_corrupted) / denominator).mean().item()
-                )
-
-            assert faith_score is not None, f"Unknown score_type: {score_type}"
-
-            y_clean_val = pair.y_clean.mean().item()
-            y_corrupted_val = pair.y_corrupted.mean().item()
-            y_intervened_val = y_intervened.mean().item()
-            output_changed = round(y_intervened_val) == round(y_corrupted_val)
-
-            # Reference activations from clean/corrupted (no intervention)
-            clean_acts_list = [a.squeeze(0).tolist() for a in pair.act_clean]
-            corrupted_acts_list = [a.squeeze(0).tolist() for a in pair.act_corrupted]
-
-            # Activations from the actual intervention run (FULL MODEL with patches)
-            intervened_acts_list = [a.squeeze(0).tolist() for a in intervened_acts]
+                y_intervened = intervened_acts[-1]
 
             effects.append(
-                CounterfactualEffect(
-                    faithfulness_score=faith_score,
-                    score_type=score_type,
-                    clean_input=pair.x_clean.flatten().tolist(),
-                    corrupted_input=pair.x_corrupted.flatten().tolist(),
-                    expected_clean_output=y_clean_val,
-                    expected_corrupted_output=y_corrupted_val,
-                    actual_output=y_intervened_val,
-                    output_changed_to_corrupted=output_changed,
-                    clean_activations=clean_acts_list,
-                    corrupted_activations=corrupted_acts_list,
-                    intervened_activations=intervened_acts_list,
+                _build_effect(pair, y_intervened, intervened_acts, "noising", score_type)
+            )
+        return effects
+
+    # ===== DENOISING: Run corrupted input, patch with clean activations =====
+    def compute_denoising_effects(
+        patches: list[PatchShape],
+        pairs: list[CleanCorruptedPair],
+        score_type: str,  # "sufficiency" (in-circuit) or "completeness" (out-circuit)
+    ) -> list[CounterfactualEffect]:
+        """Denoising: Run on CORRUPTED input, patch specified neurons with CLEAN values.
+
+        - Sufficiency (in-circuit): Can the circuit alone recover the behavior?
+        - Completeness (out-circuit): Does patching outside the circuit help recover?
+        """
+        effects = []
+        for pair in pairs:
+            # Patch with clean activations
+            iv = create_patch_intervention(patches, pair.act_clean)
+
+            # Run on CORRUPTED input with intervention
+            with torch.inference_mode():
+                intervened_acts = model(
+                    pair.x_corrupted, intervention=iv, return_activations=True
+                )
+                y_intervened = intervened_acts[-1]
+
+            effects.append(
+                _build_effect(
+                    pair, y_intervened, intervened_acts, "denoising", score_type
                 )
             )
         return effects
 
-    # ===== Interventional + Counterfactual Analysis =====
+    # ===== Interventional Analysis (random value patching) =====
     in_distribution_value_range = [-1, 1]
     out_distribution_value_range = [[-1000, -2], [2, 1000]]
 
@@ -1010,32 +1224,56 @@ def calculate_faithfulness_metrics(
             in_distribution_value_range,
         )
 
-    # Counterfactual analysis
-    out_counterfactual_effects = compute_counterfactual_effects(
-        structure.out_circuit, counterfactual_pairs, "sufficiency"
+    # ===== 2x2 Counterfactual Analysis =====
+    # Denoising experiments (run corrupted, patch with clean)
+    sufficiency_effects = compute_denoising_effects(
+        structure.in_circuit, counterfactual_pairs, "sufficiency"
     )
-    in_counterfactual_effects = compute_counterfactual_effects(
+    completeness_effects = compute_denoising_effects(
+        structure.out_circuit, counterfactual_pairs, "completeness"
+    )
+
+    # Noising experiments (run clean, patch with corrupted)
+    necessity_effects = compute_noising_effects(
         structure.in_circuit, counterfactual_pairs, "necessity"
+    )
+    independence_effects = compute_noising_effects(
+        structure.out_circuit, counterfactual_pairs, "independence"
     )
 
     # ===== Calculate Statistics =====
-    # Combine counterfactual effects (out-circuit counterfactuals are more meaningful
-    # since patching out-circuit neurons tests if the subcircuit is sufficient)
-    all_counterfactual_effects = out_counterfactual_effects + in_counterfactual_effects
+    # Legacy: map to old field names for backwards compatibility
+    out_counterfactual_effects = independence_effects  # Was mislabeled as "sufficiency"
+    in_counterfactual_effects = necessity_effects
+    all_counterfactual_effects = (
+        sufficiency_effects
+        + completeness_effects
+        + necessity_effects
+        + independence_effects
+    )
 
     stats = calculate_statistics(
         in_circuit_effects, out_circuit_effects, all_counterfactual_effects
     )
 
-    # Overall faithfulness: combine in-circuit similarity and counterfactual faithfulness
-    # Higher in-circuit similarity is good, higher faithfulness score is good
-    mean_in_sim = stats["mean_in_sim"]
-    mean_faith = stats["mean_faith"]
+    # Compute mean scores for each experiment type
+    def _mean_score(effects: list[CounterfactualEffect]) -> float:
+        if not effects:
+            return 0.0
+        return float(np.mean([e.faithfulness_score for e in effects]))
+
+    mean_sufficiency = _mean_score(sufficiency_effects)
+    mean_completeness = _mean_score(completeness_effects)
+    mean_necessity = _mean_score(necessity_effects)
+    mean_independence = _mean_score(independence_effects)
+
+    # Overall faithfulness: average of all 4 scores
     overall_faithfulness = (
-        (mean_in_sim + mean_faith) / 2.0 if mean_faith > 0 else mean_in_sim
-    )
+        mean_sufficiency + mean_completeness + mean_necessity + mean_independence
+    ) / 4.0
 
     return FaithfulnessMetrics(
+        # Interventional stats
         in_circuit_stats=stats["in_circuit_stats"],
         out_circuit_stats=stats["out_circuit_stats"],
         in_circuit_stats_ood=stats["in_circuit_stats_ood"],
@@ -1044,9 +1282,20 @@ def calculate_faithfulness_metrics(
         mean_out_circuit_similarity=stats["mean_out_sim"],
         mean_in_circuit_similarity_ood=stats["mean_in_sim_ood"],
         mean_out_circuit_similarity_ood=stats["mean_out_sim_ood"],
+        # 2x2 Matrix effects
+        sufficiency_effects=sufficiency_effects,
+        completeness_effects=completeness_effects,
+        necessity_effects=necessity_effects,
+        independence_effects=independence_effects,
+        # 2x2 Matrix aggregate scores
+        mean_sufficiency=mean_sufficiency,
+        mean_completeness=mean_completeness,
+        mean_necessity=mean_necessity,
+        mean_independence=mean_independence,
+        # Legacy fields for backwards compatibility
         out_counterfactual_effects=out_counterfactual_effects,
         in_counterfactual_effects=in_counterfactual_effects,
-        counterfactual_effects=all_counterfactual_effects,  # Legacy combined
+        counterfactual_effects=all_counterfactual_effects,
         mean_faithfulness_score=stats["mean_faith"],
         std_faithfulness_score=stats["std_faith"],
         overall_faithfulness=overall_faithfulness,

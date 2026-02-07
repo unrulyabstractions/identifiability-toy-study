@@ -211,34 +211,35 @@ class TestGenerateOODSamples:
         ]
 
     def test_returns_list_of_tuples(self, base_inputs):
-        """Should return list of (perturbed, base, scale) tuples."""
+        """Should return list of (perturbed, base, scale, sample_type) tuples."""
         samples = _generate_ood_samples(base_inputs, n_samples_per_base=10)
 
         assert isinstance(samples, list)
         for sample in samples:
             assert isinstance(sample, tuple)
-            assert len(sample) == 3
-            perturbed, base, scale = sample
+            assert len(sample) == 4
+            perturbed, base, scale, sample_type = sample
             assert isinstance(perturbed, torch.Tensor)
             assert isinstance(base, torch.Tensor)
             assert isinstance(scale, float)
+            assert isinstance(sample_type, str)
 
     def test_skips_zero_zero_input(self, base_inputs):
         """(0,0) should be skipped since scaling doesn't create OOD."""
         samples = _generate_ood_samples(base_inputs, n_samples_per_base=10)
 
         # None of the base inputs should be (0,0)
-        for _, base, _ in samples:
+        for _, base, _, _ in samples:
             assert not (base[0].item() == 0.0 and base[1].item() == 0.0)
 
     def test_positive_ood_above_one(self, base_inputs):
         """Positive OOD samples should have values > 1 for non-zero base."""
         samples = _generate_ood_samples(base_inputs, n_samples_per_base=20)
 
-        positive_samples = [(p, b, s) for p, b, s in samples if s > 0]
+        positive_samples = [(p, b, s, t) for p, b, s, t in samples if s > 0]
         assert len(positive_samples) > 0
 
-        for perturbed, base, scale in positive_samples:
+        for perturbed, base, scale, sample_type in positive_samples:
             assert scale > 1, "Positive OOD should have scale > 1"
             # For non-zero base values, scaled value should be > 1
             for i in range(len(base)):
@@ -249,22 +250,26 @@ class TestGenerateOODSamples:
         """Negative OOD samples should have values < 0 for positive base."""
         samples = _generate_ood_samples(base_inputs, n_samples_per_base=20)
 
-        negative_samples = [(p, b, s) for p, b, s in samples if s < 0]
+        # Use sample_type to identify negative samples (magnitude is always positive)
+        negative_samples = [(p, b, s, t) for p, b, s, t in samples if t == "multiply_negative"]
         assert len(negative_samples) > 0
 
-        for perturbed, base, scale in negative_samples:
-            assert scale < 0, "Negative OOD should have scale < 0"
+        for perturbed, base, scale, sample_type in negative_samples:
+            # Magnitude is always positive, sample_type indicates negative transform
+            assert sample_type == "multiply_negative"
             # For positive base values, scaled value should be negative
             for i in range(len(base)):
                 if base[i].item() > 0:
                     assert perturbed[i].item() < 0
 
     def test_multiplicative_scaling(self, base_inputs):
-        """Samples should be exactly base * scale."""
+        """Samples should be exactly base * scale (or base * -scale for negative)."""
         samples = _generate_ood_samples(base_inputs, n_samples_per_base=10)
 
-        for perturbed, base, scale in samples:
-            expected = base * scale
+        for perturbed, base, scale, sample_type in samples:
+            # For negative samples, scale is stored as abs(scale)
+            actual_scale = -scale if sample_type == "multiply_negative" else scale
+            expected = base * actual_scale
             np.testing.assert_allclose(
                 perturbed.numpy(), expected.numpy(), rtol=1e-5, atol=1e-5
             )
@@ -282,17 +287,20 @@ class TestGenerateOODSamples:
         """Positive scales should be in [1, 100] (10^[0,2])."""
         samples = _generate_ood_samples(base_inputs, n_samples_per_base=100)
 
-        positive_scales = [s for _, _, s in samples if s > 0]
+        positive_scales = [s for _, _, s, _ in samples if s > 0]
         for scale in positive_scales:
             assert 1 <= scale <= 100
 
     def test_scale_range_negative(self, base_inputs):
-        """Negative scales should be in [-100, -1] (-10^[0,2])."""
+        """Negative scale magnitudes should be in [1, 100] (stored as positive)."""
         samples = _generate_ood_samples(base_inputs, n_samples_per_base=100)
 
-        negative_scales = [s for _, _, s in samples if s < 0]
-        for scale in negative_scales:
-            assert -100 <= scale <= -1
+        # Negative samples have sample_type="multiply_negative", scale is stored as magnitude
+        negative_samples = [(s, t) for _, _, s, t in samples if t == "multiply_negative"]
+        assert len(negative_samples) > 0
+        for scale, sample_type in negative_samples:
+            # Magnitude is stored as positive
+            assert 1 <= scale <= 100
 
 
 # ===== Tests for _generate_noise_samples =====
@@ -314,7 +322,7 @@ class TestGenerateNoiseSamples:
         """All noise magnitudes should be < 0.5."""
         samples = _generate_noise_samples(base_inputs, n_samples_per_base=100)
 
-        for perturbed, base, magnitude in samples:
+        for perturbed, base, magnitude, sample_type in samples:
             actual_magnitude = (perturbed - base).norm().item()
             assert actual_magnitude < 0.5
             assert magnitude < 0.5
@@ -323,14 +331,14 @@ class TestGenerateNoiseSamples:
         """Noise magnitudes should be >= 0.01."""
         samples = _generate_noise_samples(base_inputs, n_samples_per_base=100)
 
-        for _, _, magnitude in samples:
+        for _, _, magnitude, _ in samples:
             assert magnitude >= 0.01
 
     def test_noise_preserves_base(self, base_inputs):
         """Base input should be returned unchanged."""
         samples = _generate_noise_samples(base_inputs, n_samples_per_base=10)
 
-        for perturbed, base, _ in samples:
+        for perturbed, base, _, _ in samples:
             # Check base is one of the original inputs
             found = any(
                 torch.allclose(base, b) for b in base_inputs

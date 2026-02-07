@@ -66,7 +66,7 @@ def test_batch_compute_metrics_shapes(model_and_circuits):
     with torch.no_grad():
         y_pred = model(x)
 
-    accs, logit_sims, bit_sims = batch_compute_metrics(
+    accs, logit_sims, bit_sims, best_sims = batch_compute_metrics(
         model, circuits, x, y_target, y_pred, gate_idx=0
     )
 
@@ -74,6 +74,7 @@ def test_batch_compute_metrics_shapes(model_and_circuits):
     assert accs.shape == (n_circuits,)
     assert logit_sims.shape == (n_circuits,)
     assert bit_sims.shape == (n_circuits,)
+    assert best_sims.shape == (n_circuits,)
 
 
 def test_batch_compute_metrics_range(model_and_circuits):
@@ -85,13 +86,14 @@ def test_batch_compute_metrics_range(model_and_circuits):
     with torch.no_grad():
         y_pred = model(x)
 
-    accs, logit_sims, bit_sims = batch_compute_metrics(
+    accs, logit_sims, bit_sims, best_sims = batch_compute_metrics(
         model, circuits, x, y_target, y_pred, gate_idx=0
     )
 
     # Accuracy and bit_similarity should be in [0, 1]
     assert np.all(accs >= 0) and np.all(accs <= 1)
     assert np.all(bit_sims >= 0) and np.all(bit_sims <= 1)
+    assert np.all(best_sims >= 0) and np.all(best_sims <= 1)
     # Logit similarity can be negative if MSE > 1
 
 
@@ -219,18 +221,19 @@ def test_batch_compute_metrics_with_eval_device():
         y_pred = model(x)
 
     # Test with CPU
-    accs_cpu, logits_cpu, bits_cpu = batch_compute_metrics(
+    accs_cpu, logits_cpu, bits_cpu, bests_cpu = batch_compute_metrics(
         model, circuits, x, y_target, y_pred, eval_device="cpu"
     )
 
     # If MPS available, test with MPS
     if torch.backends.mps.is_available():
-        accs_mps, logits_mps, bits_mps = batch_compute_metrics(
+        accs_mps, logits_mps, bits_mps, bests_mps = batch_compute_metrics(
             model, circuits, x, y_target, y_pred, eval_device="mps"
         )
         # Results should match
         np.testing.assert_allclose(accs_cpu, accs_mps, rtol=1e-4, atol=1e-4)
         np.testing.assert_allclose(bits_cpu, bits_mps, rtol=1e-4, atol=1e-4)
+        np.testing.assert_allclose(bests_cpu, bests_mps, rtol=1e-4, atol=1e-4)
 
 
 def test_base_masks_with_adapt_matches_direct():

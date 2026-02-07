@@ -25,6 +25,7 @@ Look at visualize_experiment for the main entry point.
 import multiprocessing as mp
 import os
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from dataclasses import asdict
 from pathlib import Path
 
 # Configure matplotlib backend BEFORE importing pyplot (critical for batch rendering)
@@ -831,11 +832,11 @@ def visualize_circuit_activations_from_data(
             axes[i].text(0.5, 0.5, "No data", ha="center", va="center")
             axes[i].axis("off")
 
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
     if gate_name:
         fig.suptitle(
-            f"{gate_name} - Circuit Activations", fontsize=14, fontweight="bold"
+            f"{gate_name} - Circuit Activations", fontsize=14, fontweight="bold", y=0.99
         )
-    plt.tight_layout()
 
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
@@ -889,11 +890,11 @@ def visualize_circuit_activations_mean(
             axes[i].text(0.5, 0.5, "No data", ha="center", va="center")
             axes[i].axis("off")
 
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
     if gate_name:
         fig.suptitle(
-            f"{gate_name} - Mean Activations by Input Range", fontsize=14, fontweight="bold"
+            f"{gate_name} - Mean Activations by Input Range", fontsize=14, fontweight="bold", y=0.99
         )
-    plt.tight_layout()
 
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
@@ -995,16 +996,29 @@ def _generate_robustness_circuit_figure(args):
     axes[0, 0].set_title("Subcircuit", fontsize=10, fontweight="bold")
     axes[0, 1].set_title("Full", fontsize=10, fontweight="bold")
 
-    base_str = base_key.replace("_", ",")
-    category_label = {
-        "noise": "noise",
-        "ood_positive": "ood: scale > 1",
-        "ood_negative": "ood: scale < 0",
-    }.get(category, category)
-    fig.suptitle(
-        f"({base_str}) → {gt}  [{category_label}]", fontsize=14, fontweight="bold"
-    )
-    plt.tight_layout()
+    # Parse base_key like "0_1" -> "(0, 1)"
+    base_parts = base_key.split("_")
+    base_str = f"({base_parts[0]}, {base_parts[1]})"
+
+    # Category label for subtitle - concise labels
+    category_labels = {
+        "noise": "Noise",
+        "multiply_positive": "Multiply (positive)",
+        "multiply_negative": "Multiply (negative)",
+        "add": "Add",
+        "subtract": "Subtract",
+        "bimodal": "Bimodal",
+        "bimodal_inv": "Bimodal (inv)",
+    }
+    category_label = category_labels.get(category, category)
+
+    # Use tight_layout first to get proper spacing, then add titles above
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
+
+    # Main title: "(0, 1) -> 1" format - place well above plot area
+    fig.suptitle(f"{base_str} → {gt}", fontsize=14, fontweight="bold", y=0.98)
+    # Subtitle: transformation type
+    fig.text(0.5, 0.94, category_label, ha="center", fontsize=10, style="italic")
 
     plt.savefig(output_path, dpi=300)
     plt.close(fig)
@@ -1022,13 +1036,37 @@ def visualize_robustness_circuit_samples(
 ) -> dict[str, str]:
     """Visualize circuit diagrams comparing subcircuit vs full model under noise.
 
+    Folder structure:
+        circuit_viz/
+        ├── noise_perturbations/
+        │   └── 0_0.png, 0_1.png, 1_0.png, 1_1.png
+        └── out_distribution_transformations/
+            ├── multiply/
+            │   └── 0_1_positive.png, 0_1_negative.png, etc.
+            ├── add/
+            │   └── 0_0.png, 0_1.png, etc.
+            ├── subtract/
+            │   └── 0_0.png, 0_1.png, etc.
+            └── bimodal/
+                └── 0_0.png (order-preserving), 0_0_inv.png (inverted)
+
     Args:
         layer_biases: Optional bias vectors. If provided, edge labels show
             (weight + bias) to reveal bias contribution when edges are patched.
     """
     circuit_viz_dir = os.path.join(output_dir, "circuit_viz")
-    os.makedirs(circuit_viz_dir, exist_ok=True)
     paths = {}
+
+    # Create folder structure
+    noise_dir = os.path.join(circuit_viz_dir, "noise_perturbations")
+    ood_dir = os.path.join(circuit_viz_dir, "out_distribution_transformations")
+    multiply_dir = os.path.join(ood_dir, "multiply")
+    add_dir = os.path.join(ood_dir, "add")
+    subtract_dir = os.path.join(ood_dir, "subtract")
+    bimodal_dir = os.path.join(ood_dir, "bimodal")
+
+    for d in [noise_dir, multiply_dir, add_dir, subtract_dir, bimodal_dir]:
+        os.makedirs(d, exist_ok=True)
 
     base_to_key = {
         (0.0, 0.0): "0_0",
@@ -1042,41 +1080,71 @@ def visualize_robustness_circuit_samples(
     layer_sizes = [layer_weights[0].shape[1]] + [w.shape[0] for w in layer_weights]
     full_circuit = Circuit.full(layer_sizes)
 
-    # Group samples by base input
+    # All sample types to handle
+    sample_types = [
+        "noise",
+        "multiply_positive",
+        "multiply_negative",
+        "add",
+        "subtract",
+        "bimodal",
+        "bimodal_inv",
+    ]
+
+    # Group samples by base input and sample_type
     samples_by_base: dict[str, dict[str, list]] = {
-        k: {"noise": [], "ood_positive": [], "ood_negative": []}
-        for k in base_to_key.values()
+        k: {st: [] for st in sample_types} for k in base_to_key.values()
     }
 
+    # Process noise samples
     for sample in robustness.noise_samples:
         base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
         if base_key:
             samples_by_base[base_key]["noise"].append(sample)
 
+    # Process OOD samples using sample_type field
     for sample in robustness.ood_samples:
         base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
         if base_key:
-            if sample.noise_magnitude > 0:
-                samples_by_base[base_key]["ood_positive"].append(sample)
-            else:
-                samples_by_base[base_key]["ood_negative"].append(sample)
+            st = getattr(sample, "sample_type", "multiply_positive")
+            if st in samples_by_base[base_key]:
+                samples_by_base[base_key][st].append(sample)
+
+    # Map sample types to directories and filename suffixes
+    type_to_dir = {
+        "noise": noise_dir,
+        "multiply_positive": multiply_dir,
+        "multiply_negative": multiply_dir,
+        "add": add_dir,
+        "subtract": subtract_dir,
+        "bimodal": bimodal_dir,
+        "bimodal_inv": bimodal_dir,
+    }
+
+    # For multiply and bimodal, we need suffixes
+    # multiply: positive/negative, bimodal: none/inv
+    type_to_suffix = {
+        "noise": "",
+        "multiply_positive": "_positive",
+        "multiply_negative": "_negative",
+        "add": "",
+        "subtract": "",
+        "bimodal": "",
+        "bimodal_inv": "_inv",
+    }
 
     # Prepare tasks for parallel execution
     tasks = []
     circuit_dict = circuit.to_dict()
     full_circuit_dict = full_circuit.to_dict()
 
-    for base_key, by_category in samples_by_base.items():
-        for category in ["noise", "ood_positive", "ood_negative"]:
-            all_samples = by_category[category]
+    for base_key, by_type in samples_by_base.items():
+        for sample_type in sample_types:
+            all_samples = by_type[sample_type]
             if not all_samples:
                 continue
 
-            sort_key = (
-                (lambda s: abs(s.noise_magnitude))
-                if category == "ood_negative"
-                else (lambda s: s.noise_magnitude)
-            )
+            sort_key = lambda s: abs(s.noise_magnitude)
             disagree = sorted(
                 [s for s in all_samples if not s.agreement_bit], key=sort_key
             )
@@ -1100,8 +1168,12 @@ def visualize_robustness_circuit_samples(
                 continue
 
             gt = int(all_samples[0].ground_truth)
-            filename = f"{base_key}_{category}.png"
-            output_path = os.path.join(circuit_viz_dir, filename)
+
+            # Build filename and path
+            target_dir = type_to_dir[sample_type]
+            suffix = type_to_suffix[sample_type]
+            filename = f"{base_key}{suffix}.png"
+            output_path = os.path.join(target_dir, filename)
 
             # Convert samples to dicts for pickling
             sample_dicts = [
@@ -1132,7 +1204,7 @@ def visualize_robustness_circuit_samples(
                     full_circuit_dict,
                     weights,
                     base_key,
-                    category,
+                    sample_type,  # Use sample_type as category
                     gt,
                     output_path,
                     n_samples,
@@ -1140,7 +1212,10 @@ def visualize_robustness_circuit_samples(
                     biases,
                 )
             )
-            paths[filename] = output_path
+
+            # Use relative path from circuit_viz_dir for paths dict
+            rel_path = os.path.relpath(output_path, circuit_viz_dir)
+            paths[rel_path] = output_path
 
     # Execute in parallel
     if tasks:
@@ -1370,9 +1445,12 @@ def visualize_robustness_curves(
             if row == 3:
                 ax.set_xlabel("Perturbation Effect", fontsize=9)
 
+        # Use tight_layout first with proper rect, then add title
+        plt.tight_layout(rect=[0, 0.08, 1, 0.94])
+
         fig.suptitle(
             f"{prefix}Noise Robustness",
-            fontsize=14, fontweight="bold", y=1.02
+            fontsize=14, fontweight="bold", y=0.98
         )
 
         # Add figure-level legend at bottom
@@ -1394,120 +1472,191 @@ def visualize_robustness_curves(
                    bbox_to_anchor=(0.5, 0.01))
 
         # Add definition text below legend
-        fig.text(0.5, -0.03,
+        fig.text(0.5, -0.02,
                  "Perturbation Effect = (perturbed_left - perturbed_right) - (base_left - base_right)",
                  ha='center', fontsize=8, style='italic', color='#555555')
-
-        plt.tight_layout(rect=[0, 0.08, 1, 0.98])
-        path = os.path.join(output_dir, "noise_by_input.png")
+        # Save in circuit_viz/noise_perturbations/summary.png
+        noise_perturb_dir = os.path.join(output_dir, "circuit_viz", "noise_perturbations")
+        os.makedirs(noise_perturb_dir, exist_ok=True)
+        path = os.path.join(noise_perturb_dir, "summary.png")
         plt.savefig(path, dpi=300, bbox_inches="tight")
         plt.close(fig)
-        paths["noise_by_input"] = path
+        paths["noise_perturbations/summary"] = path
 
-    # Per-input breakdown for OOD samples (3 rows x 3 cols, skip 0_0)
+    # Per-input breakdown for OOD samples - create per-subtype summaries
     with profile("robust_curves.ood_per_input"):
-        samples_by_base = {k: [] for k in input_keys}
-        for sample in robustness.ood_samples:
-            base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
-            if base_key:
-                samples_by_base[base_key].append(sample)
-
-        # Compute global y-axis range from all OOD samples
-        all_ood_outputs = []
-        for sample in robustness.ood_samples:
-            all_ood_outputs.append(sample.gate_output)
-            all_ood_outputs.append(sample.subcircuit_output)
-        if all_ood_outputs:
-            ood_y_min = min(all_ood_outputs)
-            ood_y_max = max(all_ood_outputs)
-            # Add padding
-            ood_y_pad = (ood_y_max - ood_y_min) * 0.05
-            ood_y_min -= ood_y_pad
-            ood_y_max += ood_y_pad
-        else:
-            ood_y_min, ood_y_max = -0.2, 1.2
-
-        # Skip 0_0 for OOD
-        ood_input_keys = [k for k in input_keys if k != "0_0"]
-        fig, axes = plt.subplots(3, 3, figsize=(15, 11))
-
-        for row, key in enumerate(ood_input_keys):
-            samples = samples_by_base.get(key, [])
-            gt = samples[0].ground_truth if samples else 0
-
-            # Column 0: Subcircuit
-            ax = axes[row, 0]
-            if samples:
-                ood_scales = [s.noise_magnitude for s in samples]
-                sc_outputs = [s.subcircuit_output for s in samples]
-                sc_correct = [s.subcircuit_correct for s in samples]
-                _plot_single_model(ax, samples, ood_scales, gt, sc_outputs, sc_correct)
-            ax.set_ylabel(f"({key.replace('_', ',')})", fontsize=10, fontweight="bold")
-            ax.set_ylim(ood_y_min, ood_y_max)
-            ax.grid(alpha=0.3)
-            if row == 0:
-                ax.set_title("Subcircuit", fontsize=11, fontweight="bold")
-            if row == 2:
-                ax.set_xlabel("OOD Scale", fontsize=9)
-
-            # Column 1: Gate
-            ax = axes[row, 1]
-            if samples:
-                ood_scales = [s.noise_magnitude for s in samples]
-                gate_outputs = [s.gate_output for s in samples]
-                gate_correct = [s.gate_correct for s in samples]
-                _plot_single_model(ax, samples, ood_scales, gt, gate_outputs, gate_correct)
-            ax.set_ylim(ood_y_min, ood_y_max)
-            ax.grid(alpha=0.3)
-            if row == 0:
-                ax.set_title("Full Gate", fontsize=11, fontweight="bold")
-            if row == 2:
-                ax.set_xlabel("OOD Scale", fontsize=9)
-
-            # Column 2: Agreement (binned)
-            ax = axes[row, 2]
-            if samples:
-                ood_scales = [s.noise_magnitude for s in samples]
-                _plot_agreement_binned(ax, samples, ood_scales, n_bins=8)
-            ax.grid(alpha=0.3, axis="y")
-            if row == 0:
-                ax.set_title("Agreement", fontsize=11, fontweight="bold")
-            if row == 2:
-                ax.set_xlabel("Perturbation Effect", fontsize=9)
-
-        fig.suptitle(
-            f"{prefix}Out-of-Distribution Robustness",
-            fontsize=14, fontweight="bold", y=1.02
-        )
-
-        # Add figure-level legend at bottom
-        from matplotlib.patches import Patch
-        from matplotlib.lines import Line2D
-        color_bit = "#FFB6C1"   # Pastel pink
-        color_best = "#FFFACD"  # Pastel yellow
-        legend_elements = [
-            Line2D([0], [0], marker='o', color='w', markerfacecolor='green',
-                   markersize=8, label='Correct'),
-            Line2D([0], [0], marker='o', color='w', markerfacecolor='red',
-                   markersize=8, label='Incorrect'),
-            Patch(facecolor=color_bit, edgecolor="none", label="Bit"),
-            Patch(facecolor=color_best, edgecolor="none", label="Best"),
-            Patch(facecolor=color_bit, edgecolor=color_best, hatch="//", label="Overlap"),
+        # Each subtype gets its own summary file
+        # For multiply: summary_positive.png, summary_negative.png
+        # For bimodal: summary.png, summary_inv.png
+        # For add/subtract: summary.png
+        ood_subtypes = [
+            {
+                "folder": "multiply",
+                "sample_type": "multiply_positive",
+                "title": "Multiply (positive)",
+                "xlabel": "Scale Factor",
+                "filename": "summary_positive.png",
+                "skip_0_0": True,
+            },
+            {
+                "folder": "multiply",
+                "sample_type": "multiply_negative",
+                "title": "Multiply (negative)",
+                "xlabel": "Scale Factor",
+                "filename": "summary_negative.png",
+                "skip_0_0": True,
+            },
+            {
+                "folder": "add",
+                "sample_type": "add",
+                "title": "Add",
+                "xlabel": "Added Value",
+                "filename": "summary.png",
+                "skip_0_0": False,
+            },
+            {
+                "folder": "subtract",
+                "sample_type": "subtract",
+                "title": "Subtract",
+                "xlabel": "Subtracted Value",
+                "filename": "summary.png",
+                "skip_0_0": False,
+            },
+            {
+                "folder": "bimodal",
+                "sample_type": "bimodal",
+                "title": "Bimodal",
+                "xlabel": "Input",
+                "filename": "summary.png",
+                "skip_0_0": False,
+            },
+            {
+                "folder": "bimodal",
+                "sample_type": "bimodal_inv",
+                "title": "Bimodal (inv)",
+                "xlabel": "Input",
+                "filename": "summary_inv.png",
+                "skip_0_0": False,
+            },
         ]
-        fig.legend(handles=legend_elements, loc='lower center', ncol=5,
-                   fontsize=9, framealpha=0.9, edgecolor="none", fancybox=False,
-                   bbox_to_anchor=(0.5, 0.01))
 
-        # Add definition text below legend
-        fig.text(0.5, -0.03,
-                 "OOD Scale = multiplicative factor applied to base input (e.g., scale=50 means input×50)",
-                 ha='center', fontsize=8, style='italic', color='#555555')
+        for subtype_info in ood_subtypes:
+            samples_by_base = {k: [] for k in input_keys}
+            for sample in robustness.ood_samples:
+                st = getattr(sample, "sample_type", "multiply_positive")
+                if st == subtype_info["sample_type"]:
+                    base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
+                    if base_key:
+                        samples_by_base[base_key].append(sample)
 
-        plt.tight_layout(rect=[0, 0.08, 1, 0.98])
-        path = os.path.join(output_dir, "ood_by_input.png")
-        plt.savefig(path, dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        paths["ood_by_input"] = path
+            # Skip if no samples for this subtype
+            total_samples = sum(len(s) for s in samples_by_base.values())
+            if total_samples == 0:
+                continue
+
+            # Compute global y-axis range from samples
+            all_outputs = []
+            for samples in samples_by_base.values():
+                for sample in samples:
+                    all_outputs.append(sample.gate_output)
+                    all_outputs.append(sample.subcircuit_output)
+            if all_outputs:
+                y_min = min(all_outputs)
+                y_max = max(all_outputs)
+                y_pad = (y_max - y_min) * 0.05
+                y_min -= y_pad
+                y_max += y_pad
+            else:
+                y_min, y_max = -0.2, 1.2
+
+            # Skip 0_0 for multiply (it stays 0 regardless of scale)
+            if subtype_info["skip_0_0"]:
+                ood_input_keys = [k for k in input_keys if k != "0_0"]
+                n_rows = 3
+            else:
+                ood_input_keys = input_keys
+                n_rows = 4
+
+            fig, axes = plt.subplots(n_rows, 3, figsize=(15, 4 * n_rows - 2))
+
+            for row, key in enumerate(ood_input_keys):
+                samples = samples_by_base.get(key, [])
+                gt = samples[0].ground_truth if samples else 0
+
+                # Column 0: Subcircuit
+                ax = axes[row, 0]
+                if samples:
+                    x_vals = [abs(s.noise_magnitude) for s in samples]
+                    sc_outputs = [s.subcircuit_output for s in samples]
+                    sc_correct = [s.subcircuit_correct for s in samples]
+                    _plot_single_model(ax, samples, x_vals, gt, sc_outputs, sc_correct)
+                ax.set_ylabel(f"({key.replace('_', ',')})", fontsize=10, fontweight="bold")
+                ax.set_ylim(y_min, y_max)
+                ax.grid(alpha=0.3)
+                if row == 0:
+                    ax.set_title("Subcircuit", fontsize=11, fontweight="bold")
+                if row == n_rows - 1:
+                    ax.set_xlabel(subtype_info["xlabel"], fontsize=9)
+
+                # Column 1: Gate
+                ax = axes[row, 1]
+                if samples:
+                    x_vals = [abs(s.noise_magnitude) for s in samples]
+                    gate_outputs = [s.gate_output for s in samples]
+                    gate_correct = [s.gate_correct for s in samples]
+                    _plot_single_model(ax, samples, x_vals, gt, gate_outputs, gate_correct)
+                ax.set_ylim(y_min, y_max)
+                ax.grid(alpha=0.3)
+                if row == 0:
+                    ax.set_title("Full Gate", fontsize=11, fontweight="bold")
+                if row == n_rows - 1:
+                    ax.set_xlabel(subtype_info["xlabel"], fontsize=9)
+
+                # Column 2: Agreement (binned)
+                ax = axes[row, 2]
+                if samples:
+                    x_vals = [abs(s.noise_magnitude) for s in samples]
+                    _plot_agreement_binned(ax, samples, x_vals, n_bins=8)
+                ax.grid(alpha=0.3, axis="y")
+                if row == 0:
+                    ax.set_title("Agreement", fontsize=11, fontweight="bold")
+                if row == n_rows - 1:
+                    ax.set_xlabel(subtype_info["xlabel"], fontsize=9)
+
+            # Use tight_layout first, then add title with proper spacing
+            plt.tight_layout(rect=[0, 0.08, 1, 0.94])
+            fig.suptitle(
+                f"{prefix}OOD: {subtype_info['title']}",
+                fontsize=14, fontweight="bold", y=0.98
+            )
+
+            # Add figure-level legend at bottom
+            from matplotlib.patches import Patch
+            from matplotlib.lines import Line2D
+            color_bit = "#FFB6C1"   # Pastel pink
+            color_best = "#FFFACD"  # Pastel yellow
+            legend_elements = [
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='green',
+                       markersize=8, label='Correct'),
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='red',
+                       markersize=8, label='Incorrect'),
+                Patch(facecolor=color_bit, edgecolor="none", label="Bit"),
+                Patch(facecolor=color_best, edgecolor="none", label="Best"),
+                Patch(facecolor=color_bit, edgecolor=color_best, hatch="//", label="Overlap"),
+            ]
+            fig.legend(handles=legend_elements, loc='lower center', ncol=5,
+                       fontsize=9, framealpha=0.9, edgecolor="none", fancybox=False,
+                       bbox_to_anchor=(0.5, 0.01))
+
+            # Save in circuit_viz/out_distribution_transformations/{folder}/{filename}
+            ood_type_dir = os.path.join(
+                output_dir, "circuit_viz", "out_distribution_transformations", subtype_info["folder"]
+            )
+            os.makedirs(ood_type_dir, exist_ok=True)
+            path = os.path.join(ood_type_dir, subtype_info["filename"])
+            plt.savefig(path, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+            paths[f"ood_{subtype_info['folder']}/{subtype_info['filename']}"] = path
 
     return paths
 
@@ -1553,12 +1702,14 @@ def visualize_faithfulness_intervention_effects(
     """
     Comprehensive faithfulness visualization suite.
 
-    Creates:
-    - stats/in_circuit_interventions/[patch].png - per-patch intervention plots
-    - stats/out_circuit_interventions/[patch].png - per-patch intervention plots
-    - in_distribution_interventional_summary.png - overview of all patches (bit similarity)
-    - intervention_summary.png - 3-row stacked: bit similarity, sufficiency, necessity scores
-    - counterfactual_per_input.png - per-input faithfulness circuits
+    Creates in output_dir/:
+    - interventional/in_circuit/*_stats.png - per-patch scatter plots
+    - interventional/out_circuit/*_stats.png - per-patch scatter plots
+    - interventional/in_distribution_summary.png - overview of all patches
+    - interventional/out_distribution_summary.png - OOD overview
+    - counterfactual/counterfact_summary.png - 2x2 matrix visualization
+    - counterfactual/denoising_per_input.png - per-input denoising circuits
+    - counterfactual/noising_per_input.png - per-input noising circuits
     """
     paths = {}
     prefix = f"{gate_name} - " if gate_name else ""
@@ -1634,12 +1785,15 @@ def visualize_faithfulness_intervention_effects(
             ax.set_xlabel("Intervention Value", fontsize=9)
         ax.grid(alpha=0.3, axis="y")
 
-    # === 1. Per-patch intervention plots in stats/[in|out]_circuit/ ===
+    # === 1. Per-patch intervention scatter plots (in interventional/{in,out}_circuit/*_stats.png) ===
+    interventional_base = os.path.join(output_dir, "interventional")
+
     def _create_patch_figures(patch_stats_dict, circuit_type, base_dir):
-        """Create figures for all patches of a given type."""
+        """Create scatter plots for all patches of a given type."""
         patch_paths = {}
-        stats_dir = os.path.join(base_dir, "stats", circuit_type)
-        os.makedirs(stats_dir, exist_ok=True)
+        # Save in interventional/{in,out}_circuit/ with _stats suffix
+        out_dir = os.path.join(base_dir, circuit_type)
+        os.makedirs(out_dir, exist_ok=True)
 
         for patch_key, patch_stats in patch_stats_dict.items():
             samples = patch_stats.samples
@@ -1658,63 +1812,67 @@ def visualize_faithfulness_intervention_effects(
             indices_str = ",".join(map(str, indices)) if indices else "all"
             n_nodes = len(indices) if indices else 0
 
+            plt.tight_layout(rect=[0, 0, 1, 0.94])
             fig.suptitle(
                 f"{prefix}{circuit_type} | L{layer} nodes=[{indices_str}] ({n_nodes} nodes) | mode=add",
-                fontsize=12, fontweight="bold"
+                fontsize=12, fontweight="bold", y=0.99
             )
-            plt.tight_layout()
 
-            path = os.path.join(stats_dir, f"{filename}.png")
+            # Save with _stats suffix to avoid collision with circuit diagrams
+            path = os.path.join(out_dir, f"{filename}_stats.png")
             plt.savefig(path, dpi=300, bbox_inches="tight")
             plt.close(fig)
-            patch_paths[f"stats/{circuit_type}/{filename}"] = path
+            patch_paths[f"interventional/{circuit_type}/{filename}_stats"] = path
 
         return patch_paths
 
     if faithfulness.in_circuit_stats:
-        paths.update(_create_patch_figures(faithfulness.in_circuit_stats, "in_circuit_interventions", output_dir))
+        paths.update(_create_patch_figures(faithfulness.in_circuit_stats, "in_circuit", interventional_base))
     if faithfulness.out_circuit_stats:
-        paths.update(_create_patch_figures(faithfulness.out_circuit_stats, "out_circuit_interventions", output_dir))
+        paths.update(_create_patch_figures(faithfulness.out_circuit_stats, "out_circuit", interventional_base))
 
-    # === 2. Intervention Summary (grouped bars per patch with multiple metrics) ===
-    all_patches_id = []
-    for pk, ps in faithfulness.in_circuit_stats.items():
-        all_patches_id.append(("in", pk, ps))
-    for pk, ps in faithfulness.out_circuit_stats.items():
-        all_patches_id.append(("out", pk, ps))
+    # === 2. Intervention Summaries (in interventional/ folder) ===
+    interventional_dir = interventional_base
+    os.makedirs(interventional_dir, exist_ok=True)
 
-    def sort_key(item):
-        import re
-        layer_match = re.search(r"layers=\((\d+)", item[1])
-        idx_match = re.search(r"indices=\((\d+)", item[1])
-        return (int(layer_match.group(1)) if layer_match else 0,
-                int(idx_match.group(1)) if idx_match else 0)
+    def _create_intervention_summary(in_stats, out_stats, title_suffix, filename):
+        """Helper to create intervention summary bar chart."""
+        all_patches = []
+        for pk, ps in in_stats.items():
+            all_patches.append(("in", pk, ps))
+        for pk, ps in out_stats.items():
+            all_patches.append(("out", pk, ps))
 
-    all_patches_id.sort(key=sort_key)
+        def sort_key(item):
+            import re
+            layer_match = re.search(r"layers=\((\d+)", item[1])
+            idx_match = re.search(r"indices=\((\d+)", item[1])
+            return (int(layer_match.group(1)) if layer_match else 0,
+                    int(idx_match.group(1)) if idx_match else 0)
 
-    if all_patches_id:
-        n_patches = len(all_patches_id)
-        labels = [_patch_key_to_filename(p[1]) for p in all_patches_id]
+        all_patches.sort(key=sort_key)
 
-        # Extract all metrics
-        bit_sim = [p[2].mean_bit_similarity for p in all_patches_id]
-        logit_sim = [p[2].mean_logit_similarity for p in all_patches_id]
-        best_sim = [p[2].mean_best_similarity for p in all_patches_id]
-        n_samples = [p[2].n_interventions for p in all_patches_id]
-        is_in_circuit = [p[0] == "in" for p in all_patches_id]
+        if not all_patches:
+            return None
 
-        # Create figure with grouped bars
+        n_patches = len(all_patches)
+        labels = [_patch_key_to_filename(p[1]) for p in all_patches]
+
+        bit_sim = [p[2].mean_bit_similarity for p in all_patches]
+        logit_sim = [p[2].mean_logit_similarity for p in all_patches]
+        best_sim = [p[2].mean_best_similarity for p in all_patches]
+        n_samples = [p[2].n_interventions for p in all_patches]
+        is_in_circuit = [p[0] == "in" for p in all_patches]
+
         fig, ax = plt.subplots(1, 1, figsize=(max(14, n_patches * 1.5), 7))
 
         x = np.arange(n_patches)
         width = 0.25
 
-        # Grouped bars for each metric
-        bars1 = ax.bar(x - width, bit_sim, width, label="Bit Agreement", color="#4CAF50", alpha=0.8)
-        bars2 = ax.bar(x, logit_sim, width, label="Logit Similarity", color="#2196F3", alpha=0.8)
-        bars3 = ax.bar(x + width, best_sim, width, label="Best Similarity", color="#FF9800", alpha=0.8)
+        ax.bar(x - width, bit_sim, width, label="Bit Agreement", color="#4CAF50", alpha=0.8)
+        ax.bar(x, logit_sim, width, label="Logit Similarity", color="#2196F3", alpha=0.8)
+        ax.bar(x + width, best_sim, width, label="Best Similarity", color="#FF9800", alpha=0.8)
 
-        # Add markers for in-circuit vs out-circuit
         for i, is_in in enumerate(is_in_circuit):
             marker = "▲" if is_in else "▼"
             color = "#2E7D32" if is_in else "#1565C0"
@@ -1730,22 +1888,49 @@ def visualize_faithfulness_intervention_effects(
         ax.legend(loc="upper right", fontsize=9)
         ax.grid(alpha=0.3, axis="y")
 
-        # Add sample count annotations
         for i, (xi, n) in enumerate(zip(x, n_samples)):
             ax.text(xi, 1.05, f"n={n}", ha="center", va="bottom", fontsize=7, color="#666666")
 
-        ax.set_title(f"{prefix}In-Distribution Intervention Summary by Patch\n(▲=in-circuit, ▼=out-circuit)",
+        ax.set_title(f"{prefix}{title_suffix}\n(▲=in-circuit, ▼=out-circuit)",
                      fontsize=13, fontweight="bold")
 
         plt.tight_layout()
-        path = os.path.join(output_dir, "in_distribution_interventional_summary.png")
+        path = os.path.join(interventional_dir, filename)
         plt.savefig(path, dpi=300, bbox_inches="tight")
         plt.close(fig)
-        paths["in_distribution_interventional_summary"] = path
+        return path
 
-    # === 3. Intervention Summary (3 stacked rows showing different metrics) ===
-    out_cf = faithfulness.out_counterfactual_effects  # Sufficiency
-    in_cf = faithfulness.in_counterfactual_effects    # Necessity
+    # In-distribution summary
+    path = _create_intervention_summary(
+        faithfulness.in_circuit_stats,
+        faithfulness.out_circuit_stats,
+        "In-Distribution Summary",
+        "in_distribution_summary.png"
+    )
+    if path:
+        paths["interventional/in_distribution_summary"] = path
+
+    # Out-of-distribution summary (if OOD stats exist)
+    if faithfulness.in_circuit_stats_ood or faithfulness.out_circuit_stats_ood:
+        path = _create_intervention_summary(
+            faithfulness.in_circuit_stats_ood,
+            faithfulness.out_circuit_stats_ood,
+            "Out-of-Distribution Summary",
+            "out_distribution_summary.png"
+        )
+        if path:
+            paths["interventional/out_distribution_summary"] = path
+
+    # === 3. Intervention Summary (2x2 Matrix of Patching Experiments) ===
+    # Use new 2x2 matrix fields if available, fall back to legacy
+    suff_cf = faithfulness.sufficiency_effects or []
+    comp_cf = faithfulness.completeness_effects or []
+    nec_cf = faithfulness.necessity_effects or []
+    ind_cf = faithfulness.independence_effects or []
+
+    # Legacy fallback
+    out_cf = faithfulness.out_counterfactual_effects
+    in_cf = faithfulness.in_counterfactual_effects
 
     # Build per-node scores from intervention stats (bit similarity)
     # Key: (layer, node_idx) -> score
@@ -1798,12 +1983,16 @@ def visualize_faithfulness_intervention_effects(
                 circuit_node_masks.append(layer_mask)
             circuit_node_masks.append([1])  # Output layer
 
-    # Compute faithfulness scores per node
-    in_faith_scores = {}
-    out_faith_scores = {}
+    # Compute faithfulness scores per node for all 4 experiments
+    suff_scores = {}  # Denoise in-circuit
+    comp_scores = {}  # Denoise out-circuit
+    nec_scores = {}   # Noise in-circuit
+    ind_scores = {}   # Noise out-circuit
     if circuit_node_masks:
-        in_faith_scores = _build_cf_node_scores(in_cf, circuit_node_masks, is_in_circuit=True)
-        out_faith_scores = _build_cf_node_scores(out_cf, circuit_node_masks, is_in_circuit=False)
+        suff_scores = _build_cf_node_scores(suff_cf, circuit_node_masks, is_in_circuit=True)
+        comp_scores = _build_cf_node_scores(comp_cf, circuit_node_masks, is_in_circuit=False)
+        nec_scores = _build_cf_node_scores(nec_cf, circuit_node_masks, is_in_circuit=True)
+        ind_scores = _build_cf_node_scores(ind_cf, circuit_node_masks, is_in_circuit=False)
 
     # Infer layer sizes from stats
     all_keys = list(in_bit_scores.keys()) + list(out_bit_scores.keys())
@@ -1815,8 +2004,8 @@ def visualize_faithfulness_intervention_effects(
             layer_sizes.append(max(nodes_in_layer) + 1 if nodes_in_layer else 3)
         layer_sizes.append(1)  # Output layer
 
-        def _draw_metric_circuit(ax, suff_scores, nec_scores, title, layer_sizes):
-            """Draw circuit with nodes colored by metric score (sufficiency for out, necessity for in)."""
+        def _draw_metric_circuit(ax, out_scores, in_scores, title, layer_sizes):
+            """Draw circuit with nodes colored by metric score."""
             G = nx.DiGraph()
             pos = _layout_cache.get_positions(tuple(layer_sizes))
 
@@ -1828,16 +2017,16 @@ def visualize_faithfulness_intervention_effects(
                     name = f"({layer_idx},{node_idx})"
                     G.add_node(name)
 
-                    # Check if in-circuit (necessity) or out-circuit (sufficiency)
-                    nec_score = nec_scores.get((layer_idx, node_idx))
-                    suff_score = suff_scores.get((layer_idx, node_idx))
+                    # Check if in-circuit or out-circuit
+                    in_score = in_scores.get((layer_idx, node_idx))
+                    out_score = out_scores.get((layer_idx, node_idx))
 
-                    if nec_score is not None:
-                        node_colors.append(_faithfulness_score_to_color(nec_score))
-                        node_labels[name] = f"{nec_score:.2f}"
-                    elif suff_score is not None:
-                        node_colors.append(_faithfulness_score_to_color(suff_score))
-                        node_labels[name] = f"{suff_score:.2f}"
+                    if in_score is not None:
+                        node_colors.append(_faithfulness_score_to_color(in_score))
+                        node_labels[name] = f"{in_score:.2f}"
+                    elif out_score is not None:
+                        node_colors.append(_faithfulness_score_to_color(out_score))
+                        node_labels[name] = f"{out_score:.2f}"
                     else:
                         node_colors.append((0.85, 0.85, 0.85, 1.0))
                         node_labels[name] = ""
@@ -1855,183 +2044,184 @@ def visualize_faithfulness_intervention_effects(
             ax.set_title(title, fontsize=10, fontweight="bold")
             ax.axis("off")
 
-        # Create 3-row summary figure
-        fig, axes = plt.subplots(3, 2, figsize=(14, 15))
+        # Create 2x2 matrix summary figure (counterfact_summary.png)
+        # Rows: Denoising, Noising | Cols: In-Circuit, Out-Circuit
+        fig, axes = plt.subplots(2, 2, figsize=(10, 9))
 
-        # Row 1: Bit Similarity (from patch stats)
-        _draw_metric_circuit(axes[0, 0], out_bit_scores, {},
-                            "Sufficiency (out-circuit)\nBit Similarity", layer_sizes)
-        _draw_metric_circuit(axes[0, 1], {}, in_bit_scores,
-                            "Necessity (in-circuit)\nBit Similarity", layer_sizes)
+        # Compute mean scores for each experiment
+        suff_mean = faithfulness.mean_sufficiency if hasattr(faithfulness, 'mean_sufficiency') else (
+            np.mean([e.faithfulness_score for e in suff_cf]) if suff_cf else 0.5)
+        comp_mean = faithfulness.mean_completeness if hasattr(faithfulness, 'mean_completeness') else (
+            np.mean([e.faithfulness_score for e in comp_cf]) if comp_cf else 0.5)
+        nec_mean = faithfulness.mean_necessity if hasattr(faithfulness, 'mean_necessity') else (
+            np.mean([e.faithfulness_score for e in nec_cf]) if nec_cf else 0.5)
+        ind_mean = faithfulness.mean_independence if hasattr(faithfulness, 'mean_independence') else (
+            np.mean([e.faithfulness_score for e in ind_cf]) if ind_cf else 0.5)
 
-        # Row 2: Faithfulness Score - Sufficiency
-        suff_mean = np.mean([e.faithfulness_score for e in out_cf]) if out_cf else 0.5
-        _draw_metric_circuit(axes[1, 0], out_faith_scores, {},
-                            f"Sufficiency (out-circuit)\nFaithfulness Score (mean={suff_mean:.2f})", layer_sizes)
-        axes[1, 1].text(0.5, 0.5, f"N/A\n(sufficiency measures\nout-circuit nodes)",
-                        ha="center", va="center", fontsize=10, color="#888888")
-        axes[1, 1].set_title("Necessity (in-circuit)\nFaithfulness Score", fontsize=10, fontweight="bold")
-        axes[1, 1].axis("off")
+        # Row 1: DENOISING (run corrupted, patch with clean)
+        _draw_metric_circuit(axes[0, 0], {}, suff_scores,
+                            f"Sufficiency: {suff_mean:.2f}", layer_sizes)
+        _draw_metric_circuit(axes[0, 1], comp_scores, {},
+                            f"Completeness: {comp_mean:.2f}", layer_sizes)
 
-        # Row 3: Faithfulness Score - Necessity
-        axes[2, 0].text(0.5, 0.5, f"N/A\n(necessity measures\nin-circuit nodes)",
-                        ha="center", va="center", fontsize=10, color="#888888")
-        axes[2, 0].set_title("Sufficiency (out-circuit)\nFaithfulness Score", fontsize=10, fontweight="bold")
-        axes[2, 0].axis("off")
-        nec_mean = np.mean([e.faithfulness_score for e in in_cf]) if in_cf else 0.5
-        _draw_metric_circuit(axes[2, 1], {}, in_faith_scores,
-                            f"Necessity (in-circuit)\nFaithfulness Score (mean={nec_mean:.2f})", layer_sizes)
+        # Row 2: NOISING (run clean, patch with corrupted)
+        _draw_metric_circuit(axes[1, 0], {}, nec_scores,
+                            f"Necessity: {nec_mean:.2f}", layer_sizes)
+        _draw_metric_circuit(axes[1, 1], ind_scores, {},
+                            f"Independence: {ind_mean:.2f}", layer_sizes)
 
-        fig.suptitle(f"{prefix}Intervention Summary - Three Metrics",
-                     fontsize=14, fontweight="bold")
+        # Simple title with just gate name
+        fig.suptitle(prefix.strip(" -") if prefix else "Counterfactual Summary",
+                     fontsize=12, fontweight="bold", y=0.99)
 
-        # Add row labels on left
-        fig.text(0.02, 0.83, "Bit\nSimilarity", ha="center", va="center", fontsize=11,
-                 fontweight="bold", rotation=90)
-        fig.text(0.02, 0.50, "Sufficiency\nFaithfulness", ha="center", va="center", fontsize=11,
-                 fontweight="bold", rotation=90)
-        fig.text(0.02, 0.17, "Necessity\nFaithfulness", ha="center", va="center", fontsize=11,
-                 fontweight="bold", rotation=90)
+        # Column labels at top (higher position)
+        fig.text(0.30, 0.965, "IN-CIRCUIT", ha="center", va="bottom", fontsize=11,
+                 fontweight="bold", color="#1565C0")
+        fig.text(0.73, 0.965, "OUT-CIRCUIT", ha="center", va="bottom", fontsize=11,
+                 fontweight="bold", color="#6A1B9A")
 
-        # Add colorbar at bottom
-        from matplotlib.colors import LinearSegmentedColormap
-        colors = [(0.9, 0.3, 0.3), (0.9, 0.8, 0.3), (0.4, 0.8, 0.3)]
-        cmap = LinearSegmentedColormap.from_list("faith", colors)
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(0, 1))
-        sm.set_array([])
-        cbar_ax = fig.add_axes([0.15, 0.02, 0.7, 0.015])
-        cbar = fig.colorbar(sm, cax=cbar_ax, orientation="horizontal")
-        cbar.set_label("Score (0=low, 1=high)", fontsize=10)
+        # Row labels on left
+        fig.text(0.035, 0.72, "DENOISING", ha="center", va="center", fontsize=10,
+                 fontweight="bold", rotation=90, color="#2E7D32")
+        fig.text(0.035, 0.28, "NOISING", ha="center", va="center", fontsize=10,
+                 fontweight="bold", rotation=90, color="#C62828")
 
-        plt.subplots_adjust(left=0.08, bottom=0.08, top=0.92, hspace=0.25)
-        path = os.path.join(output_dir, "intervention_summary.png")
+        plt.subplots_adjust(left=0.08, bottom=0.05, top=0.92, hspace=0.15, wspace=0.12)
+
+        # Save in counterfactual/ subdirectory
+        counterfactual_dir = os.path.join(output_dir, "counterfactual")
+        os.makedirs(counterfactual_dir, exist_ok=True)
+        path = os.path.join(counterfactual_dir, "counterfact_summary.png")
         plt.savefig(path, dpi=300, bbox_inches="tight")
         plt.close(fig)
-        paths["intervention_summary"] = path
+        paths["counterfactual/counterfact_summary"] = path
 
-    # === 4. Counterfactual Per Input (4 circuit diagrams by input combination) ===
-    if out_cf or in_cf:
+    # === 4. Per-Input Visualizations (split into denoising and noising) ===
+    if suff_cf or comp_cf or nec_cf or ind_cf or out_cf or in_cf:
         base_to_key = {"(0, 0)": "0_0", "(0, 1)": "0_1", "(1, 0)": "1_0", "(1, 1)": "1_1"}
 
-        # Group counterfactuals by clean_input and compute mean per input
-        cf_by_input = {k: {"sufficiency": [], "necessity": []} for k in base_to_key.values()}
+        # Group counterfactuals by clean_input
+        cf_by_input = {k: {"sufficiency": [], "completeness": [], "necessity": [], "independence": []}
+                       for k in base_to_key.values()}
 
-        for e in out_cf:
-            input_str = f"({int(e.clean_input[0])}, {int(e.clean_input[1])})"
-            key = base_to_key.get(input_str)
-            if key:
-                cf_by_input[key]["sufficiency"].append(e.faithfulness_score)
-
-        for e in in_cf:
-            input_str = f"({int(e.clean_input[0])}, {int(e.clean_input[1])})"
-            key = base_to_key.get(input_str)
-            if key:
-                cf_by_input[key]["necessity"].append(e.faithfulness_score)
-
-        # Create 4 circuit diagrams
-        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
-        axes = axes.flatten()
-
-        for i, input_key in enumerate(["0_0", "0_1", "1_0", "1_1"]):
-            ax = axes[i]
-
-            suff_scores = cf_by_input[input_key]["sufficiency"]
-            nec_scores = cf_by_input[input_key]["necessity"]
-            suff_mean = np.mean(suff_scores) if suff_scores else 0.5
-            nec_mean = np.mean(nec_scores) if nec_scores else 0.5
-
-            if layer_sizes:
-                G = nx.DiGraph()
-                pos = _layout_cache.get_positions(tuple(layer_sizes))
-
-                # Separate nodes by type for different border colors
-                suff_nodes = []  # out-circuit (sufficiency)
-                nec_nodes = []   # in-circuit (necessity)
-                other_nodes = []
-                node_colors_dict = {}
-                node_labels = {}
-
-                for layer_idx, n_nodes in enumerate(layer_sizes):
-                    for node_idx in range(n_nodes):
-                        name = f"({layer_idx},{node_idx})"
-                        G.add_node(name)
-
-                        # Check if in-circuit (necessity) or out-circuit (sufficiency)
-                        if (layer_idx, node_idx) in in_bit_scores:
-                            score = nec_mean
-                            node_colors_dict[name] = _faithfulness_score_to_color(score)
-                            node_labels[name] = f"{score:.2f}"
-                            nec_nodes.append(name)
-                        elif (layer_idx, node_idx) in out_bit_scores:
-                            score = suff_mean
-                            node_colors_dict[name] = _faithfulness_score_to_color(score)
-                            node_labels[name] = f"{score:.2f}"
-                            suff_nodes.append(name)
-                        else:
-                            node_colors_dict[name] = (0.85, 0.85, 0.85, 1.0)
-                            node_labels[name] = ""
-                            other_nodes.append(name)
-
-                for l in range(len(layer_sizes) - 1):
-                    for ii in range(layer_sizes[l]):
-                        for jj in range(layer_sizes[l + 1]):
-                            G.add_edge(f"({l},{ii})", f"({l+1},{jj})")
-
-                nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.3, edge_color="#888888", width=0.5)
-
-                # Draw nodes with different border colors:
-                # - Sufficiency (out-circuit): blue border
-                # - Necessity (in-circuit): orange border
-                # - Other: grey border
-                if other_nodes:
-                    other_colors = [node_colors_dict[n] for n in other_nodes]
-                    nx.draw_networkx_nodes(G, pos, ax=ax, nodelist=other_nodes,
-                                           node_color=other_colors, node_size=400,
-                                           edgecolors="#555555", linewidths=1)
-                if suff_nodes:
-                    suff_colors = [node_colors_dict[n] for n in suff_nodes]
-                    nx.draw_networkx_nodes(G, pos, ax=ax, nodelist=suff_nodes,
-                                           node_color=suff_colors, node_size=400,
-                                           edgecolors="#1565C0", linewidths=2.5)  # Blue border
-                if nec_nodes:
-                    nec_colors = [node_colors_dict[n] for n in nec_nodes]
-                    nx.draw_networkx_nodes(G, pos, ax=ax, nodelist=nec_nodes,
-                                           node_color=nec_colors, node_size=400,
-                                           edgecolors="#E65100", linewidths=2.5)  # Orange border
-
-                nx.draw_networkx_labels(G, pos, labels=node_labels, ax=ax, font_size=6, font_weight="bold")
-
-            input_label = input_key.replace("_", ", ")
-            ax.set_title(f"Input: ({input_label})\nSuff={suff_mean:.2f}, Nec={nec_mean:.2f}",
-                        fontsize=10, fontweight="bold")
-            ax.axis("off")
-
-        fig.suptitle(f"{prefix}Counterfactual Faithfulness by Input",
-                     fontsize=14, fontweight="bold")
-
-        # Add legend for border colors
-        from matplotlib.patches import Patch
-        legend_elements = [
-            Patch(facecolor='white', edgecolor='#1565C0', linewidth=2.5, label='Sufficiency (out-circuit)'),
-            Patch(facecolor='white', edgecolor='#E65100', linewidth=2.5, label='Necessity (in-circuit)'),
+        all_effects = [
+            (suff_cf, "sufficiency"),
+            (comp_cf, "completeness"),
+            (nec_cf, "necessity"),
+            (ind_cf, "independence"),
         ]
-        fig.legend(handles=legend_elements, loc='upper right', fontsize=9, framealpha=0.9)
 
-        # Add colorbar at bottom (outside axes to avoid blocking)
-        from matplotlib.colors import LinearSegmentedColormap
-        colors = [(0.9, 0.3, 0.3), (0.9, 0.8, 0.3), (0.4, 0.8, 0.3)]
-        cmap = LinearSegmentedColormap.from_list("faith", colors)
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(0, 1))
-        sm.set_array([])
-        cbar_ax = fig.add_axes([0.15, 0.02, 0.7, 0.015])
-        cbar = fig.colorbar(sm, cax=cbar_ax, orientation="horizontal")
-        cbar.set_label("Faithfulness Score (red=0, green=1)", fontsize=10)
+        for effects, score_type in all_effects:
+            for e in effects:
+                input_str = f"({int(e.clean_input[0])}, {int(e.clean_input[1])})"
+                key = base_to_key.get(input_str)
+                if key:
+                    cf_by_input[key][score_type].append(e.faithfulness_score)
 
-        plt.subplots_adjust(bottom=0.1, top=0.88)
-        path = os.path.join(output_dir, "counterfactual_per_input.png")
-        plt.savefig(path, dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        paths["counterfactual_per_input"] = path
+        # Legacy fallback
+        if not suff_cf and out_cf:
+            for e in out_cf:
+                input_str = f"({int(e.clean_input[0])}, {int(e.clean_input[1])})"
+                key = base_to_key.get(input_str)
+                if key:
+                    cf_by_input[key]["independence"].append(e.faithfulness_score)
+        if not nec_cf and in_cf:
+            for e in in_cf:
+                input_str = f"({int(e.clean_input[0])}, {int(e.clean_input[1])})"
+                key = base_to_key.get(input_str)
+                if key:
+                    cf_by_input[key]["necessity"].append(e.faithfulness_score)
+
+        def _draw_per_input_figure(score_types, title, filename):
+            """Helper to create per-input circuit visualization for 2 scores."""
+            fig, axes = plt.subplots(2, 2, figsize=(10, 9))
+            axes = axes.flatten()
+
+            for i, input_key in enumerate(["0_0", "0_1", "1_0", "1_1"]):
+                ax = axes[i]
+                scores_dict = cf_by_input[input_key]
+
+                # Get scores for the two types (in-circuit and out-circuit)
+                in_score_type, out_score_type = score_types
+                in_mean = np.mean(scores_dict[in_score_type]) if scores_dict[in_score_type] else 0.5
+                out_mean = np.mean(scores_dict[out_score_type]) if scores_dict[out_score_type] else 0.5
+
+                if layer_sizes:
+                    G = nx.DiGraph()
+                    pos = _layout_cache.get_positions(tuple(layer_sizes))
+
+                    in_circuit_nodes, out_circuit_nodes, other_nodes = [], [], []
+                    node_colors_dict, node_labels = {}, {}
+
+                    for layer_idx, n_nodes in enumerate(layer_sizes):
+                        for node_idx in range(n_nodes):
+                            name = f"({layer_idx},{node_idx})"
+                            G.add_node(name)
+
+                            if (layer_idx, node_idx) in in_bit_scores:
+                                node_colors_dict[name] = _faithfulness_score_to_color(in_mean)
+                                node_labels[name] = f"{in_mean:.2f}"
+                                in_circuit_nodes.append(name)
+                            elif (layer_idx, node_idx) in out_bit_scores:
+                                node_colors_dict[name] = _faithfulness_score_to_color(out_mean)
+                                node_labels[name] = f"{out_mean:.2f}"
+                                out_circuit_nodes.append(name)
+                            else:
+                                node_colors_dict[name] = (0.85, 0.85, 0.85, 1.0)
+                                node_labels[name] = ""
+                                other_nodes.append(name)
+
+                    for l in range(len(layer_sizes) - 1):
+                        for ii in range(layer_sizes[l]):
+                            for jj in range(layer_sizes[l + 1]):
+                                G.add_edge(f"({l},{ii})", f"({l+1},{jj})")
+
+                    nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.3, edge_color="#888888", width=0.5)
+
+                    if other_nodes:
+                        nx.draw_networkx_nodes(G, pos, ax=ax, nodelist=other_nodes,
+                                               node_color=[node_colors_dict[n] for n in other_nodes],
+                                               node_size=400, edgecolors="#555555", linewidths=1)
+                    if out_circuit_nodes:
+                        nx.draw_networkx_nodes(G, pos, ax=ax, nodelist=out_circuit_nodes,
+                                               node_color=[node_colors_dict[n] for n in out_circuit_nodes],
+                                               node_size=400, edgecolors="#6A1B9A", linewidths=2.5)
+                    if in_circuit_nodes:
+                        nx.draw_networkx_nodes(G, pos, ax=ax, nodelist=in_circuit_nodes,
+                                               node_color=[node_colors_dict[n] for n in in_circuit_nodes],
+                                               node_size=400, edgecolors="#1565C0", linewidths=2.5)
+
+                    nx.draw_networkx_labels(G, pos, labels=node_labels, ax=ax, font_size=6, font_weight="bold")
+
+                input_label = input_key.replace("_", ", ")
+                in_label = in_score_type.capitalize()[:4]
+                out_label = out_score_type.capitalize()[:4]
+                ax.set_title(f"({input_label})  |  {in_label}={in_mean:.2f}  {out_label}={out_mean:.2f}",
+                            fontsize=9, fontweight="bold")
+                ax.axis("off")
+
+            fig.suptitle(title, fontsize=13, fontweight="bold", y=0.98)
+            plt.subplots_adjust(left=0.05, right=0.95, bottom=0.05, top=0.92, hspace=0.12, wspace=0.08)
+            path = os.path.join(counterfactual_dir, filename)
+            plt.savefig(path, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+            return path
+
+        # Denoising: Sufficiency (in-circuit) + Completeness (out-circuit)
+        path = _draw_per_input_figure(
+            ("sufficiency", "completeness"),
+            "Denoising",
+            "denoising_per_input.png"
+        )
+        paths["counterfactual/denoising_per_input"] = path
+
+        # Noising: Necessity (in-circuit) + Independence (out-circuit)
+        path = _draw_per_input_figure(
+            ("necessity", "independence"),
+            "Noising",
+            "noising_per_input.png"
+        )
+        paths["counterfactual/noising_per_input"] = path
 
     return paths
 
@@ -2059,12 +2249,19 @@ def _generate_faithfulness_circuit_figure(args):
     corrupt_acts = effect_dict["corrupted_activations"]
     intervened_acts = effect_dict.get("intervened_activations", clean_acts)
 
+    # Determine experiment type for proper labeling
+    experiment_type = effect_dict.get("experiment_type", "noising")
+    is_denoising = experiment_type == "denoising"
+
     # Compute layer sizes from activations
     layer_sizes = [len(layer) for layer in clean_acts]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 6))
+    # Use slightly taller figure to avoid title occlusion
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5.5))
 
-    # Panel 1: Clean (no intervention markers)
+    # Simplified panel labels
+    # Panel 1: Clean
+    clean_label = "Clean (source)" if is_denoising else "Clean (base)"
     draw_intervened_circuit(
         axes[0],
         layer_sizes=layer_sizes,
@@ -2073,10 +2270,11 @@ def _generate_faithfulness_circuit_figure(args):
         original_activations=None,
         intervened_nodes=set(),
         circuit=circuit,
-        title=f"Clean → {effect_dict['expected_clean_output']:.2f}",
+        title=f"{clean_label}: {effect_dict['expected_clean_output']:.2f}",
     )
 
-    # Panel 2: Corrupted (no intervention markers)
+    # Panel 2: Corrupted
+    corrupt_label = "Corrupted (base)" if is_denoising else "Corrupted (source)"
     draw_intervened_circuit(
         axes[1],
         layer_sizes=layer_sizes,
@@ -2085,31 +2283,57 @@ def _generate_faithfulness_circuit_figure(args):
         original_activations=None,
         intervened_nodes=set(),
         circuit=circuit,
-        title=f"Corrupted → {effect_dict['expected_corrupted_output']:.2f}",
+        title=f"{corrupt_label}: {effect_dict['expected_corrupted_output']:.2f}",
     )
 
-    # Panel 3: Intervened (show original values below modified, mark intervened nodes)
+    # Panel 3: Intervened
+    # For denoising: run corrupted, patch with clean
+    # For noising: run clean, patch with corrupted
+    if is_denoising:
+        original_acts = corrupt_acts  # Base was corrupted
+        intervened_label = "Patched"
+    else:
+        original_acts = clean_acts  # Base was clean
+        intervened_label = "Patched"
+
     draw_intervened_circuit(
         axes[2],
         layer_sizes=layer_sizes,
         weights=weights,
         current_activations=intervened_acts,
-        original_activations=clean_acts,
+        original_activations=original_acts,
         intervened_nodes=intervened_nodes,
         circuit=circuit,
-        title=f"Intervened → {effect_dict['actual_output']:.2f}",
+        title=f"{intervened_label}: {effect_dict['actual_output']:.2f}",
     )
 
     clean_str = ",".join(f"{v:.0f}" for v in effect_dict["clean_input"])
     corrupt_str = ",".join(f"{v:.0f}" for v in effect_dict["corrupted_input"])
-    score_type = "Necessity" if "In" in fig_type else "Sufficiency"
+
+    # Determine experiment type and score type for title
+    score_type = effect_dict.get("score_type", fig_type)
+
+    # Build descriptive experiment label
+    # Sufficiency/Completeness = Denoising, Necessity/Independence = Noising
+    if score_type in ("sufficiency", "completeness"):
+        circuit_type = "In-Circuit" if score_type == "sufficiency" else "Out-of-Circuit"
+        exp_label = f"{circuit_type} Denoising"
+    else:
+        circuit_type = "In-Circuit" if score_type == "necessity" else "Out-of-Circuit"
+        exp_label = f"{circuit_type} Noising"
+
+    score_display = score_type.capitalize()
+
+    # Simplified title format:
+    # "Counterfactual (1,0)→(1,1) | Out-of-Circuit Noising | Independence: 1.00"
+    plt.tight_layout(rect=[0, 0, 1, 0.93])  # Leave room for title
     fig.suptitle(
-        f"{fig_type} Counterfactual #{index} | ({clean_str})→({corrupt_str}) | "
-        f"{score_type} Faith: {effect_dict['faithfulness_score']:.2f}",
+        f"Counterfactual ({clean_str})→({corrupt_str})  |  {exp_label}  |  "
+        f"{score_display}: {effect_dict['faithfulness_score']:.2f}",
         fontsize=11,
         fontweight="bold",
+        y=0.98,
     )
-    plt.tight_layout()
 
     plt.savefig(output_path, dpi=300)
     plt.close(fig)
@@ -2130,8 +2354,13 @@ def visualize_faithfulness_circuit_samples(
         layer_biases: Optional bias vectors. If provided, edge labels show
             (weight + bias) to reveal bias contribution when edges are patched.
     """
-    circuit_viz_dir = os.path.join(output_dir, "circuit_viz")
-    os.makedirs(circuit_viz_dir, exist_ok=True)
+    # Create organized folder structure inside output_dir (which is already .../faithfulness):
+    # counterfactual/{sufficiency,completeness,necessity,independence}/
+    # interventional/{in_circuit,out_circuit}/
+    counterfactual_dir = os.path.join(output_dir, "counterfactual")
+    interventional_dir = os.path.join(output_dir, "interventional")
+    os.makedirs(counterfactual_dir, exist_ok=True)
+    os.makedirs(interventional_dir, exist_ok=True)
     paths = {}
 
     weights = [w.numpy() for w in layer_weights]
@@ -2158,12 +2387,15 @@ def visualize_faithfulness_circuit_samples(
     # Prepare parallel tasks
     tasks = []
 
-    # Out-circuit counterfactuals (sufficiency)
-    if faithfulness.out_counterfactual_effects:
-        cf_dir = os.path.join(circuit_viz_dir, "out_circuit_counterfactuals")
-        os.makedirs(cf_dir, exist_ok=True)
+    # Helper to add counterfactual effects to tasks
+    def _add_counterfactual_tasks(effects, score_type, target_nodes):
+        """Add counterfactual visualization tasks."""
+        if not effects:
+            return
+        cf_subdir = os.path.join(counterfactual_dir, score_type)
+        os.makedirs(cf_subdir, exist_ok=True)
 
-        for i, effect in enumerate(faithfulness.out_counterfactual_effects[:6]):
+        for i, effect in enumerate(effects[:6]):
             if not effect.clean_activations or not effect.corrupted_activations:
                 continue
 
@@ -2178,57 +2410,63 @@ def visualize_faithfulness_circuit_samples(
                 "faithfulness_score": effect.faithfulness_score,
                 "clean_input": effect.clean_input,
                 "corrupted_input": effect.corrupted_input,
+                "experiment_type": getattr(effect, 'experiment_type', 'noising'),
+                "score_type": getattr(effect, 'score_type', score_type),
             }
-            output_path = os.path.join(cf_dir, f"out_cf_{i}.png")
+            output_path = os.path.join(cf_subdir, f"{i}.png")
             tasks.append(
                 (
                     effect_dict,
                     circuit_dict,
                     weights,
-                    out_circuit_nodes,
+                    target_nodes,
                     output_path,
-                    "Out-Circuit",
+                    score_type,  # Just the score type, title built in worker
                     i,
                 )
             )
 
-        paths["out_circuit_counterfactuals"] = cf_dir
+        paths[f"counterfactual/{score_type}"] = cf_subdir
 
-    # In-circuit counterfactuals (necessity)
-    if faithfulness.in_counterfactual_effects:
-        cf_dir = os.path.join(circuit_viz_dir, "in_circuit_counterfactuals")
-        os.makedirs(cf_dir, exist_ok=True)
+    # ===== 2x2 Matrix Counterfactuals =====
+    # Denoising experiments (run corrupted, patch with clean)
+    _add_counterfactual_tasks(
+        faithfulness.sufficiency_effects,
+        "sufficiency",
+        in_circuit_nodes,
+    )
+    _add_counterfactual_tasks(
+        faithfulness.completeness_effects,
+        "completeness",
+        out_circuit_nodes,
+    )
 
-        for i, effect in enumerate(faithfulness.in_counterfactual_effects[:6]):
-            if not effect.clean_activations or not effect.corrupted_activations:
-                continue
+    # Noising experiments (run clean, patch with corrupted)
+    _add_counterfactual_tasks(
+        faithfulness.necessity_effects,
+        "necessity",
+        in_circuit_nodes,
+    )
+    _add_counterfactual_tasks(
+        faithfulness.independence_effects,
+        "independence",
+        out_circuit_nodes,
+    )
 
-            effect_dict = {
-                "clean_activations": effect.clean_activations,
-                "corrupted_activations": effect.corrupted_activations,
-                "intervened_activations": effect.intervened_activations,
-                "expected_clean_output": effect.expected_clean_output,
-                "expected_corrupted_output": effect.expected_corrupted_output,
-                "actual_output": effect.actual_output,
-                "output_changed_to_corrupted": effect.output_changed_to_corrupted,
-                "faithfulness_score": effect.faithfulness_score,
-                "clean_input": effect.clean_input,
-                "corrupted_input": effect.corrupted_input,
-            }
-            output_path = os.path.join(cf_dir, f"in_cf_{i}.png")
-            tasks.append(
-                (
-                    effect_dict,
-                    circuit_dict,
-                    weights,
-                    in_circuit_nodes,
-                    output_path,
-                    "In-Circuit",
-                    i,
-                )
-            )
+    # Legacy fallback: use old fields if new ones are empty
+    if not faithfulness.sufficiency_effects and faithfulness.out_counterfactual_effects:
+        _add_counterfactual_tasks(
+            faithfulness.out_counterfactual_effects,
+            "independence",  # Old out-circuit was mislabeled
+            out_circuit_nodes,
+        )
 
-        paths["in_circuit_counterfactuals"] = cf_dir
+    if not faithfulness.necessity_effects and faithfulness.in_counterfactual_effects:
+        _add_counterfactual_tasks(
+            faithfulness.in_counterfactual_effects,
+            "necessity",
+            in_circuit_nodes,
+        )
 
     # Execute in parallel
     if tasks:
@@ -2363,13 +2601,18 @@ def visualize_faithfulness_circuit_samples(
             axes[0, 0].set_title("Subcircuit", fontsize=10, fontweight="bold")
             axes[0, 1].set_title("Full Model", fontsize=10, fontweight="bold")
 
-            n_agree = sum(1 for s in selected if s.bit_agreement)
+            # Calculate agreement % over ALL samples, not just visualized ones
+            total_samples = len(samples)
+            total_agree = sum(1 for s in samples if s.bit_agreement)
+            agree_pct = 100 * total_agree / total_samples if total_samples > 0 else 0
+
+            plt.tight_layout(rect=[0, 0, 1, 0.94])  # Leave space for title
             fig.suptitle(
-                f"{patch_label} | {circuit_type} | agree: {n_agree}/{n_samples}",
+                f"{patch_label} | {circuit_type} | Agreement: {agree_pct:.0f}% (n={total_samples})",
                 fontsize=11,
                 fontweight="bold",
+                y=0.99,
             )
-            plt.tight_layout()
 
             path = os.path.join(out_dir, f"{patch_label}.png")
             plt.savefig(path, dpi=300, bbox_inches="tight")
@@ -2378,18 +2621,42 @@ def visualize_faithfulness_circuit_samples(
 
         return type_paths
 
+    # Create interventional visualizations with in_distribution/out_of_distribution subfolders
+    in_circuit_base = os.path.join(interventional_dir, "in_circuit")
+    out_circuit_base = os.path.join(interventional_dir, "out_circuit")
+
+    # In-distribution interventions
     if faithfulness.in_circuit_stats:
-        paths["in_circuit_interventions"] = visualize_patch_circuits(
+        in_circuit_id_dir = os.path.join(in_circuit_base, "in_distribution")
+        paths["interventional/in_circuit/in_distribution"] = visualize_patch_circuits(
             faithfulness.in_circuit_stats,
-            "in_circuit_interventions",
-            os.path.join(circuit_viz_dir, "in_circuit_interventions"),
+            "In-Circuit (ID)",
+            in_circuit_id_dir,
         )
 
     if faithfulness.out_circuit_stats:
-        paths["out_circuit_interventions"] = visualize_patch_circuits(
+        out_circuit_id_dir = os.path.join(out_circuit_base, "in_distribution")
+        paths["interventional/out_circuit/in_distribution"] = visualize_patch_circuits(
             faithfulness.out_circuit_stats,
-            "out_circuit_interventions",
-            os.path.join(circuit_viz_dir, "out_circuit_interventions"),
+            "Out-of-Circuit (ID)",
+            out_circuit_id_dir,
+        )
+
+    # Out-of-distribution interventions (if OOD stats exist)
+    if faithfulness.in_circuit_stats_ood:
+        in_circuit_ood_dir = os.path.join(in_circuit_base, "out_of_distribution")
+        paths["interventional/in_circuit/out_of_distribution"] = visualize_patch_circuits(
+            faithfulness.in_circuit_stats_ood,
+            "In-Circuit (OOD)",
+            in_circuit_ood_dir,
+        )
+
+    if faithfulness.out_circuit_stats_ood:
+        out_circuit_ood_dir = os.path.join(out_circuit_base, "out_of_distribution")
+        paths["interventional/out_circuit/out_of_distribution"] = visualize_patch_circuits(
+            faithfulness.out_circuit_stats_ood,
+            "Out-of-Circuit (OOD)",
+            out_circuit_ood_dir,
         )
 
     return paths
@@ -2592,6 +2859,213 @@ def visualize_profiling_summary(
     return path
 
 
+# ------------------ METRICS COMPUTATION AND JSON SAVING ------------------
+
+
+def compute_observational_metrics(robustness: "RobustnessMetrics") -> dict:
+    """Compute ObservationalMetrics from RobustnessMetrics."""
+    from identifiability_toy_study.common.schemas import ObservationalMetrics
+
+    metrics = ObservationalMetrics()
+
+    # Noise metrics
+    noise_samples = robustness.noise_samples
+    if noise_samples:
+        metrics.noise_n_samples = len(noise_samples)
+        metrics.noise_gate_accuracy = robustness.noise_gate_accuracy
+        metrics.noise_subcircuit_accuracy = robustness.noise_subcircuit_accuracy
+        metrics.noise_agreement_bit = robustness.noise_agreement_bit
+        metrics.noise_agreement_best = robustness.noise_agreement_best
+        metrics.noise_mse_mean = robustness.noise_mse_mean
+
+    # Group OOD samples by type
+    ood_by_type: dict[str, list] = {}
+    for sample in robustness.ood_samples:
+        st = getattr(sample, "sample_type", "multiply_positive")
+        ood_by_type.setdefault(st, []).append(sample)
+
+    # Compute per-type metrics
+    for st, samples in ood_by_type.items():
+        n = len(samples)
+        agreement = sum(s.agreement_bit for s in samples) / n if n > 0 else 0.0
+
+        if st == "multiply_positive":
+            metrics.multiply_positive_n_samples = n
+            metrics.multiply_positive_agreement = agreement
+        elif st == "multiply_negative":
+            metrics.multiply_negative_n_samples = n
+            metrics.multiply_negative_agreement = agreement
+        elif st == "add":
+            metrics.add_n_samples = n
+            metrics.add_agreement = agreement
+        elif st == "subtract":
+            metrics.subtract_n_samples = n
+            metrics.subtract_agreement = agreement
+        elif st == "bimodal":
+            metrics.bimodal_n_samples = n
+            metrics.bimodal_agreement = agreement
+        elif st == "bimodal_inv":
+            metrics.bimodal_inv_n_samples = n
+            metrics.bimodal_inv_agreement = agreement
+
+    # Overall score: average of all agreements
+    agreements = [
+        metrics.noise_agreement_bit,
+        metrics.multiply_positive_agreement,
+        metrics.multiply_negative_agreement,
+        metrics.add_agreement,
+        metrics.subtract_agreement,
+        metrics.bimodal_agreement,
+        metrics.bimodal_inv_agreement,
+    ]
+    n_valid = sum(1 for a in agreements if a > 0)
+    metrics.overall_observational = sum(agreements) / n_valid if n_valid > 0 else 0.0
+
+    return asdict(metrics)
+
+
+def compute_interventional_metrics(faithfulness: "FaithfulnessMetrics") -> dict:
+    """Compute InterventionalMetrics from FaithfulnessMetrics."""
+    from identifiability_toy_study.common.schemas import InterventionalMetrics
+
+    metrics = InterventionalMetrics()
+
+    # In-circuit in-distribution (use pre-computed stats)
+    in_circuit_stats = faithfulness.in_circuit_stats
+    if in_circuit_stats:
+        metrics.in_circuit_n_interventions = len(in_circuit_stats)
+        bit_sims = [ps.mean_bit_similarity for ps in in_circuit_stats.values()]
+        logit_sims = [ps.mean_logit_similarity for ps in in_circuit_stats.values()]
+        metrics.in_circuit_mean_bit_similarity = sum(bit_sims) / len(bit_sims) if bit_sims else 0.0
+        metrics.in_circuit_mean_logit_similarity = sum(logit_sims) / len(logit_sims) if logit_sims else 0.0
+
+    # In-circuit OOD
+    in_circuit_ood_stats = faithfulness.in_circuit_stats_ood
+    if in_circuit_ood_stats:
+        metrics.in_circuit_ood_n_interventions = len(in_circuit_ood_stats)
+        bit_sims = [ps.mean_bit_similarity for ps in in_circuit_ood_stats.values()]
+        logit_sims = [ps.mean_logit_similarity for ps in in_circuit_ood_stats.values()]
+        metrics.in_circuit_ood_mean_bit_similarity = sum(bit_sims) / len(bit_sims) if bit_sims else 0.0
+        metrics.in_circuit_ood_mean_logit_similarity = sum(logit_sims) / len(logit_sims) if logit_sims else 0.0
+
+    # Out-circuit in-distribution
+    out_circuit_stats = faithfulness.out_circuit_stats
+    if out_circuit_stats:
+        metrics.out_circuit_n_interventions = len(out_circuit_stats)
+        bit_sims = [ps.mean_bit_similarity for ps in out_circuit_stats.values()]
+        logit_sims = [ps.mean_logit_similarity for ps in out_circuit_stats.values()]
+        metrics.out_circuit_mean_bit_similarity = sum(bit_sims) / len(bit_sims) if bit_sims else 0.0
+        metrics.out_circuit_mean_logit_similarity = sum(logit_sims) / len(logit_sims) if logit_sims else 0.0
+
+    # Out-circuit OOD
+    out_circuit_ood_stats = faithfulness.out_circuit_stats_ood
+    if out_circuit_ood_stats:
+        metrics.out_circuit_ood_n_interventions = len(out_circuit_ood_stats)
+        bit_sims = [ps.mean_bit_similarity for ps in out_circuit_ood_stats.values()]
+        logit_sims = [ps.mean_logit_similarity for ps in out_circuit_ood_stats.values()]
+        metrics.out_circuit_ood_mean_bit_similarity = sum(bit_sims) / len(bit_sims) if bit_sims else 0.0
+        metrics.out_circuit_ood_mean_logit_similarity = sum(logit_sims) / len(logit_sims) if logit_sims else 0.0
+
+    # Overall: average of bit similarities
+    sims = [
+        metrics.in_circuit_mean_bit_similarity,
+        metrics.in_circuit_ood_mean_bit_similarity,
+        metrics.out_circuit_mean_bit_similarity,
+        metrics.out_circuit_ood_mean_bit_similarity,
+    ]
+    n_valid = sum(1 for s in sims if s > 0)
+    metrics.overall_interventional = sum(sims) / n_valid if n_valid > 0 else 0.0
+
+    return asdict(metrics)
+
+
+def compute_counterfactual_metrics(faithfulness: "FaithfulnessMetrics") -> dict:
+    """Compute CounterfactualMetrics from FaithfulnessMetrics."""
+    from identifiability_toy_study.common.schemas import CounterfactualMetrics
+
+    metrics = CounterfactualMetrics()
+
+    # Use pre-computed means from FaithfulnessMetrics
+    metrics.mean_sufficiency = faithfulness.mean_sufficiency
+    metrics.mean_completeness = faithfulness.mean_completeness
+    metrics.n_denoising_pairs = len(faithfulness.sufficiency_effects) + len(faithfulness.completeness_effects)
+
+    metrics.mean_necessity = faithfulness.mean_necessity
+    metrics.mean_independence = faithfulness.mean_independence
+    metrics.n_noising_pairs = len(faithfulness.necessity_effects) + len(faithfulness.independence_effects)
+
+    # Overall: average of all counterfactual scores
+    scores = [
+        metrics.mean_sufficiency,
+        metrics.mean_completeness,
+        metrics.mean_necessity,
+        metrics.mean_independence,
+    ]
+    n_valid = sum(1 for s in scores if s > 0)
+    metrics.overall_counterfactual = sum(scores) / n_valid if n_valid > 0 else 0.0
+
+    return asdict(metrics)
+
+
+def save_faithfulness_json(
+    observational_dir: str | None,
+    interventional_dir: str | None,
+    counterfactual_dir: str | None,
+    faithfulness_dir: str,
+    robustness: "RobustnessMetrics | None",
+    faithfulness: "FaithfulnessMetrics | None",
+) -> dict[str, str]:
+    """Save result.json in each subfolder and summary.json in faithfulness/."""
+    import json
+    from identifiability_toy_study.common.schemas import FaithfulnessSummary
+
+    paths = {}
+    obs_overall = 0.0
+    int_overall = 0.0
+    cf_overall = 0.0
+
+    # Observational result.json
+    if observational_dir and robustness:
+        obs_metrics = compute_observational_metrics(robustness)
+        obs_overall = obs_metrics.get("overall_observational", 0.0)
+        path = os.path.join(observational_dir, "result.json")
+        with open(path, "w") as f:
+            json.dump(obs_metrics, f, indent=2)
+        paths["observational/result.json"] = path
+
+    # Interventional result.json
+    if interventional_dir and faithfulness:
+        int_metrics = compute_interventional_metrics(faithfulness)
+        int_overall = int_metrics.get("overall_interventional", 0.0)
+        path = os.path.join(interventional_dir, "result.json")
+        with open(path, "w") as f:
+            json.dump(int_metrics, f, indent=2)
+        paths["interventional/result.json"] = path
+
+    # Counterfactual result.json
+    if counterfactual_dir and faithfulness:
+        cf_metrics = compute_counterfactual_metrics(faithfulness)
+        cf_overall = cf_metrics.get("overall_counterfactual", 0.0)
+        path = os.path.join(counterfactual_dir, "result.json")
+        with open(path, "w") as f:
+            json.dump(cf_metrics, f, indent=2)
+        paths["counterfactual/result.json"] = path
+
+    # Summary.json in faithfulness/
+    summary = FaithfulnessSummary(
+        observational=obs_overall,
+        interventional=int_overall,
+        counterfactual=cf_overall,
+        overall=(obs_overall + int_overall + cf_overall) / 3.0 if (obs_overall + int_overall + cf_overall) > 0 else 0.0,
+    )
+    summary_path = os.path.join(faithfulness_dir, "summary.json")
+    with open(summary_path, "w") as f:
+        json.dump(asdict(summary), f, indent=2)
+    paths["summary.json"] = summary_path
+
+    return paths
+
+
 # ------------------ MAIN FUNCTION ------------------
 
 
@@ -2772,36 +3246,36 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                 faithfulness_data = bests_faith[i] if has_faith else None
 
                 # Create directories upfront
-                robustness_dir = (
-                    os.path.join(folder, "robustness") if has_robust else None
+                # Faithfulness contains: observational/ (robustness), counterfactual/, interventional/
+                faithfulness_dir = os.path.join(folder, "faithfulness")
+                os.makedirs(faithfulness_dir, exist_ok=True)
+                viz_paths[trial_id][gname][sc_idx]["faithfulness"] = {}
+
+                # Observational dir (renamed from robustness) - lives inside faithfulness/
+                observational_dir = (
+                    os.path.join(faithfulness_dir, "observational") if has_robust else None
                 )
-                faithfulness_dir = (
-                    os.path.join(folder, "faithfulness") if has_faith else None
-                )
-                if robustness_dir:
-                    os.makedirs(robustness_dir, exist_ok=True)
-                    viz_paths[trial_id][gname][sc_idx]["robustness"] = {}
-                if faithfulness_dir:
-                    os.makedirs(faithfulness_dir, exist_ok=True)
-                    viz_paths[trial_id][gname][sc_idx]["faithfulness"] = {}
+                if observational_dir:
+                    os.makedirs(observational_dir, exist_ok=True)
+                    viz_paths[trial_id][gname][sc_idx]["faithfulness"]["observational"] = {}
 
                 # Run quick visualizations sequentially (matplotlib is not thread-safe)
-                if has_robust:
+                if has_robust and observational_dir:
                     with profile("robust_curves"):
-                        viz_paths[trial_id][gname][sc_idx]["robustness"]["stats"] = (
+                        viz_paths[trial_id][gname][sc_idx]["faithfulness"]["observational"]["stats"] = (
                             visualize_robustness_curves(
-                                robustness_data, robustness_dir, sc_label
+                                robustness_data, observational_dir, sc_label
                             )
                         )
                 # Run expensive circuit visualizations sequentially (they use ProcessPoolExecutor internally)
-                if has_robust:
+                if has_robust and observational_dir:
                     with profile("robust_circuit_viz"):
                         circuit_paths = visualize_robustness_circuit_samples(
-                            robustness_data, circuit, layer_weights, robustness_dir,
+                            robustness_data, circuit, layer_weights, observational_dir,
                             canonical_activations=canonical_activations,
                             layer_biases=layer_biases if layer_biases else None,
                         )
-                    viz_paths[trial_id][gname][sc_idx]["robustness"]["circuit_viz"] = (
+                    viz_paths[trial_id][gname][sc_idx]["faithfulness"]["observational"]["circuit_viz"] = (
                         circuit_paths
                     )
 
@@ -2823,6 +3297,19 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     viz_paths[trial_id][gname][sc_idx]["faithfulness"][
                         "intervention_effects"
                     ] = intervention_paths
+
+                # Save result.json files in each subfolder and summary.json in faithfulness/
+                interventional_dir = os.path.join(faithfulness_dir, "interventional") if has_faith else None
+                counterfactual_dir = os.path.join(faithfulness_dir, "counterfactual") if has_faith else None
+                json_paths = save_faithfulness_json(
+                    observational_dir=observational_dir,
+                    interventional_dir=interventional_dir,
+                    counterfactual_dir=counterfactual_dir,
+                    faithfulness_dir=faithfulness_dir,
+                    robustness=robustness_data,
+                    faithfulness=faithfulness_data,
+                )
+                viz_paths[trial_id][gname][sc_idx]["faithfulness"]["json"] = json_paths
 
                 # SPD
                 if gname in trial.decomposed_subcircuits:
