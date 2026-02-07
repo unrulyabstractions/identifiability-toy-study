@@ -19,7 +19,7 @@ from .faithfulness_viz import (
     visualize_faithfulness_circuit_samples,
     visualize_faithfulness_intervention_effects,
 )
-from .metrics_export import save_faithfulness_json
+from .metrics_export import save_faithfulness_json, save_gate_summary
 from .observational_viz import (
     visualize_robustness_circuit_samples,
     visualize_robustness_curves,
@@ -130,6 +130,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                 folder,
                 gate_name=gate_label,
                 layer_biases=layer_biases if layer_biases else None,
+                gate_idx=gate_idx,
             )
             viz_paths[trial_id][gname]["full"]["activations"] = act_path
 
@@ -142,6 +143,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     folder,
                     gate_name=gate_label,
                     layer_biases=layer_biases if layer_biases else None,
+                    gate_idx=gate_idx,
                 )
                 viz_paths[trial_id][gname]["full"]["activations_mean"] = mean_act_path
 
@@ -151,6 +153,11 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     decomposed, folder, gate_name=gate_label
                 ):
                     viz_paths[trial_id][gname]["full"]["spd"] = path
+
+            # Save gate summary.json
+            gate_folder = os.path.join(trial_dir, gname)
+            summary_path = save_gate_summary(gname, gate_folder, trial.metrics)
+            viz_paths[trial_id][gname]["summary"] = summary_path
 
         # --- Subcircuit visualization ---
         for gate_idx, gname in enumerate(gate_names):
@@ -185,6 +192,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     folder,
                     gate_name=sc_label,
                     layer_biases=layer_biases if layer_biases else None,
+                    gate_idx=gate_idx,
                 )
                 viz_paths[trial_id][gname][sc_idx]["activations"] = act_path
 
@@ -197,6 +205,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                         folder,
                         gate_name=sc_label,
                         layer_biases=layer_biases if layer_biases else None,
+                        gate_idx=gate_idx,
                     )
                     viz_paths[trial_id][gname][sc_idx]["activations_mean"] = mean_act_path
 

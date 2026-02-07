@@ -15,6 +15,27 @@ from .base import finalize_figure
 from .circuit_drawing import _draw_circuit_from_data
 
 
+def _filter_activations_for_gate(
+    activations: list[torch.Tensor], gate_idx: int | None
+) -> list[torch.Tensor]:
+    """Filter output layer activations to only show the specific gate's output."""
+    if gate_idx is None or not activations:
+        return activations
+
+    # Copy all layers except the last one
+    filtered = [a.clone() for a in activations[:-1]]
+
+    # Filter the output layer to only include the specific gate
+    output_layer = activations[-1]
+    if output_layer.shape[-1] > 1 and gate_idx < output_layer.shape[-1]:
+        # Select only the gate_idx column, keeping batch dimension
+        filtered.append(output_layer[:, gate_idx : gate_idx + 1])
+    else:
+        filtered.append(output_layer)
+
+    return filtered
+
+
 def visualize_circuit_activations_from_data(
     canonical_activations: dict[str, list[torch.Tensor]],
     layer_weights: list[torch.Tensor],
@@ -23,6 +44,7 @@ def visualize_circuit_activations_from_data(
     filename: str = "circuit_activations.png",
     gate_name: str = "",
     layer_biases: list[torch.Tensor] | None = None,
+    gate_idx: int | None = None,
 ) -> str:
     """
     2x2 grid: circuit activations for (0,0), (0,1), (1,0), (1,1) inputs.
@@ -32,6 +54,8 @@ def visualize_circuit_activations_from_data(
     Args:
         layer_biases: Optional bias vectors. If provided, edge labels show
             (weight + bias) to reveal bias contribution when edges are patched.
+        gate_idx: If specified, only show this gate's output node (0-indexed).
+            When None, shows all output nodes.
     """
     labels_map = {
         "0_0": "(0, 0)",
@@ -42,14 +66,37 @@ def visualize_circuit_activations_from_data(
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     axes = axes.flatten()
-    weights = [w.numpy() for w in layer_weights]
-    biases = [b.numpy() for b in layer_biases] if layer_biases else None
+
+    # Filter weights and biases for single gate output if needed
+    if gate_idx is not None and layer_weights:
+        # Keep all weights except last layer, filter last layer to single output
+        weights = [w.numpy() for w in layer_weights[:-1]]
+        last_weight = layer_weights[-1]
+        if last_weight.shape[0] > 1 and gate_idx < last_weight.shape[0]:
+            weights.append(last_weight[gate_idx : gate_idx + 1, :].numpy())
+        else:
+            weights.append(last_weight.numpy())
+
+        if layer_biases:
+            biases = [b.numpy() for b in layer_biases[:-1]]
+            last_bias = layer_biases[-1]
+            if last_bias.shape[0] > 1 and gate_idx < last_bias.shape[0]:
+                biases.append(last_bias[gate_idx : gate_idx + 1].numpy())
+            else:
+                biases.append(last_bias.numpy())
+        else:
+            biases = None
+    else:
+        weights = [w.numpy() for w in layer_weights]
+        biases = [b.numpy() for b in layer_biases] if layer_biases else None
 
     for i, (key, label) in enumerate(labels_map.items()):
         activations = canonical_activations.get(key, [])
         if activations:
+            # Filter activations to only show the specific gate's output
+            filtered_activations = _filter_activations_for_gate(activations, gate_idx)
             _draw_circuit_from_data(
-                axes[i], activations, circuit, weights, f"Input: {label}", biases=biases
+                axes[i], filtered_activations, circuit, weights, f"Input: {label}", biases=biases
             )
         else:
             axes[i].text(0.5, 0.5, "No data", ha="center", va="center")
@@ -75,6 +122,7 @@ def visualize_circuit_activations_mean(
     filename: str = "circuit_activations_mean.png",
     gate_name: str = "",
     layer_biases: list[torch.Tensor] | None = None,
+    gate_idx: int | None = None,
 ) -> str:
     """
     1x4 grid: mean circuit activations for different input ranges.
@@ -90,6 +138,8 @@ def visualize_circuit_activations_mean(
     Args:
         layer_biases: Optional bias vectors. If provided, edge labels show
             (weight + bias) to reveal bias contribution when edges are patched.
+        gate_idx: If specified, only show this gate's output node (0-indexed).
+            When None, shows all output nodes.
     """
     labels_map = {
         "0_1": "[0, 1]",
@@ -99,14 +149,36 @@ def visualize_circuit_activations_mean(
     }
 
     fig, axes = plt.subplots(1, 4, figsize=(24, 6))
-    weights = [w.numpy() for w in layer_weights]
-    biases = [b.numpy() for b in layer_biases] if layer_biases else None
+
+    # Filter weights and biases for single gate output if needed
+    if gate_idx is not None and layer_weights:
+        weights = [w.numpy() for w in layer_weights[:-1]]
+        last_weight = layer_weights[-1]
+        if last_weight.shape[0] > 1 and gate_idx < last_weight.shape[0]:
+            weights.append(last_weight[gate_idx : gate_idx + 1, :].numpy())
+        else:
+            weights.append(last_weight.numpy())
+
+        if layer_biases:
+            biases = [b.numpy() for b in layer_biases[:-1]]
+            last_bias = layer_biases[-1]
+            if last_bias.shape[0] > 1 and gate_idx < last_bias.shape[0]:
+                biases.append(last_bias[gate_idx : gate_idx + 1].numpy())
+            else:
+                biases.append(last_bias.numpy())
+        else:
+            biases = None
+    else:
+        weights = [w.numpy() for w in layer_weights]
+        biases = [b.numpy() for b in layer_biases] if layer_biases else None
 
     for i, (key, label) in enumerate(labels_map.items()):
         activations = mean_activations_by_range.get(key, [])
         if activations:
+            # Filter activations to only show the specific gate's output
+            filtered_activations = _filter_activations_for_gate(activations, gate_idx)
             _draw_circuit_from_data(
-                axes[i], activations, circuit, weights, f"Input Range: {label}", biases=biases
+                axes[i], filtered_activations, circuit, weights, f"Input Range: {label}", biases=biases
             )
         else:
             axes[i].text(0.5, 0.5, "No data", ha="center", va="center")

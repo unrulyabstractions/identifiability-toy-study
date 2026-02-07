@@ -5,6 +5,7 @@ Contains functions for computing and exporting metrics:
 - compute_interventional_metrics: Compute interventional metrics from faithfulness data
 - compute_counterfactual_metrics: Compute counterfactual metrics from faithfulness data
 - save_faithfulness_json: Save result.json files and summary.json
+- save_gate_summary: Save summary.json for a specific gate
 """
 
 import json
@@ -13,7 +14,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..common.schemas import FaithfulnessMetrics, RobustnessMetrics
+    from ..common.schemas import FaithfulnessMetrics, RobustnessMetrics, TrialMetrics
 
 from ..common.schemas import FaithfulnessCategoryScore, FaithfulnessSummary
 
@@ -418,3 +419,60 @@ A faithful circuit should score high (>0.85) on all three categories.
     paths["explanation.md"] = explanation_path
 
     return paths
+
+
+def save_gate_summary(
+    gate_name: str,
+    gate_dir: str,
+    metrics: "TrialMetrics",
+) -> str:
+    """Save summary.json for a specific gate.
+
+    Creates a summary file with:
+    - Gate name
+    - Number of subcircuits
+    - List of subcircuit indices
+    - Per-subcircuit faithfulness summary (if available)
+    """
+    best_indices = metrics.per_gate_bests.get(gate_name, [])
+    bests_robust = metrics.per_gate_bests_robust.get(gate_name, [])
+    bests_faith = metrics.per_gate_bests_faith.get(gate_name, [])
+
+    # Build subcircuit summaries
+    subcircuit_summaries = []
+    for i, sc_idx in enumerate(best_indices):
+        sc_summary = {"index": sc_idx}
+
+        # Add robustness score if available
+        if i < len(bests_robust):
+            robust = bests_robust[i]
+            sc_summary["robustness"] = {
+                "noise_agreement_bit": robust.noise_agreement_bit,
+                "noise_agreement_best": robust.noise_agreement_best,
+                "overall_robustness": robust.overall_robustness,
+            }
+
+        # Add faithfulness summary if available
+        if i < len(bests_faith):
+            faith = bests_faith[i]
+            sc_summary["faithfulness"] = {
+                "sufficiency": faith.mean_sufficiency,
+                "completeness": faith.mean_completeness,
+                "necessity": faith.mean_necessity,
+                "independence": faith.mean_independence,
+            }
+
+        subcircuit_summaries.append(sc_summary)
+
+    summary = {
+        "gate": gate_name,
+        "n_subcircuits": len(best_indices),
+        "subcircuit_indices": best_indices,
+        "subcircuits": subcircuit_summaries,
+    }
+
+    path = os.path.join(gate_dir, "summary.json")
+    with open(path, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    return path

@@ -477,18 +477,23 @@ def _draw_graph(
         )
 
     if edge_labels:
-        nx.draw_networkx_edge_labels(
-            G,
-            pos,
-            edge_labels=edge_labels,
-            font_size=7,
-            font_color="#333333",
-            label_pos=0.5,
-            bbox=dict(
-                boxstyle="round,pad=0.1", facecolor="white", alpha=0.95, edgecolor="none"
-            ),
-            ax=ax,
-        )
+        # Draw edge labels with varying positions to avoid overlap
+        # Group edges by source node and vary positions within each group
+        for i, (edge, label) in enumerate(edge_labels.items()):
+            # Vary position between 0.3 and 0.7 based on edge index
+            label_pos = 0.35 + (i % 3) * 0.15  # 0.35, 0.50, 0.65
+            nx.draw_networkx_edge_labels(
+                G,
+                pos,
+                edge_labels={edge: label},
+                font_size=6,
+                font_color="#333333",
+                label_pos=label_pos,
+                bbox=dict(
+                    boxstyle="round,pad=0.08", facecolor="white", alpha=0.9, edgecolor="none"
+                ),
+                ax=ax,
+            )
     ax.axis("off")
 
 
