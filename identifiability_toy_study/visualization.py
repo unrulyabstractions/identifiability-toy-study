@@ -88,6 +88,28 @@ COLORS = {
 MARKERS = {"gate": "^", "subcircuit": "v", "agreement": "o", "mse": "s"}
 JITTER = {"correct": 1.05, "incorrect": -0.05, "gate_correct": 1.05, "sc_correct": 0.95}
 
+# Global layout constants for consistent title positioning
+TITLE_Y = 0.98  # Y position for suptitle (high enough to not be cut off)
+LAYOUT_RECT_DEFAULT = [0, 0.02, 1, 0.93]  # [left, bottom, right, top] - leaves room for title
+LAYOUT_RECT_WITH_LEGEND = [0, 0.06, 1, 0.93]  # Extra bottom space for legend
+
+
+def finalize_figure(fig, title: str, has_legend_below: bool = False, fontsize: int = 13):
+    """Apply consistent layout and title positioning to a figure.
+
+    Call this INSTEAD of manually calling tight_layout + suptitle.
+    Ensures titles are never cut off across all visualizations.
+
+    Args:
+        fig: The matplotlib figure
+        title: The title text
+        has_legend_below: If True, leaves extra space at bottom for legend
+        fontsize: Title font size (default 13)
+    """
+    rect = LAYOUT_RECT_WITH_LEGEND if has_legend_below else LAYOUT_RECT_DEFAULT
+    plt.tight_layout(rect=rect)
+    fig.suptitle(title, fontsize=fontsize, fontweight="bold", y=TITLE_Y)
+
 
 # ------------------ LAYOUT CACHE ------------------
 
@@ -832,11 +854,10 @@ def visualize_circuit_activations_from_data(
             axes[i].text(0.5, 0.5, "No data", ha="center", va="center")
             axes[i].axis("off")
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
     if gate_name:
-        fig.suptitle(
-            f"{gate_name} - Circuit Activations", fontsize=14, fontweight="bold", y=0.99
-        )
+        finalize_figure(fig, f"{gate_name} - Circuit Activations", fontsize=14)
+    else:
+        plt.tight_layout()
 
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
@@ -890,11 +911,10 @@ def visualize_circuit_activations_mean(
             axes[i].text(0.5, 0.5, "No data", ha="center", va="center")
             axes[i].axis("off")
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
     if gate_name:
-        fig.suptitle(
-            f"{gate_name} - Mean Activations by Input Range", fontsize=14, fontweight="bold", y=0.99
-        )
+        finalize_figure(fig, f"{gate_name} - Mean Activations by Input Range", fontsize=14)
+    else:
+        plt.tight_layout()
 
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
@@ -1012,13 +1032,11 @@ def _generate_robustness_circuit_figure(args):
     }
     category_label = category_labels.get(category, category)
 
-    # Use tight_layout first to get proper spacing, then add titles above
-    plt.tight_layout(rect=[0, 0, 1, 0.92])
-
-    # Main title: "(0, 1) -> 1" format - place well above plot area
-    fig.suptitle(f"{base_str} → {gt}", fontsize=14, fontweight="bold", y=0.98)
-    # Subtitle: transformation type
-    fig.text(0.5, 0.94, category_label, ha="center", fontsize=10, style="italic")
+    # Use global layout with extra space for subtitle
+    plt.tight_layout(rect=[0, 0, 1, 0.90])
+    fig.suptitle(f"{base_str} → {gt}", fontsize=14, fontweight="bold", y=TITLE_Y)
+    # Subtitle: transformation type (below main title)
+    fig.text(0.5, 0.93, category_label, ha="center", fontsize=10, style="italic")
 
     plt.savefig(output_path, dpi=300)
     plt.close(fig)
@@ -1460,13 +1478,8 @@ def visualize_robustness_curves(
             if row == 3:
                 ax.set_xlabel("Perturbation Effect", fontsize=9)
 
-        # Use tight_layout first with proper rect, then add title
-        plt.tight_layout(rect=[0, 0.08, 1, 0.94])
-
-        fig.suptitle(
-            f"{prefix}Noise Robustness",
-            fontsize=14, fontweight="bold", y=0.98
-        )
+        # Use global layout helper
+        finalize_figure(fig, f"{prefix}Noise Robustness", has_legend_below=True, fontsize=14)
 
         # Add figure-level legend at bottom
         from matplotlib.patches import Patch
@@ -1638,12 +1651,8 @@ def visualize_robustness_curves(
                 if row == n_rows - 1:
                     ax.set_xlabel(subtype_info["xlabel"], fontsize=9)
 
-            # Use tight_layout first, then add title with proper spacing
-            plt.tight_layout(rect=[0, 0.08, 1, 0.94])
-            fig.suptitle(
-                f"{prefix}OOD: {subtype_info['title']}",
-                fontsize=14, fontweight="bold", y=0.98
-            )
+            # Use global layout helper
+            finalize_figure(fig, f"{prefix}OOD: {subtype_info['title']}", has_legend_below=True, fontsize=14)
 
             # Add figure-level legend at bottom
             from matplotlib.patches import Patch
@@ -1897,9 +1906,7 @@ def visualize_faithfulness_intervention_effects(
         # Title and layout
         circuit_label = "In-Circuit" if circuit_type == "in_circuit" else "Out-of-Circuit"
         dist_label = "In-Distribution" if distribution_type == "in_distribution" else "Out-of-Distribution"
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        fig.suptitle(f"{prefix}{circuit_label} - {dist_label}",
-                     fontsize=14, fontweight="bold", y=0.98)
+        finalize_figure(fig, f"{prefix}{circuit_label} - {dist_label}", has_legend_below=True, fontsize=14)
 
         # Add legend at bottom
         from matplotlib.lines import Line2D
@@ -2183,23 +2190,23 @@ def visualize_faithfulness_intervention_effects(
         _draw_metric_circuit(axes[1, 1], ind_scores, {},
                             f"Independence: {ind_mean:.2f}", layer_sizes)
 
-        # Apply tight_layout first to get proper subplot arrangement
-        plt.tight_layout(rect=[0.08, 0.03, 1.0, 0.90])
+        # Apply tight_layout with global spacing
+        plt.tight_layout(rect=[0.08, 0.03, 1.0, LAYOUT_RECT_DEFAULT[3]])
 
-        # Simple title with just gate name - positioned within the safe area
+        # Simple title with just gate name
         fig.suptitle(prefix.strip(" -") if prefix else "Counterfactual Summary",
-                     fontsize=12, fontweight="bold", y=0.96)
+                     fontsize=12, fontweight="bold", y=TITLE_Y)
 
-        # Column labels at top (positioned to not get cut off)
-        fig.text(0.30, 0.92, "IN-CIRCUIT", ha="center", va="bottom", fontsize=11,
+        # Column labels at top (below title)
+        fig.text(0.30, 0.90, "IN-CIRCUIT", ha="center", va="bottom", fontsize=11,
                  fontweight="bold", color="#6495ED")
-        fig.text(0.73, 0.92, "OUT-CIRCUIT", ha="center", va="bottom", fontsize=11,
+        fig.text(0.73, 0.90, "OUT-CIRCUIT", ha="center", va="bottom", fontsize=11,
                  fontweight="bold", color="#DA70D6")
 
         # Row labels on left (pastel colors)
-        fig.text(0.035, 0.68, "DENOISING", ha="center", va="center", fontsize=10,
+        fig.text(0.035, 0.65, "DENOISING", ha="center", va="center", fontsize=10,
                  fontweight="bold", rotation=90, color="#77DD77")
-        fig.text(0.035, 0.26, "NOISING", ha="center", va="center", fontsize=10,
+        fig.text(0.035, 0.25, "NOISING", ha="center", va="center", fontsize=10,
                  fontweight="bold", rotation=90, color="#FFB6C1")
 
         # Save in counterfactual/ subdirectory
@@ -2321,8 +2328,8 @@ def visualize_faithfulness_intervention_effects(
                        fontsize=9, fontweight="bold", ha="left", va="bottom", color="#DA70D6")
                 ax.axis("off")
 
-            fig.suptitle(title, fontsize=13, fontweight="bold", y=0.98)
-            plt.subplots_adjust(left=0.05, right=0.95, bottom=0.05, top=0.92, hspace=0.12, wspace=0.08)
+            fig.suptitle(title, fontsize=13, fontweight="bold", y=TITLE_Y)
+            plt.subplots_adjust(left=0.05, right=0.95, bottom=0.05, top=LAYOUT_RECT_DEFAULT[3], hspace=0.12, wspace=0.08)
             path = os.path.join(counterfactual_dir, filename)
             plt.savefig(path, dpi=300, bbox_inches="tight")
             plt.close(fig)
@@ -2357,6 +2364,7 @@ def _generate_faithfulness_circuit_figure(args):
         effect_dict,
         circuit_dict,
         weights,
+        biases,
         intervened_nodes,
         output_path,
         fig_type,
@@ -2392,6 +2400,7 @@ def _generate_faithfulness_circuit_figure(args):
         intervened_nodes=set(),
         circuit=circuit,
         title=f"{clean_label}: {effect_dict['expected_clean_output']:.2f}",
+        biases=biases,
     )
 
     # Panel 2: Corrupted
@@ -2405,6 +2414,7 @@ def _generate_faithfulness_circuit_figure(args):
         intervened_nodes=set(),
         circuit=circuit,
         title=f"{corrupt_label}: {effect_dict['expected_corrupted_output']:.2f}",
+        biases=biases,
     )
 
     # Panel 3: Intervened
@@ -2426,6 +2436,7 @@ def _generate_faithfulness_circuit_figure(args):
         intervened_nodes=intervened_nodes,
         circuit=circuit,
         title=f"{intervened_label}: {effect_dict['actual_output']:.2f}",
+        biases=biases,
     )
 
     clean_str = ",".join(f"{v:.0f}" for v in effect_dict["clean_input"])
@@ -2447,13 +2458,11 @@ def _generate_faithfulness_circuit_figure(args):
 
     # Simplified title format:
     # "Counterfactual (1,0)→(1,1) | Out-of-Circuit Noising | Independence: 1.00"
-    plt.tight_layout(rect=[0, 0, 1, 0.93])  # Leave room for title
-    fig.suptitle(
+    finalize_figure(
+        fig,
         f"Counterfactual ({clean_str})→({corrupt_str})  |  {exp_label}  |  "
         f"{score_display}: {effect_dict['faithfulness_score']:.2f}",
-        fontsize=11,
-        fontweight="bold",
-        y=0.98,
+        fontsize=11
     )
 
     plt.savefig(output_path, dpi=300)
@@ -2540,6 +2549,7 @@ def visualize_faithfulness_circuit_samples(
                     effect_dict,
                     circuit_dict,
                     weights,
+                    biases,  # Include biases for edge labels
                     target_nodes,
                     output_path,
                     score_type,  # Just the score type, title built in worker
@@ -2727,12 +2737,10 @@ def visualize_faithfulness_circuit_samples(
             total_agree = sum(1 for s in samples if s.bit_agreement)
             agree_pct = 100 * total_agree / total_samples if total_samples > 0 else 0
 
-            plt.tight_layout(rect=[0, 0, 1, 0.94])  # Leave space for title
-            fig.suptitle(
+            finalize_figure(
+                fig,
                 f"{patch_label} | {circuit_type} | Agreement: {agree_pct:.0f}% (n={total_samples})",
-                fontsize=11,
-                fontweight="bold",
-                y=0.99,
+                fontsize=11
             )
 
             path = os.path.join(out_dir, f"{patch_label}.png")
