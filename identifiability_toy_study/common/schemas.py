@@ -313,8 +313,8 @@ class FaithfulnessConfig(SchemaClass):
     """Configuration for faithfulness analysis."""
 
     max_subcircuits_per_gate: int = 1
-    n_interventions_per_patch: int = 50  # Increased for better statistics
-    n_counterfactual_pairs: int = 20  # Increased for better coverage
+    n_interventions_per_patch: int = 200  # High count for robust statistics
+    n_counterfactual_pairs: int = 50  # Increased for better coverage
 
 
 @dataclass

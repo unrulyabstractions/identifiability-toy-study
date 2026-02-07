@@ -1812,58 +1812,144 @@ def visualize_faithfulness_intervention_effects(
             ax.set_xlabel("Intervention Value", fontsize=9)
         ax.grid(alpha=0.3, axis="y")
 
-    # === 1. Per-patch intervention scatter plots (in interventional/{in,out}_circuit/*_stats.png) ===
+    # === 1. Intervention Stats (in interventional/{in,out}_circuit/{in,out}_distribution_stats.png) ===
+    # Format matches observational: rows per patch, columns for Subcircuit | Gate | Agreement
     interventional_base = os.path.join(output_dir, "interventional")
 
-    def _create_patch_figures(patch_stats_dict, circuit_type, base_dir):
-        """Create scatter plots for all patches of a given type."""
-        patch_paths = {}
-        # Save in interventional/{in,out}_circuit/ with _stats suffix
+    def _create_circuit_distribution_summary(patch_stats_dict, circuit_type, distribution_type, base_dir):
+        """Create consolidated stats figure for a circuit type and distribution.
+
+        Format: rows per patch, columns for Subcircuit | Gate | Agreement
+        Similar to observational robustness visualizations.
+        """
+        if not patch_stats_dict:
+            return None
+
+        # Sort patches by layer and node index
+        def sort_key(item):
+            import re
+            pk = item[0]
+            layer_match = re.search(r"layers=\((\d+)", pk)
+            idx_match = re.search(r"indices=\((\d+)", pk)
+            return (int(layer_match.group(1)) if layer_match else 0,
+                    int(idx_match.group(1)) if idx_match else 0)
+
+        sorted_patches = sorted(patch_stats_dict.items(), key=sort_key)
+        n_patches = len(sorted_patches)
+
+        if n_patches == 0:
+            return None
+
+        # Create output directory
         out_dir = os.path.join(base_dir, circuit_type)
         os.makedirs(out_dir, exist_ok=True)
 
-        for patch_key, patch_stats in patch_stats_dict.items():
+        # Create figure with rows per patch
+        fig, axes = plt.subplots(n_patches, 3, figsize=(15, 4 * n_patches))
+        if n_patches == 1:
+            axes = axes.reshape(1, -1)
+
+        for row, (patch_key, patch_stats) in enumerate(sorted_patches):
             samples = patch_stats.samples
-            if not samples:
-                continue
+            patch_label = _patch_key_to_filename(patch_key)
 
-            filename = _patch_key_to_filename(patch_key)
+            # Column 0: Subcircuit outputs
+            ax = axes[row, 0]
+            if samples:
+                x_vals = [np.mean(s.intervention_values) if s.intervention_values else 0 for s in samples]
+                outputs = [s.subcircuit_output for s in samples]
+                correct = [s.bit_agreement for s in samples]
+                colors = ["#4CAF50" if c else "#E53935" for c in correct]
+                ax.scatter(x_vals, outputs, s=25, c=colors, alpha=0.7, edgecolors="none")
+                ax.axhline(y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+            ax.set_ylim(-0.2, 1.2)
+            ax.set_ylabel(f"{patch_label}", fontsize=10, fontweight="bold")
+            ax.grid(alpha=0.3)
+            if row == 0:
+                ax.set_title("Subcircuit", fontsize=11, fontweight="bold")
+            if row == n_patches - 1:
+                ax.set_xlabel("Intervention Value", fontsize=9)
 
-            fig, axes = plt.subplots(1, 3, figsize=(14, 4))
-            _plot_intervention_scatter(axes[0], samples, "Subcircuit")
-            _plot_intervention_scatter(axes[1], samples, "Full Gate")
-            _plot_agreement_binned(axes[2], samples)
+            # Column 1: Gate outputs
+            ax = axes[row, 1]
+            if samples:
+                x_vals = [np.mean(s.intervention_values) if s.intervention_values else 0 for s in samples]
+                outputs = [s.gate_output for s in samples]
+                correct = [s.bit_agreement for s in samples]
+                colors = ["#4CAF50" if c else "#E53935" for c in correct]
+                ax.scatter(x_vals, outputs, s=25, c=colors, alpha=0.7, edgecolors="none")
+                ax.axhline(y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+            ax.set_ylim(-0.2, 1.2)
+            ax.grid(alpha=0.3)
+            if row == 0:
+                ax.set_title("Full Gate", fontsize=11, fontweight="bold")
+            if row == n_patches - 1:
+                ax.set_xlabel("Intervention Value", fontsize=9)
 
-            layer = samples[0].patch_layer if samples else "?"
-            indices = samples[0].patch_indices if samples else []
-            indices_str = ",".join(map(str, indices)) if indices else "all"
-            n_nodes = len(indices) if indices else 0
+            # Column 2: Agreement (binned)
+            ax = axes[row, 2]
+            if samples:
+                _plot_agreement_binned(ax, samples, n_bins=10, show_xlabel=(row == n_patches - 1))
+            ax.grid(alpha=0.3, axis="y")
+            if row == 0:
+                ax.set_title("Agreement", fontsize=11, fontweight="bold")
 
-            plt.tight_layout(rect=[0, 0, 1, 0.94])
-            fig.suptitle(
-                f"{prefix}{circuit_type} | L{layer} nodes=[{indices_str}] ({n_nodes} nodes) | mode=add",
-                fontsize=12, fontweight="bold", y=0.99
-            )
+        # Title and layout
+        circuit_label = "In-Circuit" if circuit_type == "in_circuit" else "Out-of-Circuit"
+        dist_label = "In-Distribution" if distribution_type == "in_distribution" else "Out-of-Distribution"
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        fig.suptitle(f"{prefix}{circuit_label} - {dist_label}",
+                     fontsize=14, fontweight="bold", y=0.98)
 
-            # Save with _stats suffix to avoid collision with circuit diagrams
-            path = os.path.join(out_dir, f"{filename}_stats.png")
-            plt.savefig(path, dpi=300, bbox_inches="tight")
-            plt.close(fig)
-            patch_paths[f"interventional/{circuit_type}/{filename}_stats"] = path
+        # Add legend at bottom
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='#4CAF50',
+                   markersize=8, label='Agreement'),
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='#E53935',
+                   markersize=8, label='Disagreement'),
+        ]
+        fig.legend(handles=legend_elements, loc='lower center', ncol=2,
+                   fontsize=9, framealpha=0.9, bbox_to_anchor=(0.5, 0.01))
 
-        return patch_paths
+        filename = f"{distribution_type}_stats.png"
+        path = os.path.join(out_dir, filename)
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        return path
 
+    # In-circuit stats
     if faithfulness.in_circuit_stats:
-        paths.update(_create_patch_figures(faithfulness.in_circuit_stats, "in_circuit", interventional_base))
-    if faithfulness.out_circuit_stats:
-        paths.update(_create_patch_figures(faithfulness.out_circuit_stats, "out_circuit", interventional_base))
+        path = _create_circuit_distribution_summary(
+            faithfulness.in_circuit_stats, "in_circuit", "in_distribution", interventional_base)
+        if path:
+            paths["interventional/in_circuit/in_distribution_stats"] = path
 
-    # === 2. Intervention Summaries (in interventional/ folder) ===
+    if faithfulness.in_circuit_stats_ood:
+        path = _create_circuit_distribution_summary(
+            faithfulness.in_circuit_stats_ood, "in_circuit", "out_of_distribution", interventional_base)
+        if path:
+            paths["interventional/in_circuit/out_of_distribution_stats"] = path
+
+    # Out-circuit stats
+    if faithfulness.out_circuit_stats:
+        path = _create_circuit_distribution_summary(
+            faithfulness.out_circuit_stats, "out_circuit", "in_distribution", interventional_base)
+        if path:
+            paths["interventional/out_circuit/in_distribution_stats"] = path
+
+    if faithfulness.out_circuit_stats_ood:
+        path = _create_circuit_distribution_summary(
+            faithfulness.out_circuit_stats_ood, "out_circuit", "out_of_distribution", interventional_base)
+        if path:
+            paths["interventional/out_circuit/out_of_distribution_stats"] = path
+
+    # === 2. Combined Intervention Summaries (bar charts at interventional/ level) ===
     interventional_dir = interventional_base
     os.makedirs(interventional_dir, exist_ok=True)
 
     def _create_intervention_summary(in_stats, out_stats, title_suffix, filename):
-        """Helper to create intervention summary bar chart."""
+        """Helper to create intervention summary bar chart combining in/out circuit."""
         all_patches = []
         for pk, ps in in_stats.items():
             all_patches.append(("in", pk, ps))
@@ -1927,7 +2013,7 @@ def visualize_faithfulness_intervention_effects(
         plt.close(fig)
         return path
 
-    # In-distribution summary
+    # In-distribution summary (combined bar chart)
     path = _create_intervention_summary(
         faithfulness.in_circuit_stats,
         faithfulness.out_circuit_stats,
