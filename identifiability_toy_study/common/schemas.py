@@ -570,20 +570,24 @@ class CounterfactualMetrics(SchemaClass):
 
 
 @dataclass
+class FaithfulnessCategoryScore(SchemaClass):
+    """Score and epsilon for a single faithfulness category."""
+    score: float = 0.0
+    epsilon: float = 0.0  # min(1.0 - component_scores), always positive
+
+
+@dataclass
 class FaithfulnessSummary(SchemaClass):
     """Summary of all faithfulness metrics for summary.json.
 
-    Epsilon values represent the minimum margin by which any individual
-    score falls short of 1.0 (perfect faithfulness).
-    epsilon = min(1.0 - individual_scores)
+    Each category has:
+    - score: Average of component scores
+    - epsilon: Minimum margin from 1.0 across component scores (always positive)
     """
 
-    observational: float = 0.0  # Overall observational score
-    observational_epsilon: float = 0.0  # Epsilon for observational (min margin from 1.0)
-    interventional: float = 0.0  # Overall interventional score
-    interventional_epsilon: float = 0.0  # Epsilon for interventional
-    counterfactual: float = 0.0  # Overall counterfactual score
-    counterfactual_epsilon: float = 0.0  # Epsilon for counterfactual
+    observational: FaithfulnessCategoryScore = field(default_factory=FaithfulnessCategoryScore)
+    interventional: FaithfulnessCategoryScore = field(default_factory=FaithfulnessCategoryScore)
+    counterfactual: FaithfulnessCategoryScore = field(default_factory=FaithfulnessCategoryScore)
     overall: float = 0.0  # Combined overall score
 
 

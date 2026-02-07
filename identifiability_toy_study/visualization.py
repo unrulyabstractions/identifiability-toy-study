@@ -3129,52 +3129,61 @@ def save_faithfulness_json(
             json.dump(cf_metrics, f, indent=2)
         paths["counterfactual/result.json"] = path
 
-    # Compute epsilon values (min margin from 1.0 for individual scores)
+    # Compute epsilon from the SAME component scores used for overall score
+    # Epsilon = min distance from 1.0 across components (always positive magnitude)
+    from identifiability_toy_study.common.schemas import FaithfulnessCategoryScore
+
+    # Observational: epsilon from the 7 agreement rates that make up the overall
     obs_epsilon = 0.0
-    int_epsilon = 0.0
-    cf_epsilon = 0.0
-
     if robustness:
-        # For observational: epsilon is min(1.0 - agreement) across all agreement scores
-        obs_scores = []
-        if robustness.noise_samples:
-            obs_scores.append(robustness.noise_agreement_bit)
+        obs_component_scores = [robustness.noise_agreement_bit]
+        # Get per-type OOD agreements
+        ood_by_type: dict[str, list] = {}
         for sample in robustness.ood_samples:
-            obs_scores.append(1.0 if sample.agreement_bit else 0.0)
-        if obs_scores:
-            obs_epsilon = min(1.0 - s for s in obs_scores)
+            st = getattr(sample, "sample_type", "multiply_positive")
+            ood_by_type.setdefault(st, []).append(sample)
+        for st in ["multiply_positive", "multiply_negative", "add", "subtract", "bimodal", "bimodal_inv"]:
+            samples = ood_by_type.get(st, [])
+            if samples:
+                agreement = sum(s.agreement_bit for s in samples) / len(samples)
+                obs_component_scores.append(agreement)
+        # Filter to only valid (non-zero) scores that contributed to overall
+        obs_valid_scores = [s for s in obs_component_scores if s > 0]
+        if obs_valid_scores:
+            obs_epsilon = abs(min(1.0 - s for s in obs_valid_scores))
 
+    # Interventional: epsilon from the 4 mean bit similarities
+    int_epsilon = 0.0
     if faithfulness:
-        # For interventional: epsilon is min(1.0 - bit_similarity) across all patches
-        int_scores = []
-        for stats in faithfulness.in_circuit_stats.values():
-            int_scores.append(stats.mean_bit_similarity)
-        for stats in faithfulness.out_circuit_stats.values():
-            int_scores.append(stats.mean_bit_similarity)
-        for stats in faithfulness.in_circuit_stats_ood.values():
-            int_scores.append(stats.mean_bit_similarity)
-        for stats in faithfulness.out_circuit_stats_ood.values():
-            int_scores.append(stats.mean_bit_similarity)
-        if int_scores:
-            int_epsilon = min(1.0 - s for s in int_scores)
+        int_component_scores = []
+        for stats_dict in [faithfulness.in_circuit_stats, faithfulness.out_circuit_stats,
+                          faithfulness.in_circuit_stats_ood, faithfulness.out_circuit_stats_ood]:
+            if stats_dict:
+                bit_sims = [ps.mean_bit_similarity for ps in stats_dict.values()]
+                if bit_sims:
+                    int_component_scores.append(sum(bit_sims) / len(bit_sims))
+        int_valid_scores = [s for s in int_component_scores if s > 0]
+        if int_valid_scores:
+            int_epsilon = abs(min(1.0 - s for s in int_valid_scores))
 
-        # For counterfactual: epsilon is min(1.0 - faithfulness_score) across all effects
-        cf_scores = []
-        for effects in [faithfulness.sufficiency_effects, faithfulness.completeness_effects,
-                       faithfulness.necessity_effects, faithfulness.independence_effects]:
-            for e in effects:
-                cf_scores.append(e.faithfulness_score)
-        if cf_scores:
-            cf_epsilon = min(1.0 - s for s in cf_scores)
+    # Counterfactual: epsilon from the 4 mean scores (suff, comp, nec, ind)
+    cf_epsilon = 0.0
+    if faithfulness:
+        cf_component_scores = [
+            faithfulness.mean_sufficiency,
+            faithfulness.mean_completeness,
+            faithfulness.mean_necessity,
+            faithfulness.mean_independence,
+        ]
+        cf_valid_scores = [s for s in cf_component_scores if s > 0]
+        if cf_valid_scores:
+            cf_epsilon = abs(min(1.0 - s for s in cf_valid_scores))
 
-    # Summary.json in faithfulness/
+    # Summary.json in faithfulness/ with nested structure
     summary = FaithfulnessSummary(
-        observational=obs_overall,
-        observational_epsilon=obs_epsilon,
-        interventional=int_overall,
-        interventional_epsilon=int_epsilon,
-        counterfactual=cf_overall,
-        counterfactual_epsilon=cf_epsilon,
+        observational=FaithfulnessCategoryScore(score=obs_overall, epsilon=obs_epsilon),
+        interventional=FaithfulnessCategoryScore(score=int_overall, epsilon=int_epsilon),
+        counterfactual=FaithfulnessCategoryScore(score=cf_overall, epsilon=cf_epsilon),
         overall=(obs_overall + int_overall + cf_overall) / 3.0 if (obs_overall + int_overall + cf_overall) > 0 else 0.0,
     )
     summary_path = os.path.join(faithfulness_dir, "summary.json")
