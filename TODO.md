@@ -66,10 +66,10 @@ faithfulness/
 - **interventional titles**: Show agreement % over ALL samples
 
 ### Files Modified
-- `identifiability_toy_study/visualization.py` - Major refactoring
-- `identifiability_toy_study/causal_analysis.py` - Added new OOD sample types
-- `identifiability_toy_study/common/schemas.py` - Added sample_type field + metric schemas
-- `identifiability_toy_study/profiler.py` - Added `@logged()` decorator
+- `src/visualization.py` - Major refactoring
+- `src/causal_analysis.py` - Added new OOD sample types
+- `src/common/schemas.py` - Added sample_type field + metric schemas
+- `src/profiler.py` - Added `@logged()` decorator
 - `tests/test_batch_sequential_equivalence.py` - Fixed for 4-value return
 - `tests/test_batched_eval.py` - Fixed for 4-value return
 - `tests/test_causal_analysis.py` - Updated for 4-tuple sample returns

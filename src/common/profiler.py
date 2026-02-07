@@ -1,7 +1,7 @@
 """Simple global profiler for timing code sections.
 
 Usage:
-    from identifiability_toy_study.profiler import profile, print_profile, logged
+    from src.common.profiler import profile, print_profile, logged
 
     with profile("section_name"):
         # code to time

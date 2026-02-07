@@ -2,7 +2,7 @@ from typing import Any
 
 import torch
 
-from .causal_analysis import (
+from .causal import (
     calculate_faithfulness_metrics,
     calculate_robustness_metrics,
     create_clean_corrupted_data,
@@ -26,10 +26,10 @@ from .common.schemas import (
     TrialSetup,
 )
 from .common.utils import set_seeds
-from .parallelization import ParallelTasks
+from .common.parallelization import ParallelTasks
 from .parameter_decomposition import decompose_mlp
-from .profiler import profile, profile_fn
-from .spd_subcircuits import estimate_spd_subcircuits
+from .common.profiler import profile, profile_fn
+from .spd_internal.subcircuits import estimate_spd_subcircuits
 
 
 def _get_eval_device(parallel_config: ParallelConfig, default_device: str) -> str:

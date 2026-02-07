@@ -4,21 +4,21 @@ import os
 import sys
 from pathlib import Path
 
-from identifiability_toy_study.common.schemas import (
+from src.common.schemas import (
     ExperimentConfig,
     ExperimentResult,
     SPDConfig,
     generate_spd_sweep_configs,
 )
-from identifiability_toy_study.common.utils import setup_logging
-from identifiability_toy_study.experiment import run_experiment
-from identifiability_toy_study.persistence import (
+from src.common.utils import setup_logging
+from src.experiment import run_experiment
+from src.persistence import (
     get_all_runs,
     load_results,
     save_results,
 )
-from identifiability_toy_study.profiler import print_profile
-from identifiability_toy_study.visualization import visualize_experiment
+from src.common.profiler import print_profile
+from src.viz import visualize_experiment
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

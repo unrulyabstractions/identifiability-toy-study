@@ -52,7 +52,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-spd = { path = "identifiability_toy_study/spd", editable = true }
+spd = { path = "src/spd", editable = true }
 
 [project.optional-dependencies]
 dev = [
@@ -73,7 +73,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["identifiability_toy_study*"]
+include = ["src*"]
 
 [tool.ruff]
 line-length = 88

@@ -88,7 +88,7 @@ def decompose_mlp(
         eval_freq=500,
         slow_eval_freq=500,
         n_examples_until_dead=10000,
-        pretrained_model_class="identifiability_toy_study.common.neural_model.MLP",
+        pretrained_model_class="src.common.neural_model.MLP",
         task_config={
             "task_name": "tms",
             "feature_probability": spd_config.feature_probability,

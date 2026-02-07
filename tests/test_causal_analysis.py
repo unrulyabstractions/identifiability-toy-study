@@ -4,12 +4,12 @@ import pytest
 import numpy as np
 import torch
 
-from identifiability_toy_study.common.circuit import Circuit, enumerate_all_valid_circuit
-from identifiability_toy_study.common.neural_model import MLP
-from identifiability_toy_study.common.schemas import IdentifiabilityConstraints, SubcircuitMetrics
-from identifiability_toy_study.causal_analysis import (
+from src.common.circuit import Circuit, enumerate_all_valid_circuit
+from src.common.neural_model import MLP
+from src.common.schemas import IdentifiabilityConstraints, SubcircuitMetrics
+from src.causal import (
     filter_subcircuits,
-    _generate_ood_samples,
+    _generate_ood_multiply_samples,
     _generate_noise_samples,
 )
 
@@ -194,11 +194,11 @@ class TestFilterSubcircuits:
             assert 0 <= idx < len(circuits)
 
 
-# ===== Tests for _generate_ood_samples =====
+# ===== Tests for _generate_ood_multiply_samples =====
 
 
 class TestGenerateOODSamples:
-    """Tests for _generate_ood_samples function."""
+    """Tests for _generate_ood_multiply_samples function."""
 
     @pytest.fixture
     def base_inputs(self):
@@ -212,7 +212,7 @@ class TestGenerateOODSamples:
 
     def test_returns_list_of_tuples(self, base_inputs):
         """Should return list of (perturbed, base, scale, sample_type) tuples."""
-        samples = _generate_ood_samples(base_inputs, n_samples_per_base=10)
+        samples = _generate_ood_multiply_samples(base_inputs, n_samples_per_base=10)
 
         assert isinstance(samples, list)
         for sample in samples:
@@ -226,7 +226,7 @@ class TestGenerateOODSamples:
 
     def test_skips_zero_zero_input(self, base_inputs):
         """(0,0) should be skipped since scaling doesn't create OOD."""
-        samples = _generate_ood_samples(base_inputs, n_samples_per_base=10)
+        samples = _generate_ood_multiply_samples(base_inputs, n_samples_per_base=10)
 
         # None of the base inputs should be (0,0)
         for _, base, _, _ in samples:
@@ -234,7 +234,7 @@ class TestGenerateOODSamples:
 
     def test_positive_ood_above_one(self, base_inputs):
         """Positive OOD samples should have values > 1 for non-zero base."""
-        samples = _generate_ood_samples(base_inputs, n_samples_per_base=20)
+        samples = _generate_ood_multiply_samples(base_inputs, n_samples_per_base=20)
 
         positive_samples = [(p, b, s, t) for p, b, s, t in samples if s > 0]
         assert len(positive_samples) > 0
@@ -248,7 +248,7 @@ class TestGenerateOODSamples:
 
     def test_negative_ood_below_zero(self, base_inputs):
         """Negative OOD samples should have values < 0 for positive base."""
-        samples = _generate_ood_samples(base_inputs, n_samples_per_base=20)
+        samples = _generate_ood_multiply_samples(base_inputs, n_samples_per_base=20)
 
         # Use sample_type to identify negative samples (magnitude is always positive)
         negative_samples = [(p, b, s, t) for p, b, s, t in samples if t == "multiply_negative"]
@@ -264,7 +264,7 @@ class TestGenerateOODSamples:
 
     def test_multiplicative_scaling(self, base_inputs):
         """Samples should be exactly base * scale (or base * -scale for negative)."""
-        samples = _generate_ood_samples(base_inputs, n_samples_per_base=10)
+        samples = _generate_ood_multiply_samples(base_inputs, n_samples_per_base=10)
 
         for perturbed, base, scale, sample_type in samples:
             # For negative samples, scale is stored as abs(scale)
@@ -277,7 +277,7 @@ class TestGenerateOODSamples:
     def test_sample_count(self, base_inputs):
         """Should generate correct number of samples (excluding 0,0)."""
         n_samples = 10
-        samples = _generate_ood_samples(base_inputs, n_samples_per_base=n_samples)
+        samples = _generate_ood_multiply_samples(base_inputs, n_samples_per_base=n_samples)
 
         # 3 valid base inputs (excluding 0,0) * n_samples each
         expected_count = 3 * n_samples
@@ -285,7 +285,7 @@ class TestGenerateOODSamples:
 
     def test_scale_range_positive(self, base_inputs):
         """Positive scales should be in [1, 100] (10^[0,2])."""
-        samples = _generate_ood_samples(base_inputs, n_samples_per_base=100)
+        samples = _generate_ood_multiply_samples(base_inputs, n_samples_per_base=100)
 
         positive_scales = [s for _, _, s, _ in samples if s > 0]
         for scale in positive_scales:
@@ -293,7 +293,7 @@ class TestGenerateOODSamples:
 
     def test_scale_range_negative(self, base_inputs):
         """Negative scale magnitudes should be in [1, 100] (stored as positive)."""
-        samples = _generate_ood_samples(base_inputs, n_samples_per_base=100)
+        samples = _generate_ood_multiply_samples(base_inputs, n_samples_per_base=100)
 
         # Negative samples have sample_type="multiply_negative", scale is stored as magnitude
         negative_samples = [(s, t) for _, _, s, t in samples if t == "multiply_negative"]

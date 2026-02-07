@@ -4,9 +4,9 @@ import pytest
 import torch
 import numpy as np
 import time
-from identifiability_toy_study.common.neural_model import MLP
-from identifiability_toy_study.common.circuit import enumerate_all_valid_circuit
-from identifiability_toy_study.common.batched_eval import (
+from src.common.neural_model import MLP
+from src.common.circuit import enumerate_all_valid_circuit
+from src.common.batched_eval import (
     adapt_masks_for_gate,
     batch_evaluate_edge_variants,
     batch_evaluate_subcircuits,

@@ -125,7 +125,7 @@ MLP configuration and weights:
 
 ### Saving
 ```python
-from identifiability_toy_study.persistence import save_results
+from src.persistence import save_results
 
 result = run_experiment(cfg, logger)
 save_results(result, run_dir)
@@ -133,7 +133,7 @@ save_results(result, run_dir)
 
 ### Loading
 ```python
-from identifiability_toy_study.persistence import (
+from src.persistence import (
     load_config,
     load_trial_setup,
     load_trial_metrics,

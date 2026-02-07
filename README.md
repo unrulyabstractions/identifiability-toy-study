@@ -125,5 +125,5 @@ uv run jupyter lab  # Start Jupyter notebooks
 To update the spd submodule to the latest version:
 
 ```bash
-git submodule update --remote identifiability_toy_study/spd
+git submodule update --remote src/spd
 ```

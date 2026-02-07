@@ -12,14 +12,14 @@ import pytest
 import numpy as np
 import torch
 
-from identifiability_toy_study.common.neural_model import MLP
-from identifiability_toy_study.common.circuit import enumerate_all_valid_circuit
-from identifiability_toy_study.common.batched_eval import (
+from src.common.neural_model import MLP
+from src.common.circuit import enumerate_all_valid_circuit
+from src.common.batched_eval import (
     batch_evaluate_subcircuits,
     batch_compute_metrics,
     precompute_circuit_masks,
 )
-from identifiability_toy_study.parallelization import ParallelTasks
+from src.common.parallelization import ParallelTasks
 
 
 # =============================================================================

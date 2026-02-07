@@ -52,13 +52,14 @@ class DataParams(SchemaClass):
     n_samples_train: int = 2048
     n_samples_val: int = 128
     n_samples_test: int = 128
-    noise_std: float = 0.0
+    noise_std: float = 0.01
     skewed_distribution: bool = False
 
 
 @dataclass
 class ModelParams(SchemaClass):
-    logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
+    # logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
+    logic_gates: list[str] = field(default_factory=lambda: ["XOR"])
     width: int = 3
     depth: int = 2
 
@@ -168,14 +169,14 @@ class TrainParams(SchemaClass):
     learning_rate: float = 0.001
     batch_size: int = 2048
     epochs: int = 1000
-    val_frequency: int = 1
+    val_frequency: int = 10
 
 
 @dataclass
 class IdentifiabilityConstraints(SchemaClass):
     # Max deviation from bit_similarity=1.0 to be considered "best"
     # 0.01 = only 99%+ similar, 0.1 = 90%+ similar, 0.2 = 80%+ similar
-    epsilon: float = 0.1  # More lenient to get more best circuits
+    epsilon: float = 0.01  # More lenient to get more best circuits
 
 
 @dataclass
@@ -310,9 +311,9 @@ class CounterfactualEffect(SchemaClass):
 class FaithfulnessConfig(SchemaClass):
     """Configuration for faithfulness analysis."""
 
-    max_subcircuits_per_gate: int = 1
-    n_interventions_per_patch: int = 200  # High count for robust statistics
-    n_counterfactual_pairs: int = 50  # Increased for better coverage
+    max_subcircuits_per_gate: int = 2
+    n_interventions_per_patch: int = 200
+    n_counterfactual_pairs: int = 100
 
 
 @dataclass
@@ -401,20 +402,11 @@ class FaithfulnessMetrics(SchemaClass):
         default_factory=list
     )  # Noise out-circuit
 
-    # Legacy fields for backwards compatibility
-    out_counterfactual_effects: list[CounterfactualEffect] = field(default_factory=list)
-    in_counterfactual_effects: list[CounterfactualEffect] = field(default_factory=list)
-    counterfactual_effects: list[CounterfactualEffect] = field(default_factory=list)
-
     # ===== Aggregate Scores (2x2 Matrix) =====
     mean_sufficiency: float = 0.0  # Denoise in-circuit: recovery
     mean_completeness: float = 0.0  # Denoise out-circuit: 1 - recovery
     mean_necessity: float = 0.0  # Noise in-circuit: disruption
     mean_independence: float = 0.0  # Noise out-circuit: 1 - disruption
-
-    # Legacy aggregate scores
-    mean_faithfulness_score: float = 0.0
-    std_faithfulness_score: float = 0.0
 
     # Overall faithfulness score (higher is better)
     overall_faithfulness: float = 0.0
@@ -466,7 +458,14 @@ class RobustnessSample(SchemaClass):
 
 @dataclass
 class RobustnessMetrics(SchemaClass):
-    """Comprehensive robustness metrics for a subcircuit."""
+    """Observational robustness metrics for a subcircuit.
+
+    This is part of observational faithfulness analysis (output stored in
+    faithfulness/observational/). Measures how well subcircuit predictions
+    match full model predictions under perturbations.
+
+    See also: FaithfulnessMetrics for the complete faithfulness evaluation.
+    """
 
     # All samples (for scatter plots by actual noise magnitude)
     noise_samples: list[RobustnessSample] = field(default_factory=list)

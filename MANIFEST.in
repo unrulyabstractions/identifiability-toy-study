@@ -2,12 +2,12 @@ include README.md
 include LICENSE
 include requirements.txt
 include main.py
-recursive-include identifiability_toy_study *.py
-recursive-include identifiability_toy_study *.yaml
-recursive-include identifiability_toy_study *.yml
-recursive-include identifiability_toy_study *.json
-recursive-include identifiability_toy_study *.txt
-recursive-include identifiability_toy_study *.md
+recursive-include src *.py
+recursive-include src *.yaml
+recursive-include src *.yml
+recursive-include src *.json
+recursive-include src *.txt
+recursive-include src *.md
 global-exclude *.pyc
 global-exclude __pycache__
 global-exclude .DS_Store

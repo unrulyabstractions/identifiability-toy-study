@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .common.circuit import Circuit
-from .spd_analysis import (
+from ..common.circuit import Circuit
+from .analysis import (
     cluster_components_hierarchical,
     compute_coactivation_matrix,
     compute_importance_matrix,
@@ -25,8 +25,8 @@ from .spd_analysis import (
 )
 
 if TYPE_CHECKING:
-    from .common.neural_model import DecomposedMLP, MLP
-    from .spd_analysis import SPDAnalysisResult
+    from ..common.neural_model import DecomposedMLP, MLP
+    from .analysis import SPDAnalysisResult
 
 
 @dataclass

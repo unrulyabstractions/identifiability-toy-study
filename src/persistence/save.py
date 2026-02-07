@@ -48,7 +48,7 @@ from pathlib import Path
 
 import torch
 
-from ..spd_subcircuits import save_spd_estimate
+from ..spd_internal.subcircuits import save_spd_estimate
 
 from ..common.schemas import ExperimentResult
 from ..common.utils import filter_non_serializable
@@ -227,7 +227,7 @@ def _save_spd(trial, trial_dir: Path, logger=None):
         # Run and save SPD analysis with visualizations
         if trial.model is not None:
             try:
-                from ..spd_analysis import analyze_and_visualize_spd
+                from ..spd_internal.analysis import analyze_and_visualize_spd
 
                 analyze_and_visualize_spd(
                     decomposed_model=decomposed,

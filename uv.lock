@@ -947,7 +947,7 @@ requires-dist = [
     { name = "scikit-learn" },
     { name = "scipy", specifier = ">=1.14.1" },
     { name = "seaborn" },
-    { name = "spd", editable = "identifiability_toy_study/spd" },
+    { name = "spd", editable = "src/spd" },
     { name = "streamlit" },
     { name = "torch", specifier = ">=2.6" },
     { name = "torchvision", specifier = ">=0.23,<0.24" },
@@ -2903,7 +2903,7 @@ wheels = [
 [[package]]
 name = "spd"
 version = "0.0.1"
-source = { editable = "identifiability_toy_study/spd" }
+source = { editable = "src/spd" }
 dependencies = [
     { name = "datasets" },
     { name = "einops" },

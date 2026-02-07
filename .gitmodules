@@ -1,3 +1,3 @@
-[submodule "identifiability_toy_study/spd"]
-	path = identifiability_toy_study/spd
+[submodule "src/spd"]
+	path = src/spd
 	url = https://github.com/goodfire-ai/spd

@@ -27,7 +27,7 @@ from ..common.schemas import (
     TrialResult,
     TrialSetup,
 )
-from ..spd_subcircuits import load_spd_estimate as _load_spd_estimate
+from ..spd_internal.subcircuits import load_spd_estimate as _load_spd_estimate
 
 
 def get_all_runs(output_dir: str | Path) -> list[Path]:
@@ -365,12 +365,6 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                         mean_bit_similarity=ps.get("mean_bit_similarity", 0),
                         samples=samples,
                     )
-                # Load separate in/out counterfactual effects (new format)
-                out_cf_effects = [CounterfactualEffect(**c) for c in f.get("out_counterfactual_effects", [])]
-                in_cf_effects = [CounterfactualEffect(**c) for c in f.get("in_counterfactual_effects", [])]
-                # Legacy combined field
-                cf_effects = [CounterfactualEffect(**c) for c in f.get("counterfactual_effects", [])]
-
                 trial.metrics.per_gate_bests_faith[gate_name].append(
                     FaithfulnessMetrics(
                         in_circuit_stats=in_stats,
@@ -381,11 +375,6 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                         mean_out_circuit_similarity=f.get("mean_out_circuit_similarity", 0),
                         mean_in_circuit_similarity_ood=f.get("mean_in_circuit_similarity_ood", 0),
                         mean_out_circuit_similarity_ood=f.get("mean_out_circuit_similarity_ood", 0),
-                        out_counterfactual_effects=out_cf_effects,
-                        in_counterfactual_effects=in_cf_effects,
-                        counterfactual_effects=cf_effects,
-                        mean_faithfulness_score=f.get("mean_faithfulness_score", 0),
-                        std_faithfulness_score=f.get("std_faithfulness_score", 0),
                         overall_faithfulness=f.get("overall_faithfulness", 0),
                     )
                 )

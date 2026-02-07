@@ -39,10 +39,10 @@ import networkx as nx
 import numpy as np
 import torch
 
-from .common.logic_gates import ALL_LOGIC_GATES
+from ..common.logic_gates import ALL_LOGIC_GATES
 
 if TYPE_CHECKING:
-    from .common.neural_model import DecomposedMLP, MLP
+    from ..common.neural_model import DecomposedMLP, MLP
 
 
 @dataclass
