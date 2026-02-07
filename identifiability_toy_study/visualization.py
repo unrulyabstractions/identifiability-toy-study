@@ -90,8 +90,9 @@ JITTER = {"correct": 1.05, "incorrect": -0.05, "gate_correct": 1.05, "sc_correct
 
 # Global layout constants for consistent title positioning
 TITLE_Y = 0.98  # Y position for suptitle (high enough to not be cut off)
-LAYOUT_RECT_DEFAULT = [0, 0.02, 1, 0.93]  # [left, bottom, right, top] - leaves room for title
-LAYOUT_RECT_WITH_LEGEND = [0, 0.06, 1, 0.93]  # Extra bottom space for legend
+SUBTITLE_PAD = 12  # Padding for subplot titles (ax.set_title pad parameter)
+LAYOUT_RECT_DEFAULT = [0, 0.02, 1, 0.90]  # [left, bottom, right, top] - leaves room for title
+LAYOUT_RECT_WITH_LEGEND = [0, 0.06, 1, 0.90]  # Extra bottom space for legend
 
 
 def finalize_figure(fig, title: str, has_legend_below: bool = False, fontsize: int = 13):
@@ -109,6 +110,14 @@ def finalize_figure(fig, title: str, has_legend_below: bool = False, fontsize: i
     rect = LAYOUT_RECT_WITH_LEGEND if has_legend_below else LAYOUT_RECT_DEFAULT
     plt.tight_layout(rect=rect)
     fig.suptitle(title, fontsize=fontsize, fontweight="bold", y=TITLE_Y)
+
+
+def set_subplot_title(ax, title: str, fontsize: int = 11):
+    """Set subplot title with consistent padding.
+
+    Use this instead of ax.set_title() directly to ensure consistent spacing.
+    """
+    ax.set_title(title, fontsize=fontsize, fontweight="bold", pad=SUBTITLE_PAD)
 
 
 # ------------------ LAYOUT CACHE ------------------
@@ -1449,7 +1458,7 @@ def visualize_robustness_curves(
             ax.set_ylim(noise_y_min, noise_y_max)
             ax.grid(alpha=0.3)
             if row == 0:
-                ax.set_title("Subcircuit", fontsize=11, fontweight="bold")
+                set_subplot_title(ax, "Subcircuit")
             if row == 3:
                 ax.set_xlabel("Perturbation Effect", fontsize=9)
 
@@ -1463,7 +1472,7 @@ def visualize_robustness_curves(
             ax.set_ylim(noise_y_min, noise_y_max)
             ax.grid(alpha=0.3)
             if row == 0:
-                ax.set_title("Full Gate", fontsize=11, fontweight="bold")
+                set_subplot_title(ax, "Full Gate")
             if row == 3:
                 ax.set_xlabel("Perturbation Effect", fontsize=9)
 
@@ -1474,7 +1483,7 @@ def visualize_robustness_curves(
                 _plot_agreement_binned(ax, samples, signed_noise, n_bins=8)
             ax.grid(alpha=0.3, axis="y")
             if row == 0:
-                ax.set_title("Agreement", fontsize=11, fontweight="bold")
+                set_subplot_title(ax, "Agreement")
             if row == 3:
                 ax.set_xlabel("Perturbation Effect", fontsize=9)
 
@@ -1622,7 +1631,7 @@ def visualize_robustness_curves(
                 ax.set_ylim(y_min, y_max)
                 ax.grid(alpha=0.3)
                 if row == 0:
-                    ax.set_title("Subcircuit", fontsize=11, fontweight="bold")
+                    set_subplot_title(ax, "Subcircuit")
                 if row == n_rows - 1:
                     ax.set_xlabel(subtype_info["xlabel"], fontsize=9)
 
@@ -1636,7 +1645,7 @@ def visualize_robustness_curves(
                 ax.set_ylim(y_min, y_max)
                 ax.grid(alpha=0.3)
                 if row == 0:
-                    ax.set_title("Full Gate", fontsize=11, fontweight="bold")
+                    set_subplot_title(ax, "Full Gate")
                 if row == n_rows - 1:
                     ax.set_xlabel(subtype_info["xlabel"], fontsize=9)
 
@@ -1647,7 +1656,7 @@ def visualize_robustness_curves(
                     _plot_agreement_binned(ax, samples, x_vals, n_bins=8)
                 ax.grid(alpha=0.3, axis="y")
                 if row == 0:
-                    ax.set_title("Agreement", fontsize=11, fontweight="bold")
+                    set_subplot_title(ax, "Agreement")
                 if row == n_rows - 1:
                     ax.set_xlabel(subtype_info["xlabel"], fontsize=9)
 

@@ -1221,7 +1221,7 @@ def calculate_faithfulness_metrics(
             n_interventions_per_patch,
             True,
             device,
-            in_distribution_value_range,
+            out_distribution_value_range,
         )
 
     # ===== 2x2 Counterfactual Analysis =====
