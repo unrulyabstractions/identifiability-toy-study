@@ -2,6 +2,7 @@ import random
 import time
 from typing import Optional
 
+import numpy as np
 import torch
 
 from .logic_gates import (
@@ -23,23 +24,56 @@ from .schemas import (
 
 @torch.no_grad()
 def calculate_match_rate(y_pred, y_gt):
+    """Compare two binary (0/1) tensors. Callers must threshold first."""
     y_pred = y_pred.reshape(-1)
     y_gt = y_gt.reshape(-1)
-    return y_pred.eq(y_gt).float().mean()  # returns 0-D tensor
+    return y_pred.eq(y_gt).float().mean()
 
 
 @torch.no_grad()
-def clamp_to_binary(y: torch.Tensor) -> torch.Tensor:
-    """Clamp values to binary: round if in [0,1], clamp to 0 if neg, clamp to 1 if > 1."""
-    return torch.clamp(torch.round(y), 0, 1)
+def calculate_match_rate_batched(
+    y_preds: torch.Tensor, y_gt: torch.Tensor
+) -> np.ndarray:
+    """y_preds has leading batch dim, y_gt does not."""
+    return y_preds.eq(y_gt.unsqueeze(0)).float().mean(dim=(1, 2)).cpu().numpy()
+
+
+@torch.no_grad()
+def logits_to_binary(y: torch.Tensor) -> torch.Tensor:
+    """Convert raw logits to binary predictions. Decision boundary at 0."""
+    return (y > 0).float()
+
+
+@torch.no_grad()
+def calculate_mse(y_target: torch.Tensor, y_proxy: torch.Tensor) -> torch.Tensor:
+    """Calculate mean squared error between two tensors."""
+    return ((y_target - y_proxy) ** 2).mean()
+
+
+@torch.no_grad()
+def calculate_logit_similarity(
+    y_target: torch.Tensor, y_proxy: torch.Tensor
+) -> torch.Tensor:
+    """R²-like similarity: 1.0 = perfect match, 0.0 = predicting the mean."""
+    mse = calculate_mse(y_target, y_proxy)
+    var = y_target.var().clamp(min=1e-8)
+    return 1 - mse / var
+
+
+@torch.no_grad()
+def calculate_logit_similarity_batched(
+    y_target: torch.Tensor, y_proxies: torch.Tensor
+) -> np.ndarray:
+    """Batched R²: y_proxies has leading batch dim, y_target does not."""
+    mse = ((y_proxies - y_target.unsqueeze(0)) ** 2).mean(dim=(1, 2))
+    var = y_target.var().clamp(min=1e-8)
+    return (1 - mse / var).detach().cpu().numpy()
 
 
 @torch.no_grad()
 def calculate_best_match_rate(y_target, y_proxy):
-    """Calculate match rate after clamping both tensors to binary values."""
-    best_target = clamp_to_binary(y_target)
-    best_proxy = clamp_to_binary(y_proxy)
-    return calculate_match_rate(best_target, best_proxy)
+    """Calculate match rate from raw logits."""
+    return calculate_match_rate(logits_to_binary(y_target), logits_to_binary(y_proxy))
 
 
 def update_status_fx(trial_result: TrialResult, logger=None, device: str = "cpu"):
@@ -215,5 +249,7 @@ def train_model(
         logger=logger,
     )
 
-    val_acc = calculate_match_rate(torch.round(model(data.val.x)), data.val.y).item()
+    val_acc = calculate_match_rate(
+        logits_to_binary(model(data.val.x)), data.val.y
+    ).item()
     return model, avg_loss, val_acc

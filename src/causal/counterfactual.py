@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import torch
 
 from ..common.causal import Intervention, PatchShape
+from ..common.helpers import logits_to_binary
 
 
 @dataclass
@@ -52,7 +53,7 @@ def create_clean_corrupted_data(
         return pairs
 
     # Round y to get binary outputs for comparison
-    y_binary = torch.round(y)
+    y_binary = logits_to_binary(y)
 
     # Find pairs with different outputs
     for i in range(min(n_pairs * 10, n_samples)):  # Try multiple times

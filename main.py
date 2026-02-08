@@ -8,8 +8,8 @@ from src.common.schemas import (
     ExperimentConfig,
     ExperimentResult,
     SPDConfig,
-    generate_spd_sweep_configs,
 )
+from src.spd_internal.config import generate_spd_sweep_configs
 from src.common.utils import setup_logging
 from src.experiment import run_experiment
 from src.persistence import (

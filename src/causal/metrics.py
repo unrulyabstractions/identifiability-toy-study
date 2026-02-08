@@ -9,6 +9,7 @@ import torch
 
 from ..common.causal import InterventionEffect, PatchShape
 from ..common.circuit import CircuitStructure
+from ..common.helpers import logits_to_binary
 from ..common.neural_model import MLP
 from ..common.schemas import (
     CounterfactualEffect,
@@ -158,7 +159,10 @@ def calculate_faithfulness_metrics(
         else:
             raise ValueError(f"Unknown score_type: {score_type}")
 
-        output_changed = round(y_intervened_val) == round(y_corrupted_val)
+        output_changed = (
+            logits_to_binary(torch.tensor(y_intervened_val)).item()
+            == logits_to_binary(torch.tensor(y_corrupted_val)).item()
+        )
 
         # Convert activations to lists for JSON serialization
         clean_acts_list = [a.squeeze(0).tolist() for a in pair.act_clean]

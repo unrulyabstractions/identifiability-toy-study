@@ -4,7 +4,6 @@ from ..causal import create_clean_corrupted_data, filter_subcircuits
 from ..common.batched_eval import batch_compute_metrics, batch_evaluate_edge_variants
 from ..common.helpers import calculate_match_rate
 from ..common.schemas import GateMetrics, SubcircuitMetrics
-
 from .phases import (
     faithfulness_phase,
     robustness_phase,
@@ -144,9 +143,7 @@ def analyze_gate(
     }
 
     best_subcircuit_models = {
-        idx: gate_model.separate_subcircuit(
-            optimized_circuits[idx], gate_idx=gate_idx
-        )
+        idx: gate_model.separate_subcircuit(optimized_circuits[idx], gate_idx=gate_idx)
         for idx in best_indices
     }
 

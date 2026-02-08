@@ -25,7 +25,7 @@ class DataParams(SchemaClass):
     n_samples_train: int = 2**14
     n_samples_val: int = 2**10
     n_samples_test: int = 2**10
-    noise_std: float = 0.2
+    noise_std: float = 0.075
     skewed_distribution: bool = False
 
 
@@ -39,7 +39,7 @@ class ModelParams(SchemaClass):
 @dataclass
 class TrainParams(SchemaClass):
     learning_rate: float = 0.001
-    batch_size: int = 2**12
+    batch_size: int = DataParams().n_samples_train
     epochs: int = 4000
     val_frequency: int = 1
 
@@ -48,16 +48,16 @@ class TrainParams(SchemaClass):
 class IdentifiabilityConstraints(SchemaClass):
     # Max deviation from bit_similarity=1.0 to be considered "best"
     # 0.01 = only 99%+ similar, 0.1 = 90%+ similar, 0.2 = 80%+ similar
-    epsilon: float = 0.01
+    epsilon: float = 0.1
 
 
 @dataclass
 class FaithfulnessConfig(SchemaClass):
     """Configuration for faithfulness analysis."""
 
-    max_subcircuits_per_gate: int = 15
-    n_interventions_per_patch: int = 20
-    n_counterfactual_pairs: int = 20
+    max_subcircuits_per_gate: int = 100
+    n_interventions_per_patch: int = 200
+    n_counterfactual_pairs: int = 200
 
 
 @dataclass

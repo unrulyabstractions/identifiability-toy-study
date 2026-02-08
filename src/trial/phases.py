@@ -15,6 +15,7 @@ in their source modules (helpers.py and batched_eval.py).
 
 import torch
 
+from ..causal import calculate_faithfulness_metrics, calculate_observational_metrics
 from ..common.batched_eval import (
     adapt_masks_for_gate,
     batch_compute_metrics,
@@ -25,23 +26,21 @@ from ..common.circuit import enumerate_all_valid_circuit
 from ..common.helpers import train_model
 from ..common.parallelization import ParallelTasks
 from ..common.profiler import profile, profile_fn
-from ..causal import calculate_faithfulness_metrics, calculate_observational_metrics
 from ..spd_internal.decomposition import decompose_mlp
 from ..spd_internal.subcircuits import estimate_spd_subcircuits
-
 
 # Re-export functions that have @profile_fn directly on them
 # These are called from gate_analysis.py and runner.py
 __all__ = [
-    "train_model",
     "batch_compute_metrics",
     "batch_evaluate_edge_variants",
     "compute_activations_phase",
-    "spd_phase",
     "enumerate_circuits_phase",
+    "faithfulness_phase",
     "precompute_masks_phase",
     "robustness_phase",
-    "faithfulness_phase",
+    "spd_phase",
+    "train_model",
 ]
 
 

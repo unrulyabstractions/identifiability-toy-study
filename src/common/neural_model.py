@@ -1,7 +1,6 @@
 # neural_model.py
 import copy
 import itertools
-import random
 from typing import TYPE_CHECKING, Any, Optional
 
 import matplotlib.pyplot as plt
@@ -139,7 +138,7 @@ class MLP(nn.Module):
         hidden_sizes: list,
         input_size: int = 2,
         output_size: int = 1,
-        activation: str = "leaky_relu",
+        activation: str = "relu",
         device: str = "cpu",
         debug: bool = False,
         logger=None,
@@ -551,28 +550,21 @@ class MLP(nn.Module):
         epochs,
         loss_target: float = 0.001,
         val_frequency: int = 1,
-        early_stopping_steps: int = 10,
+        early_stopping_steps: int = 4,
+        l1_lambda: float = 1e-4,
         logger=None,
     ):
         """
         Train the model using the given data and hyperparameters.
         """
 
-        # Deterministic worker seeding plays well with your global set_seeds(...)
-        def seed_worker(worker_id):
-            worker_seed = torch.initial_seed() % 2**32
-            random.seed(worker_seed)
-            np.random.seed(worker_seed)
-
         # DataLoader
         dataset = TensorDataset(x, y)
-        dataloader = DataLoader(
-            dataset, batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker
-        )
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
         # Loss and optimizer
-        criterion = nn.MSELoss()
-        optimizer = optim.AdamW(self.parameters(), lr=learning_rate)
+        criterion = nn.BCEWithLogitsLoss()
+        optimizer = optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=0.0)
 
         best_loss = float("inf")
         bad_epochs = 0
@@ -588,7 +580,14 @@ class MLP(nn.Module):
 
                 optimizer.zero_grad()
                 outputs = self(inputs)
+
                 loss = criterion(outputs, targets)
+
+                # Promote sparsity
+                if l1_lambda > 0:
+                    l1_loss = sum(p.abs().sum() for p in self.parameters())
+                    loss = loss + l1_lambda * l1_loss
+
                 loss.backward()
                 optimizer.step()
                 epoch_loss.append(loss.item())
@@ -601,24 +600,20 @@ class MLP(nn.Module):
             else:
                 bad_epochs += 1
 
-            # Early stopping
-            if avg_loss < loss_target or bad_epochs >= early_stopping_steps:
-                break
-
             # Progress / validation
             if (epoch + 1) % val_frequency == 0 and logger is not None:
                 self.eval()
                 with torch.no_grad():
-                    train_outputs = self(x.to(self.device))
-                    train_predictions = torch.round(train_outputs)
+                    train_logits = self(x.to(self.device))
+                    train_predictions = (train_logits > 0).float()
                     correct_predictions_train = train_predictions.eq(
                         y.to(self.device)
                     ).all(dim=1)
                     train_acc = correct_predictions_train.sum().item() / y.size(0)
 
-                    val_outputs = self(x_val.to(self.device))
-                    val_loss = criterion(val_outputs, y_val.to(self.device)).item()
-                    val_predictions = torch.round(val_outputs)
+                    val_logits = self(x_val.to(self.device))
+                    val_loss = criterion(val_logits, y_val.to(self.device)).item()
+                    val_predictions = (val_logits > 0).float()
                     correct_predictions_val = val_predictions.eq(
                         y_val.to(self.device)
                     ).all(dim=1)
@@ -631,6 +626,10 @@ class MLP(nn.Module):
                     logger.info(
                         f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_acc:.4f}, Bad Epochs: {bad_epochs}"
                     )
+
+            # Early stopping
+            if avg_loss < loss_target or bad_epochs >= early_stopping_steps:
+                break
 
         return avg_loss
 

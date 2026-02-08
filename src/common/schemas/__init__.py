@@ -60,9 +60,6 @@ from .samples import (
     SampleType,
 )
 
-# Utilities
-from src.spd_internal.config import generate_spd_sweep_configs
-
 __all__ = [
     # Base
     "SchemaClass",
@@ -102,6 +99,4 @@ __all__ = [
     "TrialData",
     "TrialResult",
     "ExperimentResult",
-    # Utilities
-    "generate_spd_sweep_configs",
 ]

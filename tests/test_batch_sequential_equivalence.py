@@ -8,23 +8,24 @@ These tests verify correctness by comparing:
 4. Different devices (CPU vs MPS) produce same results
 """
 
-import pytest
 import numpy as np
+import pytest
 import torch
+from src.common.helpers import logits_to_binary
 
-from src.common.neural_model import MLP
-from src.common.circuit import enumerate_all_valid_circuit
 from src.common.batched_eval import (
-    batch_evaluate_subcircuits,
     batch_compute_metrics,
+    batch_evaluate_subcircuits,
     precompute_circuit_masks,
 )
+from src.common.circuit import enumerate_all_valid_circuit
+from src.common.neural_model import MLP
 from src.common.parallelization import ParallelTasks
-
 
 # =============================================================================
 # Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def small_model():
@@ -48,6 +49,7 @@ def multi_output_model():
 # Sequential reference implementations
 # =============================================================================
 
+
 def sequential_evaluate_circuits(model, circuits, x, gate_idx=0):
     """Reference: evaluate circuits one at a time using model forward pass."""
     results = []
@@ -56,7 +58,7 @@ def sequential_evaluate_circuits(model, circuits, x, gate_idx=0):
             intervention = circuit.to_intervention(model.device)
             y = model(x, intervention=intervention)
             if y.shape[-1] > 1:
-                y = y[:, gate_idx:gate_idx+1]
+                y = y[:, gate_idx : gate_idx + 1]
             results.append(y)
     return torch.stack(results)  # [n_circuits, batch, 1]
 
@@ -68,17 +70,17 @@ def sequential_compute_metrics(model, circuits, x, y_target, y_pred, gate_idx=0)
     bit_similarities = []
     best_similarities = []
 
-    bit_target = torch.round(y_target)
-    bit_pred = torch.round(y_pred)
+    bit_target = logits_to_binary(y_target)
+    bit_pred = logits_to_binary(y_pred)
 
     with torch.inference_mode():
         for circuit in circuits:
             intervention = circuit.to_intervention(model.device)
             y_circuit = model(x, intervention=intervention)
             if y_circuit.shape[-1] > 1:
-                y_circuit = y_circuit[:, gate_idx:gate_idx+1]
+                y_circuit = y_circuit[:, gate_idx : gate_idx + 1]
 
-            bit_circuit = torch.round(y_circuit)
+            bit_circuit = logits_to_binary(y_circuit)
 
             # Accuracy
             correct = bit_circuit.eq(bit_target)
@@ -91,15 +93,16 @@ def sequential_compute_metrics(model, circuits, x, y_target, y_pred, gate_idx=0)
             bit_similarities.append(bit_sim)
 
             # Best similarity (clamped to [0,1])
-            best_circuit = torch.clamp(bit_circuit, 0, 1)
-            best_pred = torch.clamp(bit_pred, 0, 1)
+            best_circuit = bit_circuit
+            best_pred = bit_pred
             same_best = best_circuit.eq(best_pred)
             best_sim = same_best.float().mean().item()
             best_similarities.append(best_sim)
 
-            # Logit similarity
-            mse = ((y_circuit - y_pred) ** 2).mean().item()
-            logit_sim = 1 - mse
+            # Logit similarity (R²-like: 1 - mse/var)
+            mse = ((y_circuit - y_pred) ** 2).mean()
+            var = y_pred.var().clamp(min=1e-8)
+            logit_sim = (1 - mse / var).item()
             logit_similarities.append(logit_sim)
 
     return (
@@ -119,6 +122,7 @@ def sequential_structure_analysis(circuits):
 # Test: Batched evaluation equals sequential
 # =============================================================================
 
+
 class TestBatchedEvalEqualsSequential:
     """Verify batched evaluation produces same results as sequential."""
 
@@ -131,9 +135,11 @@ class TestBatchedEvalEqualsSequential:
         batch_result = batch_evaluate_subcircuits(small_model, circuits, x)
 
         np.testing.assert_allclose(
-            batch_result.numpy(), seq_result.numpy(),
-            rtol=1e-5, atol=1e-5,
-            err_msg="Batched eval differs from sequential"
+            batch_result.numpy(),
+            seq_result.numpy(),
+            rtol=1e-5,
+            atol=1e-5,
+            err_msg="Batched eval differs from sequential",
         )
 
     def test_medium_model(self, medium_model):
@@ -145,8 +151,10 @@ class TestBatchedEvalEqualsSequential:
         batch_result = batch_evaluate_subcircuits(medium_model, circuits, x)
 
         np.testing.assert_allclose(
-            batch_result.numpy(), seq_result.numpy(),
-            rtol=1e-5, atol=1e-5,
+            batch_result.numpy(),
+            seq_result.numpy(),
+            rtol=1e-5,
+            atol=1e-5,
         )
 
     def test_multi_output_gate0(self, multi_output_model):
@@ -154,12 +162,18 @@ class TestBatchedEvalEqualsSequential:
         circuits = enumerate_all_valid_circuit(multi_output_model, use_tqdm=False)
         x = torch.randn(10, 2)
 
-        seq_result = sequential_evaluate_circuits(multi_output_model, circuits, x, gate_idx=0)
-        batch_result = batch_evaluate_subcircuits(multi_output_model, circuits, x, gate_idx=0)
+        seq_result = sequential_evaluate_circuits(
+            multi_output_model, circuits, x, gate_idx=0
+        )
+        batch_result = batch_evaluate_subcircuits(
+            multi_output_model, circuits, x, gate_idx=0
+        )
 
         np.testing.assert_allclose(
-            batch_result.numpy(), seq_result.numpy(),
-            rtol=1e-5, atol=1e-5,
+            batch_result.numpy(),
+            seq_result.numpy(),
+            rtol=1e-5,
+            atol=1e-5,
         )
 
     def test_multi_output_gate1(self, multi_output_model):
@@ -167,12 +181,18 @@ class TestBatchedEvalEqualsSequential:
         circuits = enumerate_all_valid_circuit(multi_output_model, use_tqdm=False)
         x = torch.randn(10, 2)
 
-        seq_result = sequential_evaluate_circuits(multi_output_model, circuits, x, gate_idx=1)
-        batch_result = batch_evaluate_subcircuits(multi_output_model, circuits, x, gate_idx=1)
+        seq_result = sequential_evaluate_circuits(
+            multi_output_model, circuits, x, gate_idx=1
+        )
+        batch_result = batch_evaluate_subcircuits(
+            multi_output_model, circuits, x, gate_idx=1
+        )
 
         np.testing.assert_allclose(
-            batch_result.numpy(), seq_result.numpy(),
-            rtol=1e-5, atol=1e-5,
+            batch_result.numpy(),
+            seq_result.numpy(),
+            rtol=1e-5,
+            atol=1e-5,
         )
 
     def test_with_precomputed_masks(self, medium_model):
@@ -192,8 +212,10 @@ class TestBatchedEvalEqualsSequential:
         )
 
         np.testing.assert_allclose(
-            result_precompute.numpy(), result_no_precompute.numpy(),
-            rtol=1e-5, atol=1e-5,
+            result_precompute.numpy(),
+            result_no_precompute.numpy(),
+            rtol=1e-5,
+            atol=1e-5,
         )
 
     @pytest.mark.parametrize("batch_size", [1, 5, 10, 32, 64])
@@ -206,14 +228,17 @@ class TestBatchedEvalEqualsSequential:
         batch_result = batch_evaluate_subcircuits(small_model, circuits, x)
 
         np.testing.assert_allclose(
-            batch_result.numpy(), seq_result.numpy(),
-            rtol=1e-5, atol=1e-5,
+            batch_result.numpy(),
+            seq_result.numpy(),
+            rtol=1e-5,
+            atol=1e-5,
         )
 
 
 # =============================================================================
 # Test: Batched metrics equals sequential
 # =============================================================================
+
 
 class TestBatchedMetricsEqualsSequential:
     """Verify batched metrics computation matches sequential."""
@@ -297,6 +322,7 @@ class TestBatchedMetricsEqualsSequential:
 # Test: Parallel structure analysis equals sequential
 # =============================================================================
 
+
 class TestParallelStructureEqualsSequential:
     """Verify parallel structure analysis matches sequential."""
 
@@ -315,8 +341,12 @@ class TestParallelStructureEqualsSequential:
         # Compare
         assert len(seq_structures) == len(parallel_structures)
         for i, (seq, par) in enumerate(zip(seq_structures, parallel_structures)):
-            assert seq.node_sparsity == par.node_sparsity, f"Circuit {i}: node_sparsity mismatch"
-            assert seq.edge_sparsity == par.edge_sparsity, f"Circuit {i}: edge_sparsity mismatch"
+            assert seq.node_sparsity == par.node_sparsity, (
+                f"Circuit {i}: node_sparsity mismatch"
+            )
+            assert seq.edge_sparsity == par.edge_sparsity, (
+                f"Circuit {i}: edge_sparsity mismatch"
+            )
             assert seq.width == par.width, f"Circuit {i}: width mismatch"
             assert seq.depth == par.depth, f"Circuit {i}: depth mismatch"
 
@@ -325,12 +355,12 @@ class TestParallelStructureEqualsSequential:
 # Test: CPU vs MPS equivalence (if available)
 # =============================================================================
 
+
 class TestCpuMpsEquivalence:
     """Verify CPU and MPS produce same results."""
 
     @pytest.mark.skipif(
-        not torch.backends.mps.is_available(),
-        reason="MPS not available"
+        not torch.backends.mps.is_available(), reason="MPS not available"
     )
     def test_eval_cpu_vs_mps(self, small_model):
         """Test batched eval gives same results on CPU vs MPS."""
@@ -348,14 +378,15 @@ class TestCpuMpsEquivalence:
         )
 
         np.testing.assert_allclose(
-            result_mps.cpu().numpy(), result_cpu.numpy(),
-            rtol=1e-4, atol=1e-4,
-            err_msg="MPS and CPU results differ"
+            result_mps.cpu().numpy(),
+            result_cpu.numpy(),
+            rtol=1e-4,
+            atol=1e-4,
+            err_msg="MPS and CPU results differ",
         )
 
     @pytest.mark.skipif(
-        not torch.backends.mps.is_available(),
-        reason="MPS not available"
+        not torch.backends.mps.is_available(), reason="MPS not available"
     )
     def test_metrics_cpu_vs_mps(self, small_model):
         """Test metrics computation gives same results on CPU vs MPS."""
@@ -381,8 +412,7 @@ class TestCpuMpsEquivalence:
         np.testing.assert_allclose(logits_mps, logits_cpu, rtol=1e-3, atol=1e-3)
 
     @pytest.mark.skipif(
-        not torch.backends.mps.is_available(),
-        reason="MPS not available"
+        not torch.backends.mps.is_available(), reason="MPS not available"
     )
     def test_precomputed_masks_cpu_vs_mps(self, medium_model):
         """Test precomputed masks work correctly on both devices."""
@@ -400,9 +430,11 @@ class TestCpuMpsEquivalence:
         # Verify masks are equivalent
         for i, (m_cpu, m_mps) in enumerate(zip(masks_cpu, masks_mps)):
             np.testing.assert_allclose(
-                m_mps.cpu().numpy(), m_cpu.numpy(),
-                rtol=1e-6, atol=1e-6,
-                err_msg=f"Layer {i} masks differ"
+                m_mps.cpu().numpy(),
+                m_cpu.numpy(),
+                rtol=1e-6,
+                atol=1e-6,
+                err_msg=f"Layer {i} masks differ",
             )
 
         # Verify evaluation with precomputed masks
@@ -414,14 +446,17 @@ class TestCpuMpsEquivalence:
         )
 
         np.testing.assert_allclose(
-            result_mps.cpu().numpy(), result_cpu.numpy(),
-            rtol=1e-4, atol=1e-4,
+            result_mps.cpu().numpy(),
+            result_cpu.numpy(),
+            rtol=1e-4,
+            atol=1e-4,
         )
 
 
 # =============================================================================
 # Test: Edge cases
 # =============================================================================
+
 
 class TestEdgeCases:
     """Test edge cases and boundary conditions."""
@@ -435,8 +470,10 @@ class TestEdgeCases:
         batch_result = batch_evaluate_subcircuits(small_model, circuits, x)
 
         np.testing.assert_allclose(
-            batch_result.numpy(), seq_result.numpy(),
-            rtol=1e-5, atol=1e-5,
+            batch_result.numpy(),
+            seq_result.numpy(),
+            rtol=1e-5,
+            atol=1e-5,
         )
 
     def test_single_sample(self, small_model):
@@ -448,8 +485,10 @@ class TestEdgeCases:
         batch_result = batch_evaluate_subcircuits(small_model, circuits, x)
 
         np.testing.assert_allclose(
-            batch_result.numpy(), seq_result.numpy(),
-            rtol=1e-5, atol=1e-5,
+            batch_result.numpy(),
+            seq_result.numpy(),
+            rtol=1e-5,
+            atol=1e-5,
         )
 
     def test_deterministic_results(self, small_model):
@@ -461,8 +500,7 @@ class TestEdgeCases:
         result2 = batch_evaluate_subcircuits(small_model, circuits, x)
 
         np.testing.assert_array_equal(
-            result1.numpy(), result2.numpy(),
-            err_msg="Results not deterministic"
+            result1.numpy(), result2.numpy(), err_msg="Results not deterministic"
         )
 
     def test_different_inputs_different_outputs(self, small_model):

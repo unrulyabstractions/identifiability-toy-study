@@ -9,10 +9,14 @@ from typing import Optional
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 from ..common.causal import Intervention, InterventionEffect, PatchShape
-from ..common.helpers import calculate_best_match_rate, calculate_match_rate
+from ..common.helpers import (
+    calculate_logit_similarity,
+    calculate_match_rate,
+    calculate_mse,
+    logits_to_binary,
+)
 from ..common.neural_model import MLP
 from ..common.schemas import InterventionSample, PatchStatistics
 
@@ -27,11 +31,11 @@ def calculate_intervention_effect(
     original_proxy_activations: list = None,
 ) -> InterventionEffect:
     """Calculate the effect of an intervention by comparing target and proxy outputs."""
-    bit_target = torch.round(y_target)
-    bit_proxy = torch.round(y_proxy)
-    logit_similarity = 1 - nn.MSELoss()(y_target, y_proxy).item()
+    bit_target = logits_to_binary(y_target).item()
+    bit_proxy = logits_to_binary(y_proxy).item()
+    logit_similarity = calculate_logit_similarity(y_target, y_proxy).item()
     bit_similarity = calculate_match_rate(bit_target, bit_proxy).item()
-    best_similarity = calculate_best_match_rate(y_target, y_proxy).item()
+    best_similarity = bit_similarity  # same thing now
 
     return InterventionEffect(
         intervention=intervention,
@@ -224,11 +228,12 @@ def _create_intervention_samples(
         for ps, (mode, vals) in effect.intervention.patches.items():
             iv_values.extend(vals.flatten().tolist())
 
-        # Calculate per-sample metrics
-        y_target_val = effect.y_target.mean().item()
-        y_proxy_val = effect.y_proxy.mean().item()
-        mse = (y_target_val - y_proxy_val) ** 2
-        bit_agree = round(y_target_val) == round(y_proxy_val)
+        # Calculate per-sample metrics using helper functions
+        logit_sim = calculate_logit_similarity(effect.y_target, effect.y_proxy).item()
+        mse = calculate_mse(effect.y_target, effect.y_proxy).item()
+        bit_target = logits_to_binary(effect.y_target.mean()).item()
+        bit_proxy = logits_to_binary(effect.y_proxy.mean()).item()
+        bit_agree = bit_target == bit_proxy
 
         # Convert tensor activations to lists for JSON serialization
         # Use MEAN across batch for efficiency - visualization shows representative values

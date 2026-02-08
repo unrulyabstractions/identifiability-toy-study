@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from .causal import Intervention, PatchShape
 from .grounding import Grounding, compute_local_tts, enumerate_tts
+from .helpers import calculate_logit_similarity_batched, logits_to_binary
 from .logic_gates import name_gate
 from .subcircuit import (
     NodePattern,
@@ -483,7 +484,9 @@ class Circuit:
             A list of all valid groundings
         """
         activations = [x.cpu().numpy() for x in activations]
-        activations[-1] = torch.round(torch.tensor(activations[-1])).numpy().astype(int)
+        activations[-1] = (
+            logits_to_binary(torch.tensor(activations[-1])).numpy().astype(int)
+        )
 
         global_inputs_pt = activations[0].astype(int)
         global_inputs = list(map(tuple, global_inputs_pt))
@@ -992,7 +995,7 @@ def find_circuits(
     """
     # Make predictions with the model
     model_predictions = model(x)
-    bit_model_pred = torch.round(model_predictions)
+    bit_model_pred = logits_to_binary(model_predictions)
 
     all_sks = enumerate_all_valid_circuit(
         model, min_sparsity=min_sparsity, use_tqdm=use_tqdm
@@ -1012,14 +1015,16 @@ def find_circuits(
     for i, circuit in it:
         # Make predictions with the current circuit
         sk_predictions = model(x, intervention=circuit.to_intervention(model.device))
-        bit_sk_pred = torch.round(sk_predictions)
+        bit_sk_pred = logits_to_binary(sk_predictions)
 
         # Compute the accuracy with respect to the task
         correct_predictions = bit_sk_pred.eq(y).all(dim=1)
         accuracy = correct_predictions.sum().item() / y.size(0)
 
         # Compute similarity with model prediction based on logits
-        logit_similarity = 1 - nn.MSELoss()(model_predictions, sk_predictions).item()
+        logit_similarity = calculate_logit_similarity_batched(
+            model_predictions, sk_predictions
+        ).item()
 
         # Compute similarity with model prediction
         same_predictions = torch.sum(bit_model_pred == bit_sk_pred).item()

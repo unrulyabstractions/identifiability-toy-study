@@ -21,10 +21,15 @@ if TYPE_CHECKING:
     from .circuit import Circuit
     from .neural_model import MLP
 
+from .helpers import (
+    calculate_logit_similarity_batched,
+    calculate_match_rate_batched,
+    logits_to_binary,
+)
+
 # Default max circuits per batch to avoid OOM
 # 64 is very conservative for CPU; can be increased for GPU with more memory
 DEFAULT_MAX_BATCH_SIZE = 128
-
 
 # =============================================================================
 # Memory estimation and adaptive batch sizing
@@ -177,7 +182,7 @@ def _evaluate_subcircuits_chunk(
 
         # Apply activation (except last layer)
         if layer_idx < len(weights) - 1:
-            h = torch.nn.functional.leaky_relu(h)
+            h = torch.nn.functional.relu(h)
 
     return h  # [n_circuits, batch, 1]
 
@@ -394,26 +399,11 @@ def _compute_chunk_metrics(
     best_pred: torch.Tensor,
     y_pred: torch.Tensor,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Compute metrics for a chunk of circuit outputs."""
-    bit_chunk = torch.round(y_chunk)
-    best_chunk = torch.clamp(bit_chunk, 0, 1)
-
-    # Accuracy
-    correct = bit_chunk.eq(bit_target.unsqueeze(0))
-    accuracies = correct.float().mean(dim=(1, 2)).cpu().numpy()
-
-    # Bit similarity
-    same_as_model = bit_chunk.eq(bit_pred.unsqueeze(0))
-    bit_sims = same_as_model.float().mean(dim=(1, 2)).cpu().numpy()
-
-    # Best similarity
-    same_best = best_chunk.eq(best_pred.unsqueeze(0))
-    best_sims = same_best.float().mean(dim=(1, 2)).cpu().numpy()
-
-    # Logit similarity
-    mse = ((y_chunk - y_pred.unsqueeze(0)) ** 2).mean(dim=(1, 2))
-    logit_sims = (1 - mse).detach().cpu().numpy()
-
+    bit_chunk = logits_to_binary(y_chunk)
+    accuracies = calculate_match_rate_batched(bit_chunk, bit_target)
+    bit_sims = calculate_match_rate_batched(bit_chunk, bit_pred)
+    best_sims = bit_sims
+    logit_sims = calculate_logit_similarity_batched(y_pred, y_chunk)
     return accuracies, logit_sims, bit_sims, best_sims
 
 
@@ -462,9 +452,9 @@ def batch_compute_metrics(
         y_pred = y_pred.to(device)
 
     # Precompute target values
-    bit_target = torch.round(y_target)
-    bit_pred = torch.round(y_pred)
-    best_pred = torch.clamp(bit_pred, 0, 1)
+    bit_target = logits_to_binary(y_target)
+    bit_pred = logits_to_binary(y_pred)
+    best_pred = bit_pred
 
     # If small enough and precomputed masks available, use fast path
     if n_circuits <= max_batch_size:

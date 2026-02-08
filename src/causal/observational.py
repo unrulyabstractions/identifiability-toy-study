@@ -8,6 +8,7 @@ We compare:
 
 import torch
 
+from ..common.helpers import calculate_mse, logits_to_binary
 from ..common.neural_model import MLP
 from ..common.schemas import RobustnessMetrics, RobustnessSample, SampleType
 from .data_generation import (
@@ -48,28 +49,19 @@ def _evaluate_samples(
             sc_acts = subcircuit(perturbed_dev, return_activations=True)
             subcircuit_output = sc_acts[-1].item()
 
-        # For bimodal transformations, interpret outputs differently
-        # Order-preserving bimodal: output in [-1,1], threshold at 0
-        # Inverted bimodal: output in [-1,1], threshold at 0, then invert
-        if sample_type == SampleType.BIMODAL:
-            # Threshold at 0: negative -> 0, positive -> 1
-            gate_bit = 1 if gate_output >= 0 else 0
-            sc_bit = 1 if subcircuit_output >= 0 else 0
-            gate_best = 1 if gate_output >= 0 else 0
-            sc_best = 1 if subcircuit_output >= 0 else 0
-        elif sample_type == SampleType.BIMODAL_INV:
-            # Inverted: threshold at 0, then invert interpretation
-            # In bimodal_inv: -1 corresponds to original 1, 1 corresponds to original 0
-            gate_bit = 0 if gate_output >= 0 else 1
-            sc_bit = 0 if subcircuit_output >= 0 else 1
-            gate_best = 0 if gate_output >= 0 else 1
-            sc_best = 0 if subcircuit_output >= 0 else 1
-        else:
-            # Standard interpretation: threshold at 0.5
-            gate_bit = 1 if gate_output >= 0.5 else 0
-            sc_bit = 1 if subcircuit_output >= 0.5 else 0
-            gate_best = max(0, min(1, round(gate_output)))
-            sc_best = max(0, min(1, round(subcircuit_output)))
+        # Convert logits to binary (threshold at 0 for raw logits)
+        # MLP outputs raw logits, decision boundary is at 0
+        gate_bit = int(logits_to_binary(torch.tensor(gate_output)).item())
+        sc_bit = int(logits_to_binary(torch.tensor(subcircuit_output)).item())
+
+        # For bimodal_inv, invert the interpretation
+        if sample_type == SampleType.BIMODAL_INV:
+            gate_bit = 1 - gate_bit
+            sc_bit = 1 - sc_bit
+
+        # best_similarity uses same threshold (no clamping needed for binary)
+        gate_best = gate_bit
+        sc_best = sc_bit
 
         # Accuracy to ground truth
         gate_correct = gate_bit == ground_truth
@@ -78,7 +70,9 @@ def _evaluate_samples(
         # Agreement between models (both interpret same class)
         agreement_bit = gate_bit == sc_bit
         agreement_best = gate_best == sc_best
-        mse = (gate_output - subcircuit_output) ** 2
+        mse = calculate_mse(
+            torch.tensor(gate_output), torch.tensor(subcircuit_output)
+        ).item()
 
         # Convert activations to lists for JSON serialization
         gate_acts_list = [a.squeeze(0).tolist() for a in gate_acts]

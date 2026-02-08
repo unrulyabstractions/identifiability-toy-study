@@ -2,9 +2,12 @@
 
 from typing import Any
 
-import torch
-
-from ..common.helpers import calculate_match_rate, train_model, update_status_fx
+from ..common.helpers import (
+    calculate_match_rate,
+    logits_to_binary,
+    train_model,
+    update_status_fx,
+)
 from ..common.logic_gates import ALL_LOGIC_GATES
 from ..common.parallelization import get_eval_device
 from ..common.schemas import TrialData, TrialResult, TrialSetup
@@ -97,12 +100,12 @@ def run_trial(
     trial_result.layer_weights = act_data["layer_weights"]
     trial_result.layer_biases = act_data["layer_biases"]
 
-    bit_gt = torch.round(y_gt)
-    bit_pred = torch.round(y_pred)
+    bit_gt = logits_to_binary(y_gt)
+    bit_pred = logits_to_binary(y_pred)
 
     trial_metrics.avg_loss = avg_loss
     trial_metrics.val_acc = val_acc
-    trial_metrics.test_acc = calculate_match_rate(torch.round(y_pred), y_gt).item()
+    trial_metrics.test_acc = calculate_match_rate(bit_gt, y_gt).item()
 
     # ===== SPD (if enabled) =====
     if run_spd:
