@@ -550,8 +550,8 @@ class MLP(nn.Module):
         epochs,
         loss_target: float = 0.001,
         val_frequency: int = 1,
-        early_stopping_steps: int = 4,
-        l1_lambda: float = 1e-4,
+        early_stopping_steps: int = 10,
+        l1_lambda: float = 1e-5,
         logger=None,
     ):
         """

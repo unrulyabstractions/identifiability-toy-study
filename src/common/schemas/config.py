@@ -38,7 +38,7 @@ class ModelParams(SchemaClass):
 
 @dataclass
 class TrainParams(SchemaClass):
-    learning_rate: float = 0.001
+    learning_rate: float = 0.01
     batch_size: int = DataParams().n_samples_train
     epochs: int = 4000
     val_frequency: int = 1
