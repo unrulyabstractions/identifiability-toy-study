@@ -122,7 +122,11 @@ class DecomposedMLP(nn.Module):
         component_model.load_state_dict(data["component_model_state"])
         component_model.to(device)
 
-        return cls(component_model=component_model, target_model=target_model, cm_config=cm_config)
+        return cls(
+            component_model=component_model,
+            target_model=target_model,
+            cm_config=cm_config,
+        )
 
 
 class MLP(nn.Module):
@@ -546,8 +550,8 @@ class MLP(nn.Module):
         learning_rate,
         epochs,
         loss_target: float = 0.001,
-        val_frequency: int = 10,
-        early_stopping_steps: int = 3,
+        val_frequency: int = 1,
+        early_stopping_steps: int = 10,
         logger=None,
     ):
         """
