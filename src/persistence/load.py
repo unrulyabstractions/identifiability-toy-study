@@ -32,7 +32,6 @@ from src.schemas import (
     TrialResult,
     TrialSetup,
 )
-from ..spd_internal.persistence import load_spd_estimate as _load_spd_estimate
 
 
 def get_all_runs(output_dir: str | Path) -> list[Path]:
@@ -137,15 +136,6 @@ def load_decomposed_model(
     return None
 
 
-def load_spd_estimate(trial_dir: str | Path):
-    """Load SPD subcircuit estimate from trial directory."""
-    trial_dir = Path(trial_dir)
-    spd_dir = trial_dir / "spd"
-    if spd_dir.exists():
-        return _load_spd_estimate(spd_dir)
-    return None
-
-
 def load_spd_analysis(trial_dir: str | Path) -> dict:
     """Load SPD analysis data from trial directory.
 
@@ -244,7 +234,6 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
     # Create minimal config
     config = ExperimentConfig(
         device=device,
-        spd_device=device,
     )
 
     result = ExperimentResult(config=config)
@@ -299,11 +288,6 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
         # Load circuits
         trial.subcircuits = circuits_data.get("subcircuits", [])
         trial.subcircuit_structure_analysis = circuits_data.get("subcircuit_structure_analysis", [])
-
-        # Load decomposed_subcircuit_indices from circuits.json
-        decomposed_indices = circuits_data.get("decomposed_subcircuit_indices", {})
-        for gate_name, indices in decomposed_indices.items():
-            trial.decomposed_subcircuit_indices[gate_name] = indices
 
         # Load metrics (reconstruct nested structures)
         trial.metrics.avg_loss = metrics_data.get("avg_loss", 0)
@@ -482,7 +466,6 @@ def load_experiment(run_dir: str | Path, device: str = "cpu") -> dict:
             "profiling": load_trial_profiling(trial_dir),
             "tensors": load_tensors(trial_dir, device=device),
             "model": model,
-            "decomposed_model": load_decomposed_model(trial_dir, model, device=device),
         }
 
     return {"config": config, "trials": trials}

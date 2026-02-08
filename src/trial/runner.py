@@ -7,12 +7,12 @@ from src.infra import get_eval_device, set_seeds, update_status_fx
 from src.schemas import TrialData, TrialResult, TrialSetup
 from src.tensor_ops import calculate_match_rate, logits_to_binary
 from src.training import train_model
+
 from .gate_analysis import analyze_gate
 from .phases import (
     compute_activations_phase,
     enumerate_circuits_phase,
     precompute_masks_phase,
-    spd_phase,
 )
 
 
@@ -20,28 +20,25 @@ def run_trial(
     setup: TrialSetup,
     data: TrialData,
     device: str,
-    spd_device: str = "cpu",
     logger: Any = None,
     debug: bool = False,
-    run_spd: bool = False,
 ) -> TrialResult:
     """Run a complete training and analysis trial.
 
     This is the main entry point for running a single trial. It:
     1. Trains an MLP model on the provided data
     2. Computes activations and metrics
-    3. Optionally runs SPD decomposition
-    4. Enumerates and evaluates all subcircuits
-    5. Runs robustness and faithfulness analysis on best subcircuits
+    3. Enumerates and evaluates all subcircuits
+    4. Runs robustness and faithfulness analysis on best subcircuits
+
+    Note: SPD decomposition is now run separately via src.spd.run_spd()
 
     Args:
         setup: Trial configuration (model params, training params, etc.)
         data: Training, validation, and test data
         device: Main compute device (e.g., "cpu", "cuda", "mps")
-        spd_device: Device for SPD decomposition
         logger: Optional logger for status updates
         debug: Enable debug output
-        run_spd: Whether to run SPD decomposition
 
     Returns:
         TrialResult containing model, metrics, and analysis results
@@ -102,14 +99,6 @@ def run_trial(
     trial_metrics.avg_loss = avg_loss
     trial_metrics.val_acc = val_acc
     trial_metrics.test_acc = calculate_match_rate(bit_gt, bit_pred).item()
-
-    # ===== SPD (if enabled) =====
-    if run_spd:
-        update_status("STARTED_SPD")
-        spd_phase(
-            setup, trial_result, model, x, y_pred, spd_device, input_size, gate_names
-        )
-        update_status("FINISHED_SPD")
 
     # ===== Circuit Finding =====
     parallel_config = setup.parallel_config

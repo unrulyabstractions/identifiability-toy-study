@@ -19,7 +19,7 @@ from .schema_class import SchemaClass
 
 # Avoid circular import - these are only needed for type hints
 if TYPE_CHECKING:
-    from src.model import MLP, DecomposedMLP
+    from src.model import MLP
 
 
 @dataclass
@@ -69,27 +69,8 @@ class TrialResult(SchemaClass):
 
     # Models stored at runtime (saved as model.pt, not in JSON)
     model: Optional["MLP"] = None
-    decomposed_model: Optional["DecomposedMLP"] = (
-        None  # Full multi-gate model (primary config)
-    )
-    spd_subcircuit_estimate: Optional[Any] = (
-        None  # SPD-based subcircuit clustering (primary config)
-    )
-    # Multi-config SPD sweep results: maps config_id -> DecomposedMLP/estimate
-    decomposed_models_sweep: dict[str, "DecomposedMLP"] = field(default_factory=dict)
-    spd_subcircuit_estimates_sweep: dict[str, Any] = field(default_factory=dict)
     subcircuits: list = field(default_factory=list)
     subcircuit_structure_analysis: list = field(default_factory=list)
-    # Maps gate_name -> DecomposedMLP for full single-gate model (saved separately)
-    decomposed_gate_models: dict[str, "DecomposedMLP"] = field(default_factory=dict)
-    # Maps gate_name -> subcircuit_idx -> DecomposedMLP (saved separately)
-    decomposed_subcircuits: dict[str, dict[int, "DecomposedMLP"]] = field(
-        default_factory=lambda: {}
-    )
-    # Serializable: which subcircuit indices were decomposed per gate
-    decomposed_subcircuit_indices: dict[str, list[int]] = field(
-        default_factory=lambda: {}
-    )
 
     # Each TrialSetup defines an deterministic id
     trial_id: str = field(init=False)

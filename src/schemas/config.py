@@ -4,7 +4,6 @@ Contains all configuration-related dataclasses:
 - DataParams: Data generation parameters
 - ModelParams: Neural network architecture parameters
 - TrainParams: Training hyperparameters
-- SPDConfig: Stochastic Parameter Decomposition configuration
 - FaithfulnessConfig: Faithfulness analysis configuration
 - ParallelConfig: Parallelization configuration
 - IdentifiabilityConstraints: Constraints for identifiability analysis
@@ -97,63 +96,6 @@ class ParallelConfig(SchemaClass):
 
 
 @dataclass
-class SPDConfig(SchemaClass):
-    """Config for Stochastic Parameter Decomposition.
-
-    Based on SPD paper (arXiv:2506.20790) and Goodfire's TMS experiments:
-
-    1. n_components: 2-4x max(n_functions, hidden_width)
-       - For 2->3->1 network: [4, 8, 15, 20]
-       - Paper TMS uses 20 subcomponents
-
-    2. importance_coeff: Critical for sparsity (controls g values)
-       - Paper uses 3e-3 for TMS experiments
-       - Too low -> all g~1 (no sparsity), too high -> all g->0
-       - Sweep: [1e-4, 1e-3, 3e-3]
-
-    3. steps: Training duration
-       - Paper uses 40k for TMS but tiny models converge much faster
-       - For 2->3->1: 1000 steps is usually sufficient
-       - Check loss convergence to tune
-
-    4. importance_p (pnorm): Shape of sparsity penalty
-       - p=1.0: L1 (paper default, recommended)
-       - p=0.5: extreme sparsity
-       - p=2.0: L2 (softer, less sparse)
-    """
-
-    # Number of components per module
-    # Rule of thumb: 2-4x max(n_functions, max_hidden_width)
-    n_components: int = 20  # Increased default for better decomposition
-
-    # Training settings
-    steps: int = (
-        1000  # 1000 is enough for tiny 2->3->1 networks (paper uses 40k for larger)
-    )
-    batch_size: int = 4096  # Large batch for MPS throughput
-    eval_batch_size: int = 4096
-    n_eval_steps: int = 10
-    learning_rate: float = 1e-3  # Standard Adam LR with cosine schedule
-
-    # Data generation
-    feature_probability: float = 0.5
-    data_generation_type: str = "at_least_zero_active"
-
-    # Loss coefficients
-    importance_coeff: float = 1e-3  # Key tuning param for sparsity (paper uses 3e-3)
-    importance_p: float = 1.0  # pnorm: 0.5=extreme, 1.0=L1 (paper default), 2.0=L2
-    recon_coeff: float = 1.0
-
-    # Analysis settings (for post-training clustering)
-    activation_threshold: float = 0.5  # Threshold for "active" component
-    n_clusters: Optional[int] = None  # Auto-detect if None
-
-    def get_config_id(self) -> str:
-        """Short ID for this config based on key params."""
-        return f"c{self.n_components}_s{self.steps}_i{self.importance_coeff:.0e}_p{self.importance_p}"
-
-
-@dataclass
 class TrialSetup(SchemaClass):
     seed: int = 0
     data_params: DataParams = field(default_factory=DataParams)
@@ -162,10 +104,6 @@ class TrialSetup(SchemaClass):
     constraints: IdentifiabilityConstraints = field(
         default_factory=IdentifiabilityConstraints
     )
-    spd_config: SPDConfig = field(default_factory=SPDConfig)
-    # Optional: list of additional SPD configs to run (for parameter sweeps)
-    # If provided, SPD runs for each config and stores results per config_id
-    spd_sweep_configs: Optional[list[SPDConfig]] = None
     faithfulness_config: FaithfulnessConfig = field(default_factory=FaithfulnessConfig)
     parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
 
@@ -186,10 +124,6 @@ class ExperimentConfig(SchemaClass):
     logger: Optional[Any] = None
     debug: bool = False
     device: str = "cpu"
-    spd_device: str = (
-        "cpu"  # CPU is fastest for small models (no GPU transfer overhead)
-    )
-    run_spd: bool = False  # Enable SPD decomposition analysis
 
     base_trial: TrialSetup = field(default_factory=TrialSetup)
 

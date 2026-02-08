@@ -5,8 +5,14 @@ SPD (Stochastic Parameter Decomposition) decomposes model weights into
 interpretable components using stochastic masking and causal importance functions.
 """
 
+import sys
 import tempfile
 from pathlib import Path
+
+# Add submodule to path
+_submodule_path = str(Path(__file__).parent.parent.parent / "submodules" / "spd")
+if _submodule_path not in sys.path:
+    sys.path.insert(0, _submodule_path)
 
 import torch
 from spd.configs import Config
@@ -15,7 +21,8 @@ from spd.run_spd import expand_module_patterns, optimize
 from spd.utils.data_utils import DatasetGeneratedDataLoader
 
 from src.model import DecomposedMLP, MLP
-from src.schemas import SPDConfig
+
+from .spd_types import SPDConfig
 
 
 class SimpleDataset:

@@ -1,7 +1,14 @@
 # decomposed.py
 """DecomposedMLP - wrapper for SPD decomposition results."""
 
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+# Add submodule to path
+_submodule_path = str(Path(__file__).parent.parent.parent / "submodules" / "spd")
+if _submodule_path not in sys.path:
+    sys.path.insert(0, _submodule_path)
 
 import torch
 import torch.nn as nn

@@ -48,8 +48,6 @@ from pathlib import Path
 
 import torch
 
-from ..spd_internal.persistence import save_spd_estimate
-
 from src.schemas import ExperimentResult
 from src.schemas.serialization import filter_non_serializable
 
@@ -101,7 +99,6 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
         circuits_data = {
             "subcircuits": trial.subcircuits,  # Already list of dicts
             "subcircuit_structure_analysis": trial.subcircuit_structure_analysis,
-            "decomposed_subcircuit_indices": dict(trial.decomposed_subcircuit_indices),
         }
         _save_json(circuits_data, trial_dir / "circuits.json")
 
@@ -163,80 +160,4 @@ def _save_models(trial, trial_dir: Path, logger=None):
         model_path = all_gates_dir / "model.pt"
         trial.model.save_to_file(str(model_path))
 
-    # Save SPD to new spd/ folder structure
-    _save_spd(trial, trial_dir, logger)
 
-    # Per-gate decomposed models
-    for gate_name, decomposed in trial.decomposed_gate_models.items():
-        full_gate_dir = trial_dir / gate_name / "full"
-        full_gate_dir.mkdir(parents=True, exist_ok=True)
-        path = full_gate_dir / "decomposed_model.pt"
-        decomposed.save(str(path))
-
-    # Per-subcircuit decomposed models
-    for gate_name, decomposed_dict in trial.decomposed_subcircuits.items():
-        for subcircuit_idx, decomposed in decomposed_dict.items():
-            subcircuit_dir = trial_dir / gate_name / str(subcircuit_idx)
-            subcircuit_dir.mkdir(parents=True, exist_ok=True)
-            path = subcircuit_dir / "decomposed_model.pt"
-            decomposed.save(str(path))
-
-
-def _save_spd(trial, trial_dir: Path, logger=None):
-    """Save SPD decomposition to trial_dir/spd/{config_id}/ folders.
-
-    Each SPD config gets its own subfolder with:
-        config.json         - SPD configuration used
-        decomposed_model.pt - Trained decomposed model
-        estimate.json       - Subcircuit clustering results
-        visualizations/     - Analysis plots
-    """
-    # Must have sweep results
-    if not trial.decomposed_models_sweep:
-        return
-
-    spd_base_dir = trial_dir / "spd"
-    spd_base_dir.mkdir(parents=True, exist_ok=True)
-
-    gate_names = trial.setup.model_params.logic_gates
-    n_inputs = 2  # Boolean gates have 2 inputs
-
-    # Save each config's results to its subfolder
-    for config_id, decomposed in trial.decomposed_models_sweep.items():
-        config_dir = spd_base_dir / config_id
-        config_dir.mkdir(parents=True, exist_ok=True)
-
-        # Find matching config
-        all_configs = [trial.setup.spd_config] + (trial.setup.spd_sweep_configs or [])
-        spd_config = next(c for c in all_configs if c.get_config_id() == config_id)
-
-        # Save SPD config
-        config_data = filter_non_serializable(asdict(spd_config))
-        _save_json(config_data, config_dir / "config.json")
-
-        # Save decomposed model
-        decomposed_path = config_dir / "decomposed_model.pt"
-        decomposed.save(str(decomposed_path))
-        logger and logger.info(f"Saved decomposed model to {decomposed_path}")
-
-        # Save SPD subcircuit estimate
-        estimate = trial.spd_subcircuit_estimates_sweep.get(config_id)
-        if estimate is not None:
-            save_spd_estimate(estimate, config_dir)
-
-        # Run and save SPD analysis with visualizations
-        if trial.model is not None:
-            try:
-                from ..spd_internal.analysis import analyze_and_visualize_spd
-
-                analyze_and_visualize_spd(
-                    decomposed_model=decomposed,
-                    target_model=trial.model,
-                    output_dir=config_dir,
-                    gate_names=gate_names,
-                    n_inputs=n_inputs,
-                    device="cpu",
-                )
-                logger and logger.info(f"Saved SPD analysis to {config_dir}")
-            except Exception as e:
-                logger and logger.warning(f"SPD visualization failed for {config_id}: {e}")

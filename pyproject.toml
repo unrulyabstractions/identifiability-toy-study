@@ -52,7 +52,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-spd = { path = "src/spd", editable = true }
+spd = { path = "submodules/spd", editable = true }
 
 [project.optional-dependencies]
 dev = [

@@ -2,10 +2,11 @@
 
 Each phase is a distinct step in the trial pipeline:
 - Computing activations
-- SPD decomposition
 - Enumerating circuits
 - Precomputing masks
 - Faithfulness analysis (includes observational, interventional, counterfactual)
+
+Note: SPD decomposition is now run separately via src.spd.run_spd()
 
 Note: Some phases like train_model, batch_compute_metrics, and
 batch_evaluate_edge_variants are now decorated with @profile_fn directly
@@ -24,8 +25,6 @@ from src.circuit import (
 )
 from src.infra import ParallelTasks, profile, profile_fn
 from src.training import train_model
-from ..spd_internal.decomposition import decompose_mlp
-from ..spd_internal.subcircuits import estimate_spd_subcircuits
 
 # Re-export functions that have @profile_fn directly on them
 # These are called from gate_analysis.py and runner.py
@@ -36,7 +35,6 @@ __all__ = [
     "enumerate_circuits_phase",
     "faithfulness_phase",
     "precompute_masks_phase",
-    "spd_phase",
     "train_model",
 ]
 
@@ -96,47 +94,6 @@ def compute_activations_phase(model, data, device, input_size):
         "layer_weights": layer_weights,
         "layer_biases": layer_biases,
     }
-
-
-@profile_fn("SPD Decomposition")
-def spd_phase(
-    setup, trial_result, model, x, y_pred, spd_device, input_size, gate_names
-):
-    """Run SPD decomposition for all configs."""
-    spd_configs_to_run = [setup.spd_config]
-    if setup.spd_sweep_configs:
-        spd_configs_to_run.extend(setup.spd_sweep_configs)
-
-    for config_idx, spd_config in enumerate(spd_configs_to_run):
-        config_id = spd_config.get_config_id()
-        print(f"    SPD config {config_idx + 1}/{len(spd_configs_to_run)}: {config_id}")
-
-        with profile(f"spd_mlp_{config_id}"):
-            decomposed = decompose_mlp(x, y_pred, model, spd_device, spd_config)
-
-        if config_idx == 0:
-            trial_result.decomposed_model = decomposed
-        trial_result.decomposed_models_sweep[config_id] = decomposed
-
-    # SPD Subcircuit estimation
-    for config_idx, spd_config in enumerate(spd_configs_to_run):
-        config_id = spd_config.get_config_id()
-        decomposed = trial_result.decomposed_models_sweep[config_id]
-        print(
-            f"    SPD subcircuit {config_idx + 1}/{len(spd_configs_to_run)}: {config_id}"
-        )
-
-        with profile(f"spd_mlp_sc_{config_id}"):
-            estimate = estimate_spd_subcircuits(
-                decomposed_model=decomposed,
-                n_inputs=input_size,
-                gate_names=gate_names,
-                device=spd_device,
-            )
-
-        if config_idx == 0:
-            trial_result.spd_subcircuit_estimate = estimate
-        trial_result.spd_subcircuit_estimates_sweep[config_id] = estimate
 
 
 @profile_fn("Enumerate Circuits")
@@ -219,7 +176,8 @@ def faithfulness_phase(
     if parallel_config.enable_parallel_faithfulness and len(subcircuit_keys) > 1:
         with ParallelTasks(max_workers=min(4, len(subcircuit_keys))) as tasks:
             futures = [
-                tasks.submit(compute_single_faithfulness, key) for key in subcircuit_keys
+                tasks.submit(compute_single_faithfulness, key)
+                for key in subcircuit_keys
             ]
         return [f.result() for f in futures]
     else:

@@ -3,13 +3,14 @@ import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import product
 
-from src.training import generate_trial_data
+from src.infra import set_seeds
 from src.schemas import (
     ExperimentConfig,
     ExperimentResult,
     TrialSetup,
 )
-from src.infra import set_seeds
+from src.training import generate_trial_data
+
 from .trial import run_trial
 
 """
@@ -20,13 +21,19 @@ Look at .common.schemas for full definitions
 """
 
 
-def run_experiment(cfg: ExperimentConfig, logger=None, max_parallel_trials: int = 4) -> ExperimentResult:
+def run_experiment(
+    cfg: ExperimentConfig, logger=None, max_parallel_trials: int = 4
+) -> ExperimentResult:
     logger and logger.info(f"\n\n ExperimentConfig: \n {cfg} \n\n")
 
     experiment_result = ExperimentResult(config=cfg)
 
     # If num_gates_per_run is None, use all gates (no sampling)
-    num_gates_list = cfg.num_gates_per_run if cfg.num_gates_per_run else [len(cfg.target_logic_gates)]
+    num_gates_list = (
+        cfg.num_gates_per_run
+        if cfg.num_gates_per_run
+        else [len(cfg.target_logic_gates)]
+    )
 
     # Collect all trial configurations
     trial_configs = []
@@ -45,15 +52,11 @@ def run_experiment(cfg: ExperimentConfig, logger=None, max_parallel_trials: int 
             data_params, logic_gates, cfg.device, logger=logger, debug=cfg.debug
         )
 
-        for width, depth, lr in product(
-            cfg.widths, cfg.depths, cfg.learning_rates
-        ):
+        for width, depth, lr in product(cfg.widths, cfg.depths, cfg.learning_rates):
             # Each trial should have its independent set of params
             model_params = copy.deepcopy(cfg.base_trial.model_params)
             train_params = copy.deepcopy(cfg.base_trial.train_params)
             constraints = copy.deepcopy(cfg.base_trial.constraints)
-            spd_config = copy.deepcopy(cfg.base_trial.spd_config)
-            spd_sweep_configs = copy.deepcopy(cfg.base_trial.spd_sweep_configs)
 
             train_params.learning_rate = lr
             model_params.width = width
@@ -66,8 +69,6 @@ def run_experiment(cfg: ExperimentConfig, logger=None, max_parallel_trials: int 
                 model_params=model_params,
                 train_params=train_params,
                 constraints=constraints,
-                spd_config=spd_config,
-                spd_sweep_configs=spd_sweep_configs,
             )
 
             trial_configs.append((trial_setup, trial_data))
@@ -80,16 +81,16 @@ def run_experiment(cfg: ExperimentConfig, logger=None, max_parallel_trials: int 
             trial_setup,
             trial_data,
             device=cfg.device,
-            spd_device=cfg.spd_device,
             logger=logger,
             debug=cfg.debug,
-            run_spd=cfg.run_spd,
         )
         experiment_result.trials[trial_result.trial_id] = trial_result
     else:
         # Multiple trials - run in parallel
         n_workers = min(len(trial_configs), max_parallel_trials)
-        print(f"[EXP] Running {len(trial_configs)} trials with {n_workers} parallel workers")
+        print(
+            f"[EXP] Running {len(trial_configs)} trials with {n_workers} parallel workers"
+        )
 
         def run_single_trial(config):
             trial_setup, trial_data = config
@@ -97,22 +98,27 @@ def run_experiment(cfg: ExperimentConfig, logger=None, max_parallel_trials: int 
                 trial_setup,
                 trial_data,
                 device=cfg.device,
-                spd_device=cfg.spd_device,
                 logger=None,  # Disable logging in parallel to avoid interleaving
                 debug=cfg.debug,
-                run_spd=cfg.run_spd,
             )
 
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {executor.submit(run_single_trial, config): i for i, config in enumerate(trial_configs)}
+            futures = {
+                executor.submit(run_single_trial, config): i
+                for i, config in enumerate(trial_configs)
+            }
 
             for future in as_completed(futures):
                 trial_idx = futures[future]
                 try:
                     trial_result = future.result()
                     experiment_result.trials[trial_result.trial_id] = trial_result
-                    print(f"[EXP] Trial {trial_idx + 1}/{len(trial_configs)} completed: {trial_result.trial_id[:8]}...")
+                    print(
+                        f"[EXP] Trial {trial_idx + 1}/{len(trial_configs)} completed: {trial_result.trial_id[:8]}..."
+                    )
                 except Exception as e:
-                    print(f"[EXP] Trial {trial_idx + 1}/{len(trial_configs)} failed: {e}")
+                    print(
+                        f"[EXP] Trial {trial_idx + 1}/{len(trial_configs)} failed: {e}"
+                    )
 
     return experiment_result
