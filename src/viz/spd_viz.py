@@ -68,7 +68,7 @@ def visualize_spd_experiment(
     """
     Visualize complete SPD results for an experiment.
 
-    Creates visualizations in run_dir/spd/{trial_id}/{config_id}/visualizations/
+    Creates visualizations in run_dir/{trial_id}/spd/{config_id}/visualizations/
 
     Args:
         spd_results: SpdResults from run_spd()
@@ -78,14 +78,13 @@ def visualize_spd_experiment(
         Dict of visualization paths
     """
     run_dir = Path(run_dir)
-    spd_dir = run_dir / "spd"
     viz_paths = {}
 
     for trial_id, trial_result in spd_results.per_trial.items():
         viz_paths[trial_id] = {}
 
         for config_id, decomposed in trial_result.decomposed_models_sweep.items():
-            config_dir = spd_dir / trial_id / config_id
+            config_dir = run_dir / trial_id / "spd" / config_id
             viz_dir = config_dir / "visualizations"
             viz_dir.mkdir(parents=True, exist_ok=True)
 

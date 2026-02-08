@@ -81,12 +81,12 @@ def load_spd_estimate(input_dir: str | Path) -> "SPDSubcircuitEstimate | None":
 
 def save_spd_results(results: "SpdResults", run_dir: str | Path) -> None:
     """
-    Save complete SPD results to run_dir/spd/ folder.
+    Save complete SPD results to run_dir/{trial_id}/spd/ folders.
 
     Creates:
-        spd/
-            config.json           - SPD configuration
-            {trial_id}/
+        {trial_id}/
+            spd/
+                config.json           - SPD configuration
                 {config_id}/
                     decomposed_model.pt
                     estimate.json
@@ -97,24 +97,22 @@ def save_spd_results(results: "SpdResults", run_dir: str | Path) -> None:
     from .spd_types import SPDConfig, SpdResults, SpdTrialResult
 
     run_dir = Path(run_dir)
-    spd_dir = run_dir / "spd"
-    spd_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save main config
-    config_data = filter_non_serializable(asdict(results.config))
-    with open(spd_dir / "config.json", "w", encoding="utf-8") as f:
-        json.dump(config_data, f, indent=2)
-
-    # Save sweep configs if any
-    if results.sweep_configs:
-        sweep_data = [filter_non_serializable(asdict(c)) for c in results.sweep_configs]
-        with open(spd_dir / "sweep_configs.json", "w", encoding="utf-8") as f:
-            json.dump(sweep_data, f, indent=2)
 
     # Save per-trial results
     for trial_id, trial_result in results.per_trial.items():
-        trial_spd_dir = spd_dir / trial_id
+        trial_spd_dir = run_dir / trial_id / "spd"
         trial_spd_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save config per trial
+        config_data = filter_non_serializable(asdict(results.config))
+        with open(trial_spd_dir / "config.json", "w", encoding="utf-8") as f:
+            json.dump(config_data, f, indent=2)
+
+        # Save sweep configs if any
+        if results.sweep_configs:
+            sweep_data = [filter_non_serializable(asdict(c)) for c in results.sweep_configs]
+            with open(trial_spd_dir / "sweep_configs.json", "w", encoding="utf-8") as f:
+                json.dump(sweep_data, f, indent=2)
 
         # Save each config's decomposition
         for config_id, decomposed in trial_result.decomposed_models_sweep.items():
@@ -147,10 +145,10 @@ def save_spd_results(results: "SpdResults", run_dir: str | Path) -> None:
 
 def load_spd_results(run_dir: str | Path, device: str = "cpu") -> "SpdResults | None":
     """
-    Load SPD results from run_dir/spd/ folder.
+    Load SPD results from run_dir/{trial_id}/spd/ folders.
 
     Args:
-        run_dir: Run directory containing spd/ subfolder
+        run_dir: Run directory containing trial folders with spd/ subfolders
         device: Device to load models to
 
     Returns:
@@ -162,13 +160,19 @@ def load_spd_results(run_dir: str | Path, device: str = "cpu") -> "SpdResults | 
     from .spd_types import SPDConfig, SpdResults, SpdTrialResult
 
     run_dir = Path(run_dir)
-    spd_dir = run_dir / "spd"
 
-    if not spd_dir.exists():
+    # Find trial directories that have spd/ subfolders
+    trial_dirs_with_spd = []
+    for trial_dir in run_dir.iterdir():
+        if trial_dir.is_dir() and (trial_dir / "spd").exists():
+            trial_dirs_with_spd.append(trial_dir)
+
+    if not trial_dirs_with_spd:
         return None
 
-    # Load main config
-    config_path = spd_dir / "config.json"
+    # Load config from first trial's spd folder
+    first_spd_dir = trial_dirs_with_spd[0] / "spd"
+    config_path = first_spd_dir / "config.json"
     if not config_path.exists():
         return None
 
@@ -178,7 +182,7 @@ def load_spd_results(run_dir: str | Path, device: str = "cpu") -> "SpdResults | 
 
     # Load sweep configs if any
     sweep_configs = []
-    sweep_path = spd_dir / "sweep_configs.json"
+    sweep_path = first_spd_dir / "sweep_configs.json"
     if sweep_path.exists():
         with open(sweep_path, encoding="utf-8") as f:
             sweep_data = json.load(f)
@@ -190,20 +194,19 @@ def load_spd_results(run_dir: str | Path, device: str = "cpu") -> "SpdResults | 
     results = SpdResults(config=config, sweep_configs=sweep_configs)
 
     # Load per-trial results
-    for trial_dir in spd_dir.iterdir():
-        if not trial_dir.is_dir() or trial_dir.name.startswith("."):
-            continue
-
+    for trial_dir in trial_dirs_with_spd:
         trial_id = trial_dir.name
+        spd_dir = trial_dir / "spd"
         trial_result = SpdTrialResult(trial_id=trial_id)
 
         # Load target model for this trial
-        trial_model_dir = run_dir / trial_id
-        target_model = load_model(trial_model_dir, device=device)
+        target_model = load_model(trial_dir, device=device)
 
         # Load each config's decomposition
-        for config_dir in trial_dir.iterdir():
-            if not config_dir.is_dir():
+        for config_dir in spd_dir.iterdir():
+            if not config_dir.is_dir() or config_dir.name.startswith("."):
+                continue
+            if config_dir.name in ("config.json", "sweep_configs.json"):
                 continue
 
             config_id = config_dir.name
