@@ -15,8 +15,8 @@ from src.schemas import (
     ExperimentConfig,
     ExperimentResult,
 )
-from src.spd import run_spd, save_spd_results, load_spd_results, SpdResults
-from src.viz import visualize_experiment
+from src.spd import SpdResults, load_spd_results, run_spd, save_spd_results
+from src.viz import visualize_experiment, visualize_spd_experiment
 
 
 def get_args():
@@ -87,17 +87,16 @@ def do_viz(result, run_dir, spd):
     visualize_experiment(result, run_dir=run_dir)
     if spd:
         spd_result = load_spd_results(run_dir)
-        # TODO: visualize_spd_experiment(spd_result, run_dir=run_dir)
+        if spd_result:
+            visualize_spd_experiment(spd_result, run_dir=run_dir)
 
 
 @profile_fn("do_spd")
 def do_spd(result, run_dir, viz, spd_device):
     spd_result: SpdResults = run_spd(result, run_dir=run_dir, device=spd_device)
-    save_spd_results(
-        spd_result, run_dir=run_dir
-    )  # In same folder as result, save_spd_results will save SpdResults to spd/ subfolder
+    save_spd_results(spd_result, run_dir=run_dir)
     if viz:
-        pass  # TODO: visualize_spd_experiment(spd_result, run_dir=run_dir)
+        visualize_spd_experiment(spd_result, run_dir=run_dir)
     return spd_result
 
 
@@ -167,12 +166,16 @@ if __name__ == "__main__":
     # Run Experiment with many trials
     with profile("run_experiment"):
         experiment_result: ExperimentResult = run_experiment(cfg, logger=logger)
-        save_results(experiment_result, run_dir=run_dir)  # Save before just in case viz crashes
+        save_results(
+            experiment_result, run_dir=run_dir
+        )  # Save before just in case viz crashes
 
     # Other experiments + viz
     spd_result = None
     if args.spd:
-        spd_result = do_spd(experiment_result, run_dir, viz=not args.no_viz, spd_device=args.spd_device)
+        spd_result = do_spd(
+            experiment_result, run_dir, viz=not args.no_viz, spd_device=args.spd_device
+        )
     if not args.no_viz:
         do_viz(experiment_result, run_dir, spd=args.spd)
 

@@ -34,7 +34,6 @@ from .profiling_viz import (
     visualize_profiling_summary,
     visualize_profiling_timeline,
 )
-from .spd_viz import visualize_spd_components
 
 
 def _print_viz_phase(phase_name: str, mem_before: float, is_start: bool = True):
@@ -147,12 +146,6 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
             )
         viz_paths[trial_id]["all_gates"]["activations"] = act_path
 
-        if trial.decomposed_model:
-            if path := visualize_spd_components(
-                trial.decomposed_model, folder, gate_name=all_gates_label
-            ):
-                viz_paths[trial_id]["all_gates"]["spd"] = path
-
         # --- Per-gate visualization ---
         for gate_idx, gname in enumerate(gate_names):
             folder = os.path.join(trial_dir, gname, "full")
@@ -187,13 +180,6 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     )
                 viz_paths[trial_id][gname]["full"]["activations_mean"] = mean_act_path
 
-            if gname in trial.decomposed_gate_models:
-                decomposed = trial.decomposed_gate_models[gname]
-                if path := visualize_spd_components(
-                    decomposed, folder, gate_name=gate_label
-                ):
-                    viz_paths[trial_id][gname]["full"]["spd"] = path
-
             # Save gate summary.json
             gate_folder = os.path.join(trial_dir, gname)
             summary_path = save_gate_summary(gname, gate_folder, trial.metrics)
@@ -211,7 +197,6 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                 f"[VIZ] Gate {gname}: {len(best_keys)} best subcircuits to visualize"
             )
             bests_faith = trial.metrics.per_gate_bests_faith.get(gname, [])
-            decomposed_indices = trial.decomposed_subcircuit_indices.get(gname, [])
 
             # Group edge variations by node pattern for summary generation
             node_pattern_edges: dict[int, list[tuple[int, int, "FaithfulnessMetrics"]]] = {}
@@ -362,15 +347,6 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                 if has_faith:
                     full_results_path = save_full_results(folder, faithfulness_data, sc_key)
                     viz_paths[trial_id][gname][sc_key]["full_results"] = full_results_path
-
-                # SPD (only for node patterns, not edge variations)
-                if gname in trial.decomposed_subcircuits:
-                    if node_idx in trial.decomposed_subcircuits[gname]:
-                        decomposed = trial.decomposed_subcircuits[gname][node_idx]
-                        if path := visualize_spd_components(
-                            decomposed, folder, gate_name=sc_label
-                        ):
-                            viz_paths[trial_id][gname][sc_key]["spd"] = path
 
             # After processing all edge variations, save node pattern summaries
             for node_idx, edge_list in node_pattern_edges.items():
