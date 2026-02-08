@@ -8,7 +8,7 @@ We compare:
 
 import torch
 
-from ..common.helpers import calculate_mse, logits_to_binary
+from ..common.metrics import calculate_mse, logits_to_binary
 from ..common.neural_model import MLP
 from ..common.schemas import RobustnessMetrics, RobustnessSample, SampleType
 from .data_generation import (
@@ -35,7 +35,7 @@ def _evaluate_samples(
     results = []
 
     for perturbed, base_input, magnitude, sample_type in samples:
-        perturbed_dev = perturbed.unsqueeze(0).to(device)
+        perturbed_dev = perturbed.unsqueeze(0).to(device)  # [1, 2]
 
         # Get ground truth from base input
         base_key = (int(base_input[0].item()), int(base_input[1].item()))
@@ -43,16 +43,16 @@ def _evaluate_samples(
 
         # Run BOTH models on the SAME perturbed input, get activations for viz
         with torch.inference_mode():
-            gate_acts = gate_model(perturbed_dev, return_activations=True)
-            gate_output = gate_acts[-1].item()
+            gate_acts = gate_model(perturbed_dev, return_activations=True)  # list of [1, hidden] per layer
+            gate_output = gate_acts[-1].item()  # [] scalar logit
 
-            sc_acts = subcircuit(perturbed_dev, return_activations=True)
-            subcircuit_output = sc_acts[-1].item()
+            sc_acts = subcircuit(perturbed_dev, return_activations=True)  # list of [1, hidden] per layer
+            subcircuit_output = sc_acts[-1].item()  # [] scalar logit
 
         # Convert logits to binary (threshold at 0 for raw logits)
         # MLP outputs raw logits, decision boundary is at 0
-        gate_bit = int(logits_to_binary(torch.tensor(gate_output)).item())
-        sc_bit = int(logits_to_binary(torch.tensor(subcircuit_output)).item())
+        gate_bit = int(logits_to_binary(torch.tensor(gate_output)).item())  # 0 or 1
+        sc_bit = int(logits_to_binary(torch.tensor(subcircuit_output)).item())  # 0 or 1
 
         # For bimodal_inv, invert the interpretation
         if sample_type == SampleType.BIMODAL_INV:

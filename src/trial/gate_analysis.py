@@ -2,7 +2,7 @@
 
 from ..causal import create_clean_corrupted_data, filter_subcircuits
 from ..common.batched_eval import batch_compute_metrics, batch_evaluate_edge_variants
-from ..common.helpers import calculate_match_rate
+from ..common.metrics import calculate_match_rate
 from ..common.schemas import GateMetrics, SubcircuitMetrics
 from .phases import (
     faithfulness_phase,
@@ -63,9 +63,9 @@ def analyze_gate(
     per_gate_bests_robust = trial_metrics.per_gate_bests_robust
     per_gate_bests_faith = trial_metrics.per_gate_bests_faith
 
-    y_gate = y_pred[..., [gate_idx]]
-    bit_gate_gt = bit_gt[..., [gate_idx]]
-    bit_gate = bit_pred[..., [gate_idx]]
+    y_gate = y_pred[..., [gate_idx]]  # [n_samples, 1] - model logits for this gate
+    bit_gate_gt = bit_gt[..., [gate_idx]]  # [n_samples, 1] - binary ground truth
+    bit_gate = bit_pred[..., [gate_idx]]  # [n_samples, 1] - binary model prediction
 
     print(f"\n{'~' * 60}")
     print(f"  Gate {gate_idx}: {gate_name}")

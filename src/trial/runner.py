@@ -2,12 +2,8 @@
 
 from typing import Any
 
-from ..common.helpers import (
-    calculate_match_rate,
-    logits_to_binary,
-    train_model,
-    update_status_fx,
-)
+from ..common.helpers import train_model, update_status_fx
+from ..common.metrics import calculate_match_rate, logits_to_binary
 from ..common.logic_gates import ALL_LOGIC_GATES
 from ..common.parallelization import get_eval_device
 from ..common.schemas import TrialData, TrialResult, TrialSetup
@@ -100,12 +96,13 @@ def run_trial(
     trial_result.layer_weights = act_data["layer_weights"]
     trial_result.layer_biases = act_data["layer_biases"]
 
-    bit_gt = logits_to_binary(y_gt)
-    bit_pred = logits_to_binary(y_pred)
+    # y_gt is already 0/1 labels (not logits), y_pred is logits (threshold at 0)
+    bit_gt = y_gt.float()  # [n_samples, n_gates] - already 0/1
+    bit_pred = logits_to_binary(y_pred)  # [n_samples, n_gates] - threshold logits at 0
 
     trial_metrics.avg_loss = avg_loss
     trial_metrics.val_acc = val_acc
-    trial_metrics.test_acc = calculate_match_rate(bit_gt, y_gt).item()
+    trial_metrics.test_acc = calculate_match_rate(bit_pred, bit_gt).item()
 
     # ===== SPD (if enabled) =====
     if run_spd:

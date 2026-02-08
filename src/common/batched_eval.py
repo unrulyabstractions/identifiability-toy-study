@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from .circuit import Circuit
     from .neural_model import MLP
 
-from .helpers import (
+from .metrics import (
     calculate_logit_similarity_batched,
     calculate_match_rate_batched,
     logits_to_binary,
@@ -145,46 +145,39 @@ def _get_model_weights(
 
 
 def _evaluate_subcircuits_chunk(
-    x: torch.Tensor,
-    weights: list[torch.Tensor],
-    biases: list[torch.Tensor],
-    layer_masks_list: list[torch.Tensor],
-) -> torch.Tensor:
+    x: torch.Tensor,  # [n_samples, input_size]
+    weights: list[torch.Tensor],  # each [out, in]
+    biases: list[torch.Tensor],  # each [out]
+    layer_masks_list: list[torch.Tensor],  # each [n_circuits, out, in]
+) -> torch.Tensor:  # [n_circuits, n_samples, 1]
     """
     Evaluate a chunk of subcircuits (internal helper).
 
     Args:
-        x: Input tensor [batch, input_size]
+        x: Input tensor [n_samples, input_size]
         weights: List of weight tensors per layer
         biases: List of bias tensors per layer
-        layer_masks_list: List of mask tensors [n_circuits_chunk, out, in] per layer
+        layer_masks_list: List of mask tensors [n_circuits, out, in] per layer
 
     Returns:
-        Tensor [n_circuits_chunk, batch, 1]
+        Tensor [n_circuits, n_samples, 1]
     """
     n_circuits = layer_masks_list[0].shape[0]
 
-    # Expand input for all circuits: [n_circuits, batch, input_size]
-    h = x.unsqueeze(0).expand(n_circuits, -1, -1)
+    h = x.unsqueeze(0).expand(n_circuits, -1, -1)  # [n_circuits, n_samples, input_size]
 
     for layer_idx in range(len(weights)):
         W = weights[layer_idx]  # [out, in]
         b = biases[layer_idx]  # [out]
+        layer_masks = layer_masks_list[layer_idx]  # [n_circuits, out, in]
 
-        # Get pre-stacked masks for this layer: [n_circuits, out, in]
-        layer_masks = layer_masks_list[layer_idx]
-
-        # Apply masked weights: W_eff[c] = W * mask[c]
         W_masked = W.unsqueeze(0) * layer_masks  # [n_circuits, out, in]
+        h = torch.bmm(h, W_masked.transpose(1, 2)) + b  # [n_circuits, n_samples, out]
 
-        # Batched linear: h @ W_masked.T + b
-        h = torch.bmm(h, W_masked.transpose(1, 2)) + b
-
-        # Apply activation (except last layer)
         if layer_idx < len(weights) - 1:
-            h = torch.nn.functional.relu(h)
+            h = torch.nn.functional.relu(h)  # [n_circuits, n_samples, hidden]
 
-    return h  # [n_circuits, batch, 1]
+    return h  # [n_circuits, n_samples, 1]
 
 
 def batch_evaluate_subcircuits(
@@ -393,17 +386,17 @@ def precompute_circuit_masks(
 
 
 def _compute_chunk_metrics(
-    y_chunk: torch.Tensor,
-    bit_target: torch.Tensor,
-    bit_pred: torch.Tensor,
-    best_pred: torch.Tensor,
-    y_pred: torch.Tensor,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    bit_chunk = logits_to_binary(y_chunk)
-    accuracies = calculate_match_rate_batched(bit_chunk, bit_target)
-    bit_sims = calculate_match_rate_batched(bit_chunk, bit_pred)
-    best_sims = bit_sims
-    logit_sims = calculate_logit_similarity_batched(y_pred, y_chunk)
+    y_chunk: torch.Tensor,  # [n_circuits, n_samples, 1]
+    bit_target: torch.Tensor,  # [n_samples, 1]
+    bit_pred: torch.Tensor,  # [n_samples, 1]
+    best_pred: torch.Tensor,  # [n_samples, 1]
+    y_pred: torch.Tensor,  # [n_samples, 1]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:  # each [n_circuits]
+    bit_chunk = logits_to_binary(y_chunk)  # [n_circuits, n_samples, 1]
+    accuracies = calculate_match_rate_batched(bit_chunk, bit_target)  # [n_circuits]
+    bit_sims = calculate_match_rate_batched(bit_chunk, bit_pred)  # [n_circuits]
+    best_sims = bit_sims  # [n_circuits]
+    logit_sims = calculate_logit_similarity_batched(y_pred, y_chunk)  # [n_circuits]
     return accuracies, logit_sims, bit_sims, best_sims
 
 
@@ -452,9 +445,10 @@ def batch_compute_metrics(
         y_pred = y_pred.to(device)
 
     # Precompute target values
-    bit_target = logits_to_binary(y_target)
-    bit_pred = logits_to_binary(y_pred)
-    best_pred = bit_pred
+    # y_target is already binary 0/1 (ground truth labels), y_pred is logits
+    bit_target = y_target.float()  # [n_samples, 1] - already 0/1
+    bit_pred = logits_to_binary(y_pred)  # [n_samples, 1] - threshold logits at 0
+    best_pred = bit_pred  # [n_samples, 1]
 
     # If small enough and precomputed masks available, use fast path
     if n_circuits <= max_batch_size:

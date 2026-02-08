@@ -9,29 +9,29 @@ from dataclasses import dataclass
 import torch
 
 from ..common.causal import Intervention, PatchShape
-from ..common.helpers import logits_to_binary
+from ..common.metrics import logits_to_binary
 
 
 @dataclass
 class CleanCorruptedPair:
     """A pair of clean and corrupted samples with their activations."""
 
-    x_clean: torch.Tensor
-    x_corrupted: torch.Tensor
-    y_clean: torch.Tensor
-    y_corrupted: torch.Tensor
-    act_clean: list[torch.Tensor]
-    act_corrupted: list[torch.Tensor]
+    x_clean: torch.Tensor  # [1, input_dim]
+    x_corrupted: torch.Tensor  # [1, input_dim]
+    y_clean: torch.Tensor  # [1, n_gates]
+    y_corrupted: torch.Tensor  # [1, n_gates]
+    act_clean: list[torch.Tensor]  # each [1, hidden]
+    act_corrupted: list[torch.Tensor]  # each [1, hidden]
 
 
 def create_clean_corrupted_data(
-    x: torch.Tensor,
-    y: torch.Tensor,
-    activations: list[torch.Tensor],
+    x: torch.Tensor,  # [N, input_dim]
+    y: torch.Tensor,  # [N, n_gates] - model logits
+    activations: list[torch.Tensor],  # each [N, hidden]
     n_pairs: int = 10,
 ) -> list[CleanCorruptedPair]:
     """
-    Create clean vs corrupted data pairs where outputs y MUST differ.
+    Create clean vs corrupted data pairs where model outputs MUST differ.
 
     For counterfactual analysis, we need pairs where:
     - Clean sample produces one output
@@ -39,7 +39,7 @@ def create_clean_corrupted_data(
 
     Args:
         x: Input data [N, input_dim]
-        y: Ground truth outputs [N, output_dim]
+        y: Model outputs (logits) [N, n_gates]
         activations: Activations from model forward pass
         n_pairs: Number of pairs to generate
 
@@ -53,7 +53,7 @@ def create_clean_corrupted_data(
         return pairs
 
     # Round y to get binary outputs for comparison
-    y_binary = logits_to_binary(y)
+    y_binary = logits_to_binary(y)  # [N, n_gates]
 
     # Find pairs with different outputs
     for i in range(min(n_pairs * 10, n_samples)):  # Try multiple times

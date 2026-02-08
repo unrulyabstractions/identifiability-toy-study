@@ -9,7 +9,7 @@ import torch
 
 from ..common.causal import InterventionEffect, PatchShape
 from ..common.circuit import CircuitStructure
-from ..common.helpers import logits_to_binary
+from ..common.metrics import logits_to_binary
 from ..common.neural_model import MLP
 from ..common.schemas import (
     CounterfactualEffect,

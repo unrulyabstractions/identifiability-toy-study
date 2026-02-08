@@ -11,7 +11,7 @@ These tests verify correctness by comparing:
 import numpy as np
 import pytest
 import torch
-from src.common.helpers import logits_to_binary
+from src.common.metrics import logits_to_binary
 
 from src.common.batched_eval import (
     batch_compute_metrics,
@@ -70,8 +70,9 @@ def sequential_compute_metrics(model, circuits, x, y_target, y_pred, gate_idx=0)
     bit_similarities = []
     best_similarities = []
 
-    bit_target = logits_to_binary(y_target)
-    bit_pred = logits_to_binary(y_pred)
+    # y_target is already binary 0/1 (ground truth), y_pred is logits
+    bit_target = y_target.float()  # [n_samples, 1] - already 0/1
+    bit_pred = logits_to_binary(y_pred)  # [n_samples, 1] - threshold logits at 0
 
     with torch.inference_mode():
         for circuit in circuits:

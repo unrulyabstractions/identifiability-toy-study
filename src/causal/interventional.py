@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from ..common.causal import Intervention, InterventionEffect, PatchShape
-from ..common.helpers import (
+from ..common.metrics import (
     calculate_logit_similarity,
     calculate_match_rate,
     calculate_mse,
@@ -23,19 +23,19 @@ from ..common.schemas import InterventionSample, PatchStatistics
 
 def calculate_intervention_effect(
     intervention: Intervention,
-    y_target: torch.Tensor,
-    y_proxy: torch.Tensor,
+    y_target: torch.Tensor,  # [n_samples, n_gates]
+    y_proxy: torch.Tensor,  # [n_samples, n_gates]
     target_activations: list = None,
     proxy_activations: list = None,
     original_target_activations: list = None,
     original_proxy_activations: list = None,
 ) -> InterventionEffect:
     """Calculate the effect of an intervention by comparing target and proxy outputs."""
-    bit_target = logits_to_binary(y_target).item()
-    bit_proxy = logits_to_binary(y_proxy).item()
-    logit_similarity = calculate_logit_similarity(y_target, y_proxy).item()
-    bit_similarity = calculate_match_rate(bit_target, bit_proxy).item()
-    best_similarity = bit_similarity  # same thing now
+    bit_target = logits_to_binary(y_target)  # [n_samples, n_gates]
+    bit_proxy = logits_to_binary(y_proxy)  # [n_samples, n_gates]
+    logit_similarity = calculate_logit_similarity(y_target, y_proxy).item()  # [] scalar
+    bit_similarity = calculate_match_rate(bit_target, bit_proxy).item()  # [] scalar
+    best_similarity = bit_similarity
 
     return InterventionEffect(
         intervention=intervention,
@@ -229,10 +229,10 @@ def _create_intervention_samples(
             iv_values.extend(vals.flatten().tolist())
 
         # Calculate per-sample metrics using helper functions
-        logit_sim = calculate_logit_similarity(effect.y_target, effect.y_proxy).item()
-        mse = calculate_mse(effect.y_target, effect.y_proxy).item()
-        bit_target = logits_to_binary(effect.y_target.mean()).item()
-        bit_proxy = logits_to_binary(effect.y_proxy.mean()).item()
+        logit_sim = calculate_logit_similarity(effect.y_target, effect.y_proxy).item()  # [] scalar
+        mse = calculate_mse(effect.y_target, effect.y_proxy).item()  # [] scalar
+        bit_target = logits_to_binary(effect.y_target.mean()).item()  # [] scalar -> int
+        bit_proxy = logits_to_binary(effect.y_proxy.mean()).item()  # [] scalar -> int
         bit_agree = bit_target == bit_proxy
 
         # Convert tensor activations to lists for JSON serialization

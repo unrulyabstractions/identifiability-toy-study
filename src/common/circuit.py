@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from .causal import Intervention, PatchShape
 from .grounding import Grounding, compute_local_tts, enumerate_tts
-from .helpers import calculate_logit_similarity_batched, logits_to_binary
+from .metrics import calculate_logit_similarity, logits_to_binary
 from .logic_gates import name_gate
 from .subcircuit import (
     NodePattern,
@@ -994,8 +994,8 @@ def find_circuits(
         All valid circuits found in the model.
     """
     # Make predictions with the model
-    model_predictions = model(x)
-    bit_model_pred = logits_to_binary(model_predictions)
+    model_predictions = model(x)  # [n_samples, n_gates]
+    bit_model_pred = logits_to_binary(model_predictions)  # [n_samples, n_gates]
 
     all_sks = enumerate_all_valid_circuit(
         model, min_sparsity=min_sparsity, use_tqdm=use_tqdm
@@ -1014,16 +1014,16 @@ def find_circuits(
         it = tqdm(it, total=len(all_sks), desc="Evaluating circuits")
     for i, circuit in it:
         # Make predictions with the current circuit
-        sk_predictions = model(x, intervention=circuit.to_intervention(model.device))
-        bit_sk_pred = logits_to_binary(sk_predictions)
+        sk_predictions = model(x, intervention=circuit.to_intervention(model.device))  # [n_samples, n_gates]
+        bit_sk_pred = logits_to_binary(sk_predictions)  # [n_samples, n_gates]
 
         # Compute the accuracy with respect to the task
         correct_predictions = bit_sk_pred.eq(y).all(dim=1)
         accuracy = correct_predictions.sum().item() / y.size(0)
 
         # Compute similarity with model prediction based on logits
-        logit_similarity = calculate_logit_similarity_batched(
-            model_predictions, sk_predictions
+        logit_similarity = calculate_logit_similarity(
+            model_predictions, sk_predictions  # both [n_samples, n_gates]
         ).item()
 
         # Compute similarity with model prediction

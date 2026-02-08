@@ -2,14 +2,16 @@ import random
 import time
 from typing import Optional
 
-import numpy as np
 import torch
 
 from .logic_gates import (
     ALL_LOGIC_GATES,
     generate_noisy_multi_gate_data,
 )
-from .neural_model import MLP
+from .metrics import (
+    calculate_match_rate,
+    logits_to_binary,
+)
 from .profiler import profile_fn
 from .schemas import (
     DataParams,
@@ -20,60 +22,6 @@ from .schemas import (
     TrialData,
     TrialResult,
 )
-
-
-@torch.no_grad()
-def calculate_match_rate(y_pred, y_gt):
-    """Compare two binary (0/1) tensors. Callers must threshold first."""
-    y_pred = y_pred.reshape(-1)
-    y_gt = y_gt.reshape(-1)
-    return y_pred.eq(y_gt).float().mean()
-
-
-@torch.no_grad()
-def calculate_match_rate_batched(
-    y_preds: torch.Tensor, y_gt: torch.Tensor
-) -> np.ndarray:
-    """y_preds has leading batch dim, y_gt does not."""
-    return y_preds.eq(y_gt.unsqueeze(0)).float().mean(dim=(1, 2)).cpu().numpy()
-
-
-@torch.no_grad()
-def logits_to_binary(y: torch.Tensor) -> torch.Tensor:
-    """Convert raw logits to binary predictions. Decision boundary at 0."""
-    return (y > 0).float()
-
-
-@torch.no_grad()
-def calculate_mse(y_target: torch.Tensor, y_proxy: torch.Tensor) -> torch.Tensor:
-    """Calculate mean squared error between two tensors."""
-    return ((y_target - y_proxy) ** 2).mean()
-
-
-@torch.no_grad()
-def calculate_logit_similarity(
-    y_target: torch.Tensor, y_proxy: torch.Tensor
-) -> torch.Tensor:
-    """R²-like similarity: 1.0 = perfect match, 0.0 = predicting the mean."""
-    mse = calculate_mse(y_target, y_proxy)
-    var = y_target.var().clamp(min=1e-8)
-    return 1 - mse / var
-
-
-@torch.no_grad()
-def calculate_logit_similarity_batched(
-    y_target: torch.Tensor, y_proxies: torch.Tensor
-) -> np.ndarray:
-    """Batched R²: y_proxies has leading batch dim, y_target does not."""
-    mse = ((y_proxies - y_target.unsqueeze(0)) ** 2).mean(dim=(1, 2))
-    var = y_target.var().clamp(min=1e-8)
-    return (1 - mse / var).detach().cpu().numpy()
-
-
-@torch.no_grad()
-def calculate_best_match_rate(y_target, y_proxy):
-    """Calculate match rate from raw logits."""
-    return calculate_match_rate(logits_to_binary(y_target), logits_to_binary(y_proxy))
 
 
 def update_status_fx(trial_result: TrialResult, logger=None, device: str = "cpu"):
@@ -228,6 +176,9 @@ def train_model(
     input_size: int = 2,
     output_size: int = 1,
 ):
+    # Import here to avoid circular import (neural_model imports from helpers)
+    from .neural_model import MLP
+
     model = MLP(
         hidden_sizes=([model_params.width] * model_params.depth),
         input_size=input_size,

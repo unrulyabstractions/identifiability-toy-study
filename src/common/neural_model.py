@@ -13,6 +13,7 @@ from torch import optim
 from torch.utils.data import DataLoader, TensorDataset
 
 from .causal import Intervention, PatchShape
+from .metrics import calculate_match_rate, logits_to_binary
 
 if TYPE_CHECKING:
     from .circuit import Circuit
@@ -570,6 +571,7 @@ class MLP(nn.Module):
         bad_epochs = 0
         val_acc = 0.0
 
+        # Promote sparsity
         # Training loop
         for epoch in range(epochs):
             self.train()
@@ -582,8 +584,6 @@ class MLP(nn.Module):
                 outputs = self(inputs)
 
                 loss = criterion(outputs, targets)
-
-                # Promote sparsity
                 if l1_lambda > 0:
                     l1_loss = sum(p.abs().sum() for p in self.parameters())
                     loss = loss + l1_lambda * l1_loss
@@ -605,19 +605,13 @@ class MLP(nn.Module):
                 self.eval()
                 with torch.no_grad():
                     train_logits = self(x.to(self.device))
-                    train_predictions = (train_logits > 0).float()
-                    correct_predictions_train = train_predictions.eq(
-                        y.to(self.device)
-                    ).all(dim=1)
-                    train_acc = correct_predictions_train.sum().item() / y.size(0)
+                    train_predictions = logits_to_binary(train_logits)
+                    train_acc = calculate_match_rate(train_predictions, y).item()
 
                     val_logits = self(x_val.to(self.device))
                     val_loss = criterion(val_logits, y_val.to(self.device)).item()
-                    val_predictions = (val_logits > 0).float()
-                    correct_predictions_val = val_predictions.eq(
-                        y_val.to(self.device)
-                    ).all(dim=1)
-                    val_acc = correct_predictions_val.sum().item() / y_val.size(0)
+                    val_predictions = logits_to_binary(val_logits)
+                    val_acc = calculate_match_rate(val_predictions, y_val).item()
 
                     logger.info(
                         f"Epoch [{epoch + 1}/{epochs}], "
