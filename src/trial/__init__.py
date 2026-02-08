@@ -1,5 +1,5 @@
-"""Trial module - runs a single training and analysis trial."""
+"""Trial execution pipeline."""
 
-from .runner import run_trial
+from src.auto_export import auto_export
 
-__all__ = ["run_trial"]
+__all__ = auto_export(__file__, __name__, globals())

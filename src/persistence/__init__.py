@@ -1,43 +1,5 @@
-"""
-Persistence module for saving and loading experiment results.
+"""Persistence layer for saving and loading results."""
 
-See README.md in this folder for detailed documentation of the folder structure.
+from src.auto_export import auto_export
 
-Changes to this module should be reflected in README.md.
-"""
-
-from .load import (
-    get_all_runs,
-    get_trial_dirs,
-    load_config,
-    load_decomposed_model,
-    load_experiment,
-    load_model,
-    load_results,
-    load_spd_analysis,
-    load_spd_estimate,
-    load_tensors,
-    load_trial_circuits,
-    load_trial_metrics,
-    load_trial_profiling,
-    load_trial_setup,
-)
-from .save import save_results
-
-__all__ = [
-    "get_all_runs",
-    "get_trial_dirs",
-    "load_config",
-    "load_decomposed_model",
-    "load_experiment",
-    "load_model",
-    "load_results",
-    "load_spd_analysis",
-    "load_spd_estimate",
-    "load_tensors",
-    "load_trial_circuits",
-    "load_trial_metrics",
-    "load_trial_profiling",
-    "load_trial_setup",
-    "save_results",
-]
+__all__ = auto_export(__file__, __name__, globals())
