@@ -14,9 +14,7 @@ from .common.schemas import (
 from .common.utils import (
     set_seeds,
 )
-from .trial import (
-    run_trial,
-)
+from .trial import run_trial
 
 """
 An experiment has many runs. Each run is called a trial

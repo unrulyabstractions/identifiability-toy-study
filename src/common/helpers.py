@@ -9,6 +9,7 @@ from .logic_gates import (
     generate_noisy_multi_gate_data,
 )
 from .neural_model import MLP
+from .profiler import profile_fn
 from .schemas import (
     DataParams,
     Dataset,
@@ -182,6 +183,7 @@ def generate_trial_data(
     )
 
 
+@profile_fn("Train Model")
 def train_model(
     train_params: TrainParams,
     model_params: ModelParams,

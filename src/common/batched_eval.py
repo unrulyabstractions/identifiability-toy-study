@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 from .circuit import enumerate_edge_variants
+from .profiler import profile_fn
 
 if TYPE_CHECKING:
     from .circuit import Circuit
@@ -416,6 +417,7 @@ def _compute_chunk_metrics(
     return accuracies, logit_sims, bit_sims, best_sims
 
 
+@profile_fn("Gate Metrics (Batched)")
 def batch_compute_metrics(
     model: "MLP",
     circuits: list["Circuit"],
@@ -577,6 +579,7 @@ def _find_best_variant(
     )
 
 
+@profile_fn("Edge Variants")
 def batch_evaluate_edge_variants(
     model: "MLP",
     base_circuits: list["Circuit"],

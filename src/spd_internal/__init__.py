@@ -10,21 +10,28 @@ Re-exports all public functions for convenience.
 # Decomposition functions
 from .decomposition import SimpleDataset, decompose_mlp
 
-# Analysis functions
-from .analysis import (
-    ClusterInfo,
-    SPDAnalysisResult,
+# Schema classes
+from .schemas import ClusterInfo, SPDAnalysisResult
+
+# Importance functions
+from .importance import compute_coactivation_matrix, compute_importance_matrix
+
+# Clustering functions
+from .clustering import cluster_components_hierarchical, detect_dead_components
+
+# Validation functions
+from .validation import compute_validation_metrics
+
+# Cluster analysis functions
+from .cluster_analysis import (
     analyze_all_clusters,
-    analyze_and_visualize_spd,
     analyze_cluster_faithfulness,
     analyze_cluster_robustness,
-    cluster_components_hierarchical,
-    compute_coactivation_matrix,
-    compute_importance_matrix,
-    compute_validation_metrics,
-    detect_dead_components,
     map_clusters_to_functions,
-    run_spd_analysis,
+)
+
+# Visualization functions
+from .visualization import (
     visualize_ci_histograms,
     visualize_coactivation_matrix,
     visualize_components_as_circuits,
@@ -34,6 +41,9 @@ from .analysis import (
     visualize_summary,
     visualize_uv_matrices,
 )
+
+# Main entry points
+from .analysis import analyze_and_visualize_spd, run_spd_analysis
 
 # Subcircuit estimation functions
 from .subcircuits import (

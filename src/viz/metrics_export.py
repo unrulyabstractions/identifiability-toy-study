@@ -20,7 +20,7 @@ from ..common.schemas import FaithfulnessCategoryScore, FaithfulnessSummary
 
 
 def compute_observational_metrics(robustness: "RobustnessMetrics") -> dict:
-    """Compute ObservationalMetrics from RobustnessMetrics with nested structure.
+    """Compute observational metrics dict from RobustnessMetrics with nested structure.
 
     Returns nested dict structure:
     {

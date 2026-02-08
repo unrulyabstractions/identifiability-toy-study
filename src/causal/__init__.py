@@ -41,7 +41,7 @@ from .data_generation import (
 # Observational analysis functions
 from .observational import (
     _evaluate_samples,
-    calculate_robustness_metrics,
+    calculate_observational_metrics,
 )
 
 # Interventional analysis functions
@@ -86,7 +86,7 @@ __all__ = [
     "_generate_ood_bimodal_samples",
     # Observational
     "_evaluate_samples",
-    "calculate_robustness_metrics",
+    "calculate_observational_metrics",
     # Interventional
     "calculate_intervention_effect",
     "_sample_from_value_range",

@@ -1,0 +1,172 @@
+"""Main trial runner - orchestrates the full trial pipeline."""
+
+from typing import Any
+
+import torch
+
+from ..common.helpers import calculate_match_rate, train_model, update_status_fx
+from ..common.logic_gates import ALL_LOGIC_GATES
+from ..common.parallelization import get_eval_device
+from ..common.schemas import TrialData, TrialResult, TrialSetup
+from ..common.utils import set_seeds
+
+from .gate_analysis import analyze_gate
+from .phases import (
+    compute_activations_phase,
+    enumerate_circuits_phase,
+    precompute_masks_phase,
+    spd_phase,
+)
+
+
+def run_trial(
+    setup: TrialSetup,
+    data: TrialData,
+    device: str,
+    spd_device: str = "cpu",
+    logger: Any = None,
+    debug: bool = False,
+    run_spd: bool = False,
+) -> TrialResult:
+    """Run a complete training and analysis trial.
+
+    This is the main entry point for running a single trial. It:
+    1. Trains an MLP model on the provided data
+    2. Computes activations and metrics
+    3. Optionally runs SPD decomposition
+    4. Enumerates and evaluates all subcircuits
+    5. Runs robustness and faithfulness analysis on best subcircuits
+
+    Args:
+        setup: Trial configuration (model params, training params, etc.)
+        data: Training, validation, and test data
+        device: Main compute device (e.g., "cpu", "cuda", "mps")
+        spd_device: Device for SPD decomposition
+        logger: Optional logger for status updates
+        debug: Enable debug output
+        run_spd: Whether to run SPD decomposition
+
+    Returns:
+        TrialResult containing model, metrics, and analysis results
+    """
+    # This also sets deterministic behavior
+    set_seeds(setup.seed)
+
+    trial_result = TrialResult(
+        setup=setup,
+    )
+
+    trial_metrics = trial_result.metrics
+    update_status = update_status_fx(trial_result, logger, device=device)
+
+    # ===== Train Model =====
+    update_status("STARTED_MLP_TRAINING")
+    gate_names = setup.model_params.logic_gates
+    input_size = ALL_LOGIC_GATES[gate_names[0]].n_inputs
+    output_size = len(gate_names)
+
+    # train_model has @profile_fn("Train Model") directly in helpers.py
+    model, avg_loss, val_acc = train_model(
+        train_params=setup.train_params,
+        model_params=setup.model_params,
+        data=data,
+        device=device,
+        logger=logger,
+        debug=debug,
+        input_size=input_size,
+        output_size=output_size,
+    )
+    if model is None:
+        return trial_result
+    trial_result.model = model
+    gate_models = model.separate_into_k_mlps()
+    update_status("ENDED_MLP_TRAINING")
+
+    # ===== Compute Activations =====
+    act_data = compute_activations_phase(model, data, device, input_size)
+    x = act_data["x"]
+    y_gt = act_data["y_gt"]
+    y_pred = act_data["y_pred"]
+    activations = act_data["activations"]
+
+    trial_result.test_x = x
+    trial_result.test_y = y_gt
+    trial_result.test_y_pred = y_pred.detach().clone()
+    trial_result.activations = activations
+    trial_result.canonical_activations = act_data["canonical_activations"]
+    trial_result.mean_activations_by_range = act_data["mean_activations_by_range"]
+    trial_result.layer_weights = act_data["layer_weights"]
+    trial_result.layer_biases = act_data["layer_biases"]
+
+    bit_gt = torch.round(y_gt)
+    bit_pred = torch.round(y_pred)
+
+    trial_metrics.avg_loss = avg_loss
+    trial_metrics.val_acc = val_acc
+    trial_metrics.test_acc = calculate_match_rate(torch.round(y_pred), y_gt).item()
+
+    # ===== SPD (if enabled) =====
+    if run_spd:
+        update_status("STARTED_SPD")
+        spd_phase(
+            setup, trial_result, model, x, y_pred, spd_device, input_size, gate_names
+        )
+        update_status("FINISHED_SPD")
+
+    # ===== Circuit Finding =====
+    parallel_config = setup.parallel_config
+    update_status("STARTED_CIRCUITS")
+    subcircuits, subcircuit_structures = enumerate_circuits_phase(
+        model, parallel_config
+    )
+    update_status("FINISHED_CIRCUITS")
+
+    trial_result.subcircuits = [
+        {"idx": idx, **s.to_dict()} for idx, s in enumerate(subcircuits)
+    ]
+    trial_result.subcircuit_structure_analysis = [
+        {"idx": idx, **s.to_dict()} for idx, s in enumerate(subcircuit_structures)
+    ]
+    update_status("FINISHED_CIRCUIT_FINDING")
+
+    # Determine evaluation device
+    eval_device = get_eval_device(parallel_config, device)
+
+    # Precompute circuit masks
+    precomputed_masks_per_gate = {}
+    if parallel_config.precompute_masks:
+        precomputed_masks_per_gate = precompute_masks_phase(
+            subcircuits, model, gate_names, eval_device, output_size
+        )
+
+    # ===== Gate Analysis =====
+    update_status("STARTED_GATE_ANALYSIS")
+    for gate_idx in range(len(gate_models)):
+        gate_name = gate_names[gate_idx]
+        gate_model = gate_models[gate_idx]
+
+        analyze_gate(
+            gate_idx=gate_idx,
+            gate_name=gate_name,
+            gate_model=gate_model,
+            gate_models=gate_models,
+            model=model,
+            y_pred=y_pred,
+            bit_gt=bit_gt,
+            bit_pred=bit_pred,
+            x=x,
+            activations=activations,
+            subcircuits=subcircuits,
+            subcircuit_structures=subcircuit_structures,
+            precomputed_masks_per_gate=precomputed_masks_per_gate,
+            parallel_config=parallel_config,
+            setup=setup,
+            device=device,
+            eval_device=eval_device,
+            update_status=update_status,
+            trial_metrics=trial_metrics,
+        )
+
+    update_status("FINISHED_GATE_ANALYSIS")
+    update_status("SUCCESSFUL_TRIAL")
+    return trial_result

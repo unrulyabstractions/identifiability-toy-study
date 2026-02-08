@@ -106,14 +106,14 @@ def _evaluate_samples(
     return results
 
 
-def calculate_robustness_metrics(
+def calculate_observational_metrics(
     subcircuit: MLP,
     full_model: MLP,
     n_samples_per_base: int = 100,
     device: str = "cpu",
 ) -> RobustnessMetrics:
     """
-    Calculate robustness metrics by perturbing BOTH gate_model and subcircuit the SAME way.
+    Calculate observational metrics by perturbing BOTH gate_model and subcircuit the SAME way.
 
     Generates many samples with varying perturbation magnitudes:
     - Noise: Gaussian noise with std uniformly sampled from [0.01, 0.5]
