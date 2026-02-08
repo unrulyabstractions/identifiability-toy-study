@@ -451,7 +451,7 @@ def visualize_robustness_curves(
                 if lo <= x < hi or (i == n_bins - 1 and x == hi)
             ]
             if bin_samples:
-                # Use pre-computed agreement fields from RobustnessSample
+                # Use pre-computed agreement fields from ObservationalSample
                 bit_agrees = [s.agreement_bit for s, _ in bin_samples]
                 best_agrees = [s.agreement_best for s, _ in bin_samples]
                 # Logit differences

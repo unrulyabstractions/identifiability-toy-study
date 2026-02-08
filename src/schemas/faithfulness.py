@@ -1,25 +1,13 @@
-"""Faithfulness-related schema classes.
-
-Contains all faithfulness analysis dataclasses:
-- PatchStatistics: Statistics for a single patch's intervention effects
-- CounterfactualEffect: Result of a single counterfactual test (2x2 matrix)
-- ObservationalMetrics: Detailed observational robustness data + summary
-- InterventionalMetrics: Detailed interventional patching data
-- CounterfactualMetrics: Detailed counterfactual effects data
-- FaithfulnessMetrics: Comprehensive faithfulness metrics (combines all three)
-- ObservationalSummary: Aggregated observational summary for result.json
-- InterventionalSummary: Aggregated interventional summary for result.json
-- CounterfactualSummary: Aggregated counterfactual summary for result.json
-- FaithfulnessCategoryScore: Score and epsilon for a single category
-- FaithfulnessSummary: Summary of all faithfulness metrics
-"""
+"""Faithfulness-related schema classes."""
 
 from dataclasses import dataclass, field
 
-from .samples import CounterfactualSample, InterventionSample, RobustnessSample
+from .samples import CounterfactualSample, InterventionalSample, ObservationalSample
 from .schema_class import SchemaClass
 
-# Alias for naming consistency with InterventionSample, ObservationalSample
+# Alias for naming consistency with InterventionalSample, ObservationalSample
+ObservationalEffect = ObservationalSample
+InterventionalEffect = InterventionalSample
 CounterfactualEffect = CounterfactualSample
 
 # =============================================================================
@@ -40,7 +28,7 @@ class PatchStatistics(SchemaClass):
     n_interventions: int = 0
 
     # Individual samples for visualization (optional, may be large)
-    samples: list[InterventionSample] = field(default_factory=list)
+    samples: list[InterventionalSample] = field(default_factory=list)
 
 
 # =============================================================================
@@ -57,8 +45,8 @@ class ObservationalMetrics(SchemaClass):
     """
 
     # All samples (for scatter plots by actual noise magnitude)
-    noise_samples: list[RobustnessSample] = field(default_factory=list)
-    ood_samples: list[RobustnessSample] = field(default_factory=list)
+    noise_samples: list[ObservationalSample] = field(default_factory=list)
+    ood_samples: list[ObservationalSample] = field(default_factory=list)
 
     # Noise perturbation metrics
     noise_gate_accuracy: float = 0.0
@@ -131,18 +119,18 @@ class CounterfactualMetrics(SchemaClass):
     """
 
     # Denoising experiments (run corrupted, patch with clean)
-    sufficiency_effects: list[CounterfactualEffect] = field(
+    sufficiency_effects: list[CounterfactualSample] = field(
         default_factory=list
     )  # Denoise in-circuit
-    completeness_effects: list[CounterfactualEffect] = field(
+    completeness_effects: list[CounterfactualSample] = field(
         default_factory=list
     )  # Denoise out-circuit
 
     # Noising experiments (run clean, patch with corrupted)
-    necessity_effects: list[CounterfactualEffect] = field(
+    necessity_effects: list[CounterfactualSample] = field(
         default_factory=list
     )  # Noise in-circuit
-    independence_effects: list[CounterfactualEffect] = field(
+    independence_effects: list[CounterfactualSample] = field(
         default_factory=list
     )  # Noise out-circuit
 

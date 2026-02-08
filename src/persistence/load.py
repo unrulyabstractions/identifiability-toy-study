@@ -20,11 +20,11 @@ from src.schemas import (
     ExperimentResult,
     FaithfulnessMetrics,
     GateMetrics,
-    InterventionSample,
+    InterventionalSample,
     InterventionalMetrics,
     ObservationalMetrics,
     PatchStatistics,
-    RobustnessSample,
+    ObservationalSample,
     SubcircuitMetrics,
     TrialResult,
     TrialSetup,
@@ -330,8 +330,8 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                 obs_data = f.get("observational")
                 observational = None
                 if obs_data:
-                    noise = [RobustnessSample(**s) for s in obs_data.get("noise_samples", [])]
-                    ood = [RobustnessSample(**s) for s in obs_data.get("ood_samples", [])]
+                    noise = [ObservationalSample(**s) for s in obs_data.get("noise_samples", [])]
+                    ood = [ObservationalSample(**s) for s in obs_data.get("ood_samples", [])]
                     observational = ObservationalMetrics(
                         noise_samples=noise,
                         ood_samples=ood,
@@ -350,28 +350,28 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                     # Reconstruct PatchStatistics with samples
                     in_stats = {}
                     for pk, ps in interv_data.get("in_circuit_stats", {}).items():
-                        samples = [InterventionSample(**s) for s in ps.get("samples", [])]
+                        samples = [InterventionalSample(**s) for s in ps.get("samples", [])]
                         in_stats[pk] = PatchStatistics(
                             mean_bit_similarity=ps.get("mean_bit_similarity", 0),
                             samples=samples,
                         )
                     out_stats = {}
                     for pk, ps in interv_data.get("out_circuit_stats", {}).items():
-                        samples = [InterventionSample(**s) for s in ps.get("samples", [])]
+                        samples = [InterventionalSample(**s) for s in ps.get("samples", [])]
                         out_stats[pk] = PatchStatistics(
                             mean_bit_similarity=ps.get("mean_bit_similarity", 0),
                             samples=samples,
                         )
                     in_stats_ood = {}
                     for pk, ps in interv_data.get("in_circuit_stats_ood", {}).items():
-                        samples = [InterventionSample(**s) for s in ps.get("samples", [])]
+                        samples = [InterventionalSample(**s) for s in ps.get("samples", [])]
                         in_stats_ood[pk] = PatchStatistics(
                             mean_bit_similarity=ps.get("mean_bit_similarity", 0),
                             samples=samples,
                         )
                     out_stats_ood = {}
                     for pk, ps in interv_data.get("out_circuit_stats_ood", {}).items():
-                        samples = [InterventionSample(**s) for s in ps.get("samples", [])]
+                        samples = [InterventionalSample(**s) for s in ps.get("samples", [])]
                         out_stats_ood[pk] = PatchStatistics(
                             mean_bit_similarity=ps.get("mean_bit_similarity", 0),
                             samples=samples,

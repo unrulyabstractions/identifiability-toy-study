@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from src.model import Intervention, InterventionEffect, MLP, PatchShape
-from src.schemas import InterventionSample, PatchStatistics
+from src.schemas import InterventionalSample, PatchStatistics
 from src.tensor_ops import (
     calculate_best_match_rate,
     calculate_logit_similarity,
@@ -202,8 +202,8 @@ def calculate_patches_causal_effect(
 def _create_intervention_samples(
     patch_key: str,
     effects: list[InterventionEffect],
-) -> list[InterventionSample]:
-    """Create InterventionSample objects from InterventionEffect list.
+) -> list[InterventionalSample]:
+    """Create InterventionalSample objects from InterventionEffect list.
 
     IMPORTANT: Activations from InterventionEffect are converted to lists
     so visualization code NEVER needs to run models. Visualization is READ-ONLY.
@@ -259,7 +259,7 @@ def _create_intervention_samples(
             ]
 
         samples.append(
-            InterventionSample(
+            InterventionalSample(
                 patch_key=patch_key,
                 patch_layer=patch_layer,
                 patch_indices=patch_indices,

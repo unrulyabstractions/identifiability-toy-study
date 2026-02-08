@@ -9,7 +9,7 @@ We compare:
 import torch
 
 from src.model import MLP
-from src.schemas import ObservationalMetrics, RobustnessSample, SampleType
+from src.schemas import ObservationalMetrics, ObservationalSample, SampleType
 from src.tensor_ops import calculate_mse, logits_to_binary
 
 from .perturbations import (
@@ -27,7 +27,7 @@ def _evaluate_samples(
     subcircuit: MLP,
     samples: list[tuple[torch.Tensor, torch.Tensor, float, str]],
     device: str,
-) -> list[RobustnessSample]:
+) -> list[ObservationalSample]:
     """Evaluate gate_model and subcircuit on the same perturbed inputs.
 
     Pre-computes activations for circuit visualization (no model runs during viz).
@@ -80,7 +80,7 @@ def _evaluate_samples(
         sc_acts_list = [a.squeeze(0).tolist() for a in sc_acts]
 
         results.append(
-            RobustnessSample(
+            ObservationalSample(
                 input_values=[perturbed[0].item(), perturbed[1].item()],
                 base_input=[base_input[0].item(), base_input[1].item()],
                 noise_magnitude=magnitude,

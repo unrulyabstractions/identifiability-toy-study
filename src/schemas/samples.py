@@ -1,9 +1,10 @@
-"""Sample schema classes for robustness and intervention testing.
+"""Sample schema classes for observational and interventional testing.
 
 Contains sample dataclasses for storing test results:
-- InterventionSample: Result of a single intervention test
-- RobustnessSample: Result of a single robustness test (a.k.a. ObservationalSample)
-- SampleType: Enum for robustness sample types
+- ObservationalSample: Result of a single observational/robustness test
+- InterventionalSample: Result of a single intervention test
+- CounterfactualSample: Result of a single counterfactual test
+- SampleType: Enum for sample types
 """
 
 from dataclasses import dataclass, field
@@ -71,13 +72,9 @@ class ObservationalSample(SchemaClass):
     subcircuit_activations: list[list[float]] = field(default_factory=list)
 
 
-# Alias for semantic clarity - RobustnessSample can also be called ObservationalSample
-RobustnessSample = ObservationalSample
-
-
 @dataclass
-class InterventionSample(SchemaClass):
-    """Result of a single intervention test (like RobustnessSample for faithfulness).
+class InterventionalSample(SchemaClass):
+    """Result of a single intervention test.
 
     NOTE: Activations are pre-computed here so visualization code
     NEVER needs to run models. Visualization is READ-ONLY.
