@@ -366,10 +366,6 @@ def visualize_faithfulness_intervention_effects(
     nec_cf = faithfulness.necessity_effects or []
     ind_cf = faithfulness.independence_effects or []
 
-    # Legacy fallback for old data
-    out_cf = getattr(faithfulness, 'out_circuit_effects', []) or []
-    in_cf = getattr(faithfulness, 'in_circuit_effects', []) or []
-
     # Build per-node scores from intervention stats (bit similarity)
     # Key: (layer, node_idx) -> score
     def _build_node_scores(stats_dict):
@@ -535,7 +531,7 @@ def visualize_faithfulness_intervention_effects(
         paths["counterfactual/counterfact_summary"] = path
 
     # === 4. Per-Input Visualizations (split into denoising and noising) ===
-    if suff_cf or comp_cf or nec_cf or ind_cf or out_cf or in_cf:
+    if suff_cf or comp_cf or nec_cf or ind_cf:
         base_to_key = {"(0, 0)": "0_0", "(0, 1)": "0_1", "(1, 0)": "1_0", "(1, 1)": "1_1"}
 
         # Group counterfactuals by clean_input
@@ -555,20 +551,6 @@ def visualize_faithfulness_intervention_effects(
                 key = base_to_key.get(input_str)
                 if key:
                     cf_by_input[key][score_type].append(e.faithfulness_score)
-
-        # Legacy fallback
-        if not suff_cf and out_cf:
-            for e in out_cf:
-                input_str = f"({int(e.clean_input[0])}, {int(e.clean_input[1])})"
-                key = base_to_key.get(input_str)
-                if key:
-                    cf_by_input[key]["independence"].append(e.faithfulness_score)
-        if not nec_cf and in_cf:
-            for e in in_cf:
-                input_str = f"({int(e.clean_input[0])}, {int(e.clean_input[1])})"
-                key = base_to_key.get(input_str)
-                if key:
-                    cf_by_input[key]["necessity"].append(e.faithfulness_score)
 
         # Need layer_sizes for per-input figures
         if 'layer_sizes' not in dir():

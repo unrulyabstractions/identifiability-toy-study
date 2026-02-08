@@ -9,7 +9,7 @@ This module provides functions for:
 - Counterfactual Analysis: Compare clean vs corrupted sample behavior
 - Metrics: Comprehensive faithfulness metrics computation
 
-All public functions are re-exported here for backward compatibility.
+All public functions are re-exported here for convenient imports.
 """
 
 # Scoring functions

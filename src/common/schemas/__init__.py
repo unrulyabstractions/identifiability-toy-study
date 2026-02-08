@@ -1,12 +1,9 @@
 """Schema classes for the identifiability toy study.
 
 This module provides all dataclass schemas used throughout the codebase.
-All classes are re-exported here for backwards compatibility with existing imports.
 
 Usage:
     from src.common.schemas import TrialResult, ExperimentConfig, ...
-    # or
-    from .common.schemas import TrialResult, ExperimentConfig, ...
 """
 
 # Base class
@@ -45,7 +42,6 @@ from .metrics import (
     ProfilingData,
     ProfilingEvent,
     SubcircuitMetrics,
-    TrialMetrics,
 )
 
 # Result classes
@@ -64,7 +60,7 @@ from .samples import (
     SampleType,
 )
 
-# Re-export generate_spd_sweep_configs from its new location for backwards compatibility
+# Utilities
 from src.spd_internal.config import generate_spd_sweep_configs
 
 __all__ = [
@@ -84,7 +80,6 @@ __all__ = [
     "SubcircuitMetrics",
     "GateMetrics",
     "Metrics",
-    "TrialMetrics",
     "ProfilingEvent",
     "ProfilingData",
     # Samples
@@ -107,6 +102,6 @@ __all__ = [
     "TrialData",
     "TrialResult",
     "ExperimentResult",
-    # Utilities (backwards compat)
+    # Utilities
     "generate_spd_sweep_configs",
 ]

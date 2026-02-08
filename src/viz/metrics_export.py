@@ -14,7 +14,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..common.schemas import FaithfulnessMetrics, RobustnessMetrics, TrialMetrics
+    from ..common.schemas import FaithfulnessMetrics, Metrics, RobustnessMetrics
 
 from ..common.schemas import FaithfulnessCategoryScore, FaithfulnessSummary
 
@@ -492,7 +492,7 @@ def _compute_subcircuit_scores(
 def save_gate_summary(
     gate_name: str,
     gate_dir: str,
-    metrics: "TrialMetrics",
+    metrics: "Metrics",
 ) -> str:
     """Save summary.json for a specific gate.
 

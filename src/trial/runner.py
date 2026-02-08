@@ -9,7 +9,6 @@ from ..common.logic_gates import ALL_LOGIC_GATES
 from ..common.parallelization import get_eval_device
 from ..common.schemas import TrialData, TrialResult, TrialSetup
 from ..common.utils import set_seeds
-
 from .gate_analysis import analyze_gate
 from .phases import (
     compute_activations_phase,

@@ -3,7 +3,7 @@
 Contains metric-related dataclasses:
 - SubcircuitMetrics: Metrics for individual subcircuits
 - GateMetrics: Metrics for logic gates
-- Metrics: Overall trial metrics (aliased as TrialMetrics for backwards compat)
+- Metrics: Overall trial metrics
 - ProfilingEvent: Single profiling event with timing
 - ProfilingData: Complete profiling data for a trial
 """
@@ -78,7 +78,3 @@ class Metrics(SchemaClass):
     per_gate_bests_faith: dict[str, list["FaithfulnessMetrics"]] = field(
         default_factory=lambda: defaultdict(list)
     )
-
-
-# Alias for backwards compatibility - Metrics is sometimes referred to as TrialMetrics
-TrialMetrics = Metrics

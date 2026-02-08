@@ -133,7 +133,6 @@ def spd_phase(
         with profile(f"spd_mlp_sc_{config_id}"):
             estimate = estimate_spd_subcircuits(
                 decomposed_model=decomposed,
-                target_model=model,
                 n_inputs=input_size,
                 gate_names=gate_names,
                 device=spd_device,

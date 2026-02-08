@@ -22,7 +22,6 @@ from .analysis import (
     map_clusters_to_functions,
 )
 
-# Re-export persistence functions for backwards compatibility
 from .persistence import load_spd_estimate, save_spd_estimate
 
 if TYPE_CHECKING:
@@ -46,7 +45,6 @@ class SPDSubcircuitEstimate:
 
 def estimate_spd_subcircuits(
     decomposed_model: "DecomposedMLP",
-    target_model: "MLP" = None,
     n_inputs: int = 2,
     gate_names: list[str] = None,
     device: str = "cpu",
@@ -62,7 +60,6 @@ def estimate_spd_subcircuits(
 
     Args:
         decomposed_model: Result from decompose_mlp()
-        target_model: Original MLP (unused, kept for API compatibility)
         n_inputs: Number of input dimensions
         gate_names: Names of gates in the model
         device: Device for computation

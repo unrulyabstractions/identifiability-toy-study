@@ -22,10 +22,10 @@ from .base import SchemaClass
 
 @dataclass
 class DataParams(SchemaClass):
-    n_samples_train: int = 2048
-    n_samples_val: int = 128
-    n_samples_test: int = 128
-    noise_std: float = 0.15
+    n_samples_train: int = 2**14
+    n_samples_val: int = 2**10
+    n_samples_test: int = 2**10
+    noise_std: float = 0.2
     skewed_distribution: bool = False
 
 
@@ -34,6 +34,64 @@ class ModelParams(SchemaClass):
     logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
     width: int = 3
     depth: int = 2
+
+
+@dataclass
+class TrainParams(SchemaClass):
+    learning_rate: float = 0.001
+    batch_size: int = 2**12
+    epochs: int = 4000
+    val_frequency: int = 1
+
+
+@dataclass
+class IdentifiabilityConstraints(SchemaClass):
+    # Max deviation from bit_similarity=1.0 to be considered "best"
+    # 0.01 = only 99%+ similar, 0.1 = 90%+ similar, 0.2 = 80%+ similar
+    epsilon: float = 0.01
+
+
+@dataclass
+class FaithfulnessConfig(SchemaClass):
+    """Configuration for faithfulness analysis."""
+
+    max_subcircuits_per_gate: int = 15
+    n_interventions_per_patch: int = 20
+    n_counterfactual_pairs: int = 20
+
+
+@dataclass
+class ParallelConfig(SchemaClass):
+    """Configuration for parallelization and compute optimization.
+
+    Optimized defaults based on M4 Max benchmarks:
+    - MPS precomputed is 2.7x faster than CPU for batched eval
+    - Sequential structure analysis is FASTER than parallel (thread overhead dominates)
+    - Larger batch sizes improve throughput
+
+    PyTorch GPU ops are NOT thread-safe, so we avoid threading for GPU work.
+    """
+
+    # Device selection for batched circuit evaluation
+    eval_device: str = "mps"  # "cpu" or "mps" - MPS is 2.7x faster with precompute
+    use_mps_if_available: bool = True
+
+    # Structure analysis parallelization
+    # BENCHMARK RESULT: Sequential is FASTER (77ms vs 130ms) because
+    # thread overhead exceeds computation time per circuit
+    max_workers_structure: int = 1  # 1 = sequential (fastest based on benchmark)
+    enable_parallel_structure: bool = False  # Disabled - sequential is faster
+
+    # Batched evaluation settings (GPU)
+    precompute_masks: bool = True  # Pre-stack masks: 5.8ms vs 9.6ms on MPS
+
+    # Robustness/Faithfulness - these involve GPU, so threading is risky
+    # KEEP FALSE to avoid GPU thread safety issues
+    enable_parallel_robustness: bool = False
+    enable_parallel_faithfulness: bool = False
+
+    # Memory optimization - use more memory for speed
+    cache_subcircuit_models: bool = True  # Cache models for best subcircuits
 
 
 @dataclass
@@ -91,64 +149,6 @@ class SPDConfig(SchemaClass):
     def get_config_id(self) -> str:
         """Short ID for this config based on key params."""
         return f"c{self.n_components}_s{self.steps}_i{self.importance_coeff:.0e}_p{self.importance_p}"
-
-
-@dataclass
-class TrainParams(SchemaClass):
-    learning_rate: float = 0.001
-    batch_size: int = 2048
-    epochs: int = 1000
-    val_frequency: int = 10
-
-
-@dataclass
-class IdentifiabilityConstraints(SchemaClass):
-    # Max deviation from bit_similarity=1.0 to be considered "best"
-    # 0.01 = only 99%+ similar, 0.1 = 90%+ similar, 0.2 = 80%+ similar
-    epsilon: float = 0.1
-
-
-@dataclass
-class FaithfulnessConfig(SchemaClass):
-    """Configuration for faithfulness analysis."""
-
-    max_subcircuits_per_gate: int = 10
-    n_interventions_per_patch: int = 200
-    n_counterfactual_pairs: int = 100
-
-
-@dataclass
-class ParallelConfig(SchemaClass):
-    """Configuration for parallelization and compute optimization.
-
-    Optimized defaults based on M4 Max benchmarks:
-    - MPS precomputed is 2.7x faster than CPU for batched eval
-    - Sequential structure analysis is FASTER than parallel (thread overhead dominates)
-    - Larger batch sizes improve throughput
-
-    PyTorch GPU ops are NOT thread-safe, so we avoid threading for GPU work.
-    """
-
-    # Device selection for batched circuit evaluation
-    eval_device: str = "mps"  # "cpu" or "mps" - MPS is 2.7x faster with precompute
-    use_mps_if_available: bool = True
-
-    # Structure analysis parallelization
-    # BENCHMARK RESULT: Sequential is FASTER (77ms vs 130ms) because
-    # thread overhead exceeds computation time per circuit
-    max_workers_structure: int = 1  # 1 = sequential (fastest based on benchmark)
-    enable_parallel_structure: bool = False  # Disabled - sequential is faster
-
-    # Batched evaluation settings (GPU)
-    precompute_masks: bool = True  # Pre-stack masks: 5.8ms vs 9.6ms on MPS
-
-    # Robustness/Faithfulness - these involve GPU, so threading is risky
-    # KEEP FALSE to avoid GPU thread safety issues
-    enable_parallel_robustness: bool = False
-    enable_parallel_faithfulness: bool = False
-
-    # Memory optimization - use more memory for speed
-    cache_subcircuit_models: bool = True  # Cache models for best subcircuits
 
 
 @dataclass
