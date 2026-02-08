@@ -1,8 +1,7 @@
-"""
-SPD persistence functions for saving and loading SPD estimates and results.
+"""SPD persistence: save and load SPD results.
 
-Contains:
-- save_spd_estimate / load_spd_estimate: Estimate persistence
+Functions for persisting SPD analysis to disk:
+- save_spd_estimate / load_spd_estimate: Subcircuit estimate persistence
 - save_spd_results / load_spd_results: Full SpdResults persistence
 """
 
@@ -16,8 +15,7 @@ import numpy as np
 from src.schemas.serialization import filter_non_serializable
 
 if TYPE_CHECKING:
-    from .spd_types import SpdResults, SpdTrialResult
-    from .subcircuits import SPDSubcircuitEstimate
+    from .types import SPDSubcircuitEstimate, SpdResults, SpdTrialResult
 
 
 def save_spd_estimate(estimate: "SPDSubcircuitEstimate", output_dir: str | Path) -> None:
@@ -25,7 +23,6 @@ def save_spd_estimate(estimate: "SPDSubcircuitEstimate", output_dir: str | Path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save JSON-serializable data
     estimate_data = {
         "cluster_assignments": estimate.cluster_assignments,
         "n_clusters": estimate.n_clusters,
@@ -36,7 +33,6 @@ def save_spd_estimate(estimate: "SPDSubcircuitEstimate", output_dir: str | Path)
     with open(output_dir / "estimate.json", "w", encoding="utf-8") as f:
         json.dump(estimate_data, f, indent=2)
 
-    # Save numpy arrays
     if estimate.component_importance is not None:
         np.save(output_dir / "component_importance.npy", estimate.component_importance)
 
@@ -46,7 +42,7 @@ def save_spd_estimate(estimate: "SPDSubcircuitEstimate", output_dir: str | Path)
 
 def load_spd_estimate(input_dir: str | Path) -> "SPDSubcircuitEstimate | None":
     """Load SPD subcircuit estimate from disk."""
-    from .subcircuits import SPDSubcircuitEstimate
+    from .types import SPDSubcircuitEstimate
 
     input_dir = Path(input_dir)
 
@@ -65,7 +61,6 @@ def load_spd_estimate(input_dir: str | Path) -> "SPDSubcircuitEstimate | None":
         cluster_functions={int(k): v for k, v in data["cluster_functions"].items()},
     )
 
-    # Load numpy arrays if they exist
     importance_path = input_dir / "component_importance.npy"
     if importance_path.exists():
         estimate.component_importance = np.load(importance_path)
@@ -78,8 +73,7 @@ def load_spd_estimate(input_dir: str | Path) -> "SPDSubcircuitEstimate | None":
 
 
 def save_spd_results(results: "SpdResults", run_dir: str | Path) -> None:
-    """
-    Save complete SPD results to run_dir/{trial_id}/spd/ folders.
+    """Save complete SPD results to run_dir/{trial_id}/spd/ folders.
 
     Creates:
         {trial_id}/
@@ -90,12 +84,10 @@ def save_spd_results(results: "SpdResults", run_dir: str | Path) -> None:
                 component_importance.npy
                 coactivation_matrix.npy
     """
-    from .analysis import analyze_and_visualize_spd
-    from .spd_types import SPDConfig, SpdResults, SpdTrialResult
+    from .runner import analyze_and_visualize_spd
 
     run_dir = Path(run_dir)
 
-    # Save per-trial results
     for trial_id, trial_result in results.per_trial.items():
         trial_spd_dir = run_dir / trial_id / "spd"
         trial_spd_dir.mkdir(parents=True, exist_ok=True)
@@ -114,7 +106,7 @@ def save_spd_results(results: "SpdResults", run_dir: str | Path) -> None:
         if trial_result.spd_subcircuit_estimate is not None:
             save_spd_estimate(trial_result.spd_subcircuit_estimate, trial_spd_dir)
 
-        # Run and save analysis with visualizations
+        # Run analysis with visualizations
         if trial_result.decomposed_model is not None and trial_result.decomposed_model.target_model is not None:
             try:
                 analyze_and_visualize_spd(
@@ -130,8 +122,7 @@ def save_spd_results(results: "SpdResults", run_dir: str | Path) -> None:
 
 
 def load_spd_results(run_dir: str | Path, device: str = "cpu") -> "SpdResults | None":
-    """
-    Load SPD results from run_dir/{trial_id}/spd/ folders.
+    """Load SPD results from run_dir/{trial_id}/spd/ folders.
 
     Args:
         run_dir: Run directory containing trial folders with spd/ subfolders
@@ -143,11 +134,11 @@ def load_spd_results(run_dir: str | Path, device: str = "cpu") -> "SpdResults | 
     from src.model import DecomposedMLP
     from src.persistence import load_model
 
-    from .spd_types import SPDConfig, SpdResults, SpdTrialResult
+    from .types import SPDConfig, SpdResults, SpdTrialResult
 
     run_dir = Path(run_dir)
 
-    # Find trial directories that have spd/ subfolders
+    # Find trial directories with spd/ subfolders
     trial_dirs_with_spd = []
     for trial_dir in run_dir.iterdir():
         if trial_dir.is_dir() and (trial_dir / "spd").exists():
@@ -156,7 +147,7 @@ def load_spd_results(run_dir: str | Path, device: str = "cpu") -> "SpdResults | 
     if not trial_dirs_with_spd:
         return None
 
-    # Load config from first trial's spd folder
+    # Load config from first trial
     first_spd_dir = trial_dirs_with_spd[0] / "spd"
     config_path = first_spd_dir / "config.json"
     if not config_path.exists():
@@ -168,13 +159,12 @@ def load_spd_results(run_dir: str | Path, device: str = "cpu") -> "SpdResults | 
 
     results = SpdResults(config=config)
 
-    # Load per-trial results
     for trial_dir in trial_dirs_with_spd:
         trial_id = trial_dir.name
         spd_dir = trial_dir / "spd"
         trial_result = SpdTrialResult(trial_id=trial_id)
 
-        # Load target model for this trial
+        # Load target model
         target_model = load_model(trial_dir, device=device)
 
         # Load decomposed model

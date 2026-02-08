@@ -1,8 +1,9 @@
-"""
-SPD Validation Module - Compute validation metrics for SPD decomposition.
+"""SPD validation metrics: MMCS, ML2R, and faithfulness.
 
-This module provides functions for computing MMCS, ML2R, and other
-validation metrics from the SPD paper.
+Metrics from the SPD paper for validating decomposition quality:
+- MMCS (Mean Max Cosine Similarity): Directional alignment
+- ML2R (Mean L2 Ratio): Magnitude correspondence
+- Faithfulness loss: MSE between target and reconstructed weights
 """
 
 from typing import TYPE_CHECKING

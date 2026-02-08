@@ -22,7 +22,7 @@ from spd.utils.data_utils import DatasetGeneratedDataLoader
 
 from src.model import DecomposedMLP, MLP
 
-from .spd_types import SPDConfig
+from .types import SPDConfig
 
 
 class SimpleDataset:

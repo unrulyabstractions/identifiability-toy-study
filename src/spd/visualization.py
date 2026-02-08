@@ -1,9 +1,10 @@
-"""
-SPD Visualization Module - All visualization functions for SPD analysis.
+"""SPD visualization: heatmaps, matrices, circuits, and summaries.
 
-This module provides functions for visualizing SPD decomposition results
-including importance heatmaps, coactivation matrices, circuit diagrams,
-and summary statistics.
+Visualization functions for SPD decomposition results:
+- Importance heatmaps (causal importance per input)
+- Coactivation matrices (component co-firing patterns)
+- Circuit diagrams (cluster structure as graphs)
+- Summary statistics (metrics and cluster info)
 """
 
 from pathlib import Path
@@ -13,7 +14,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 
-from .schemas import ClusterInfo, SPDAnalysisResult
+from .types import ClusterInfo, SPDAnalysisResult
 
 if TYPE_CHECKING:
     from src.model import DecomposedMLP
