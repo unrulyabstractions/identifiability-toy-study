@@ -61,6 +61,7 @@ from .samples import (
     InterventionSample,
     ObservationalSample,
     RobustnessSample,
+    SampleType,
 )
 
 # Re-export generate_spd_sweep_configs from its new location for backwards compatibility
@@ -90,6 +91,7 @@ __all__ = [
     "InterventionSample",
     "RobustnessSample",
     "ObservationalSample",
+    "SampleType",
     # Faithfulness
     "PatchStatistics",
     "CounterfactualEffect",

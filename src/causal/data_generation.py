@@ -5,6 +5,8 @@ Generates noise and OOD samples for testing subcircuit behavior under perturbati
 
 import torch
 
+from ..common.schemas import SampleType
+
 
 # Ground truth for 2-input logic gates (XOR by default)
 GROUND_TRUTH = {
@@ -29,7 +31,7 @@ def _generate_noise_samples(
             noise = torch.randn_like(base_input)
             noise = noise / (noise.norm() + 1e-8) * target_mag
             perturbed = base_input + noise
-            results.append((perturbed, base_input, target_mag, "noise"))
+            results.append((perturbed, base_input, target_mag, SampleType.NOISE))
     return results
 
 
@@ -52,13 +54,13 @@ def _generate_ood_multiply_samples(
         for _ in range(n_each):
             scale = 10 ** (torch.rand(1).item() * 2)
             perturbed = base_input * scale
-            results.append((perturbed, base_input, scale, "multiply_positive"))
+            results.append((perturbed, base_input, scale, SampleType.MULTIPLY_POSITIVE))
 
         # Negative: scale < 0
         for _ in range(n_samples_per_base - n_each):
             scale = -(10 ** (torch.rand(1).item() * 2))
             perturbed = base_input * scale
-            results.append((perturbed, base_input, abs(scale), "multiply_negative"))
+            results.append((perturbed, base_input, abs(scale), SampleType.MULTIPLY_NEGATIVE))
 
     return results
 
@@ -76,7 +78,7 @@ def _generate_ood_add_samples(
             # Add value in range [2, 100] (outside [0,1] training range)
             add_val = 2 + torch.rand(1).item() * 98
             perturbed = base_input + add_val
-            results.append((perturbed, base_input, add_val, "add"))
+            results.append((perturbed, base_input, add_val, SampleType.ADD))
     return results
 
 
@@ -93,7 +95,7 @@ def _generate_ood_subtract_samples(
             # Subtract value in range [2, 100]
             sub_val = 2 + torch.rand(1).item() * 98
             perturbed = base_input - sub_val
-            results.append((perturbed, base_input, sub_val, "subtract"))
+            results.append((perturbed, base_input, sub_val, SampleType.SUBTRACT))
     return results
 
 
@@ -116,11 +118,11 @@ def _generate_ood_bimodal_samples(
         # Order-preserving: 0->-1, 1->1 (x -> 2x - 1)
         for _ in range(n_each):
             perturbed = 2 * base_input - 1
-            results.append((perturbed, base_input, 1.0, "bimodal"))
+            results.append((perturbed, base_input, 1.0, SampleType.BIMODAL))
 
         # Inverted: 0->1, 1->-1 (x -> 1 - 2x)
         for _ in range(n_samples_per_base - n_each):
             perturbed = 1 - 2 * base_input
-            results.append((perturbed, base_input, -1.0, "bimodal_inv"))
+            results.append((perturbed, base_input, -1.0, SampleType.BIMODAL_INV))
 
     return results

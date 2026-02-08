@@ -9,7 +9,7 @@ We compare:
 import torch
 
 from ..common.neural_model import MLP
-from ..common.schemas import RobustnessMetrics, RobustnessSample
+from ..common.schemas import RobustnessMetrics, RobustnessSample, SampleType
 from .data_generation import (
     GROUND_TRUTH,
     _generate_noise_samples,
@@ -51,13 +51,13 @@ def _evaluate_samples(
         # For bimodal transformations, interpret outputs differently
         # Order-preserving bimodal: output in [-1,1], threshold at 0
         # Inverted bimodal: output in [-1,1], threshold at 0, then invert
-        if sample_type == "bimodal":
+        if sample_type == SampleType.BIMODAL:
             # Threshold at 0: negative -> 0, positive -> 1
             gate_bit = 1 if gate_output >= 0 else 0
             sc_bit = 1 if subcircuit_output >= 0 else 0
             gate_best = 1 if gate_output >= 0 else 0
             sc_best = 1 if subcircuit_output >= 0 else 0
-        elif sample_type == "bimodal_inv":
+        elif sample_type == SampleType.BIMODAL_INV:
             # Inverted: threshold at 0, then invert interpretation
             # In bimodal_inv: -1 corresponds to original 1, 1 corresponds to original 0
             gate_bit = 0 if gate_output >= 0 else 1

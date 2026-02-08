@@ -3,11 +3,27 @@
 Contains sample dataclasses for storing test results:
 - InterventionSample: Result of a single intervention test
 - RobustnessSample: Result of a single robustness test (a.k.a. ObservationalSample)
+- SampleType: Enum for robustness sample types
 """
 
 from dataclasses import dataclass, field
+from enum import Enum
 
 from .base import SchemaClass
+
+
+class SampleType(str, Enum):
+    """Types of samples for robustness testing.
+
+    Inherits from str for JSON serialization compatibility.
+    """
+    NOISE = "noise"
+    MULTIPLY_POSITIVE = "multiply_positive"
+    MULTIPLY_NEGATIVE = "multiply_negative"
+    ADD = "add"
+    SUBTRACT = "subtract"
+    BIMODAL = "bimodal"
+    BIMODAL_INV = "bimodal_inv"
 
 
 @dataclass
@@ -80,7 +96,7 @@ class RobustnessSample(SchemaClass):
     mse: float  # (gate_output - subcircuit_output)^2
 
     # Sample type for organizing visualizations
-    sample_type: str = "noise"  # SampleType enum values: noise, multiply_positive, multiply_negative, add, subtract, bimodal, bimodal_inv
+    sample_type: str = SampleType.NOISE  # Can be string or SampleType enum
 
     # Pre-computed activations for visualization (NO model runs during viz!)
     # Each is a list of lists: [[layer0_acts], [layer1_acts], ...]
