@@ -26,6 +26,7 @@ from .config import (
 from .faithfulness import (
     CounterfactualEffect,
     CounterfactualMetrics,
+    CounterfactualSample,
     FaithfulnessCategoryScore,
     FaithfulnessMetrics,
     FaithfulnessSummary,
@@ -87,6 +88,7 @@ __all__ = [
     # Faithfulness
     "PatchStatistics",
     "CounterfactualEffect",
+    "CounterfactualSample",
     "FaithfulnessMetrics",
     "RobustnessMetrics",
     "ObservationalMetrics",

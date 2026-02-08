@@ -31,6 +31,7 @@ class DataParams(SchemaClass):
 
 @dataclass
 class ModelParams(SchemaClass):
+    # logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
     logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
     width: int = 3
     depth: int = 2

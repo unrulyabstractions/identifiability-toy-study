@@ -17,6 +17,7 @@ class SampleType(str, Enum):
 
     Inherits from str for JSON serialization compatibility.
     """
+
     NOISE = "noise"
     MULTIPLY_POSITIVE = "multiply_positive"
     MULTIPLY_NEGATIVE = "multiply_negative"

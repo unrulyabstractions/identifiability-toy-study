@@ -28,7 +28,7 @@ class SubcircuitMetrics(SchemaClass):
     # Observational
     logit_similarity: float
     bit_similarity: float
-    best_similarity: float = 0.0  # After clamping to binary [0,1]
+    best_similarity: float = 0.0
 
 
 @dataclass

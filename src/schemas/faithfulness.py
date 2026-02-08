@@ -293,3 +293,7 @@ class FaithfulnessSummary(SchemaClass):
         default_factory=FaithfulnessCategoryScore
     )
     overall: float = 0.0  # Combined overall score
+
+
+# Alias for naming consistency with InterventionSample, ObservationalSample
+CounterfactualSample = CounterfactualEffect

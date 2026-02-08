@@ -8,18 +8,18 @@ Contains result-related dataclasses:
 """
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 
-from .schema_class import SchemaClass
 from .config import ExperimentConfig, TrialSetup
 from .evaluation import Metrics, ProfilingData
+from .schema_class import SchemaClass
 
 # Avoid circular import - these are only needed for type hints
 if TYPE_CHECKING:
-    from src.model import DecomposedMLP, MLP
+    from src.model import MLP, DecomposedMLP
 
 
 @dataclass
