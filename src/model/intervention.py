@@ -201,9 +201,9 @@ class InterventionEffect:
     intervention: "Intervention"
     y_target: torch.Tensor
     y_proxy: torch.Tensor
-    logit_similarity: float  # 1 - MSE between logits
-    bit_similarity: float  # Match rate after rounding
-    best_similarity: float  # Match rate after clamping to binary
+    logit_similarity: float
+    bit_similarity: float
+    best_similarity: float
 
     # Pre-computed activations for visualization (NO model runs during viz!)
     # These are lists of tensors: [layer0_acts, layer1_acts, ...]

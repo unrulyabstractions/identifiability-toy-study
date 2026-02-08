@@ -20,11 +20,13 @@ from src.schemas import (
     ExperimentResult,
     FaithfulnessMetrics,
     GateMetrics,
-    InterventionalSample,
     InterventionalMetrics,
+    InterventionalSample,
+    NoiseRobustnessMetrics,
     ObservationalMetrics,
-    PatchStatistics,
     ObservationalSample,
+    OutOfDistributionMetrics,
+    PatchStatistics,
     SubcircuitMetrics,
     TrialResult,
     TrialSetup,
@@ -330,16 +332,36 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                 obs_data = f.get("observational")
                 observational = None
                 if obs_data:
-                    noise = [ObservationalSample(**s) for s in obs_data.get("noise_samples", [])]
-                    ood = [ObservationalSample(**s) for s in obs_data.get("ood_samples", [])]
+                    # Load noise metrics
+                    noise_data = obs_data.get("noise", {})
+                    noise_metrics = None
+                    if noise_data:
+                        noise_samples = [ObservationalSample(**s) for s in noise_data.get("samples", [])]
+                        noise_metrics = NoiseRobustnessMetrics(
+                            samples=noise_samples,
+                            gate_accuracy=noise_data.get("gate_accuracy", 0),
+                            subcircuit_accuracy=noise_data.get("subcircuit_accuracy", 0),
+                            agreement_bit=noise_data.get("agreement_bit", 0),
+                            agreement_best=noise_data.get("agreement_best", 0),
+                            mse_mean=noise_data.get("mse_mean", 0),
+                            n_samples=noise_data.get("n_samples", 0),
+                        )
+                    # Load OOD metrics
+                    ood_data = obs_data.get("ood", {})
+                    ood_metrics = None
+                    if ood_data:
+                        ood_samples = [ObservationalSample(**s) for s in ood_data.get("samples", [])]
+                        ood_metrics = OutOfDistributionMetrics(
+                            samples=ood_samples,
+                            gate_accuracy=ood_data.get("gate_accuracy", 0),
+                            subcircuit_accuracy=ood_data.get("subcircuit_accuracy", 0),
+                            agreement_bit=ood_data.get("agreement_bit", 0),
+                            agreement_best=ood_data.get("agreement_best", 0),
+                            mse_mean=ood_data.get("mse_mean", 0),
+                        )
                     observational = ObservationalMetrics(
-                        noise_samples=noise,
-                        ood_samples=ood,
-                        noise_gate_accuracy=obs_data.get("noise_gate_accuracy", 0),
-                        noise_subcircuit_accuracy=obs_data.get("noise_subcircuit_accuracy", 0),
-                        noise_agreement_bit=obs_data.get("noise_agreement_bit", 0),
-                        noise_agreement_best=obs_data.get("noise_agreement_best", 0),
-                        noise_mse_mean=obs_data.get("noise_mse_mean", 0),
+                        noise=noise_metrics,
+                        ood=ood_metrics,
                         overall_observational=obs_data.get("overall_observational", 0),
                     )
 

@@ -9,7 +9,13 @@ We compare:
 import torch
 
 from src.model import MLP
-from src.schemas import ObservationalMetrics, ObservationalSample, SampleType
+from src.schemas import (
+    NoiseRobustnessMetrics,
+    ObservationalMetrics,
+    ObservationalSample,
+    OutOfDistributionMetrics,
+    SampleType,
+)
 from src.tensor_ops import calculate_mse, logits_to_binary
 
 from .perturbations import (
@@ -178,19 +184,27 @@ def calculate_observational_metrics(
     # Overall robustness: focus on agreement (models matching each other)
     overall = (noise_agree_bit + ood_agree_bit) / 2.0
 
+    noise_metrics = NoiseRobustnessMetrics(
+        samples=noise_samples,
+        gate_accuracy=float(noise_gate_acc),
+        subcircuit_accuracy=float(noise_sc_acc),
+        agreement_bit=float(noise_agree_bit),
+        agreement_best=float(noise_agree_best),
+        mse_mean=float(noise_mse),
+        n_samples=n_noise,
+    )
+
+    ood_metrics = OutOfDistributionMetrics(
+        samples=ood_samples,
+        gate_accuracy=float(ood_gate_acc),
+        subcircuit_accuracy=float(ood_sc_acc),
+        agreement_bit=float(ood_agree_bit),
+        agreement_best=float(ood_agree_best),
+        mse_mean=float(ood_mse),
+    )
+
     return ObservationalMetrics(
-        noise_samples=noise_samples,
-        ood_samples=ood_samples,
-        noise_gate_accuracy=float(noise_gate_acc),
-        noise_subcircuit_accuracy=float(noise_sc_acc),
-        noise_agreement_bit=float(noise_agree_bit),
-        noise_agreement_best=float(noise_agree_best),
-        noise_mse_mean=float(noise_mse),
-        noise_n_samples=n_noise,
-        ood_gate_accuracy=float(ood_gate_acc),
-        ood_subcircuit_accuracy=float(ood_sc_acc),
-        ood_agreement_bit=float(ood_agree_bit),
-        ood_agreement_best=float(ood_agree_best),
-        ood_mse_mean=float(ood_mse),
+        noise=noise_metrics,
+        ood=ood_metrics,
         overall_observational=float(overall),
     )

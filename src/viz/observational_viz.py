@@ -215,13 +215,15 @@ def visualize_robustness_circuit_samples(
     }
 
     # Process noise samples
-    for sample in robustness.noise_samples:
+    noise_samples = robustness.noise.samples if robustness.noise else []
+    for sample in noise_samples:
         base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
         if base_key:
             samples_by_base[base_key]["noise"].append(sample)
 
     # Process OOD samples using sample_type field
-    for sample in robustness.ood_samples:
+    ood_samples = robustness.ood.samples if robustness.ood else []
+    for sample in ood_samples:
         base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
         if base_key:
             st = getattr(sample, "sample_type", "multiply_positive")
@@ -511,15 +513,16 @@ def visualize_robustness_curves(
 
     # Per-input breakdown for noise samples (4 rows x 3 cols: SC | Gate | Agreement)
     with profile("robust_curves.per_input"):
+        noise_samples = robustness.noise.samples if robustness.noise else []
         samples_by_base = {k: [] for k in input_keys}
-        for sample in robustness.noise_samples:
+        for sample in noise_samples:
             base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
             if base_key:
                 samples_by_base[base_key].append(sample)
 
         # Compute global y-axis range from all noise samples
         all_noise_outputs = []
-        for sample in robustness.noise_samples:
+        for sample in noise_samples:
             all_noise_outputs.append(sample.gate_output)
             all_noise_outputs.append(sample.subcircuit_output)
         if all_noise_outputs:
@@ -668,9 +671,10 @@ def visualize_robustness_curves(
             },
         ]
 
+        ood_samples = robustness.ood.samples if robustness.ood else []
         for subtype_info in ood_subtypes:
             samples_by_base = {k: [] for k in input_keys}
-            for sample in robustness.ood_samples:
+            for sample in ood_samples:
                 st = getattr(sample, "sample_type", "multiply_positive")
                 if st == subtype_info["sample_type"]:
                     base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))

@@ -44,19 +44,22 @@ def compute_observational_metrics(robustness: "ObservationalMetrics") -> dict:
     }
     """
     # Noise perturbation metrics
-    noise_samples = robustness.noise_samples
+    noise = robustness.noise
+    noise_samples = noise.samples if noise else []
     noise_metrics = {
         "n_samples": len(noise_samples) if noise_samples else 0,
-        "gate_accuracy": robustness.noise_gate_accuracy,
-        "subcircuit_accuracy": robustness.noise_subcircuit_accuracy,
-        "agreement_bit": robustness.noise_agreement_bit,
-        "agreement_best": robustness.noise_agreement_best,
-        "mse_mean": robustness.noise_mse_mean,
+        "gate_accuracy": noise.gate_accuracy if noise else 0,
+        "subcircuit_accuracy": noise.subcircuit_accuracy if noise else 0,
+        "agreement_bit": noise.agreement_bit if noise else 0,
+        "agreement_best": noise.agreement_best if noise else 0,
+        "mse_mean": noise.mse_mean if noise else 0,
     }
 
     # Group OOD samples by type
+    ood = robustness.ood
+    ood_samples = ood.samples if ood else []
     ood_by_type: dict[str, list] = {}
-    for sample in robustness.ood_samples:
+    for sample in ood_samples:
         st = getattr(sample, "sample_type", "multiply_positive")
         ood_by_type.setdefault(st, []).append(sample)
 
@@ -430,18 +433,23 @@ def _compute_subcircuit_scores(
     # Observational score and epsilon (from faithfulness.observational)
     obs_score = 0.0
     obs_epsilon = 0.0
-    robustness = faithfulness.observational if faithfulness else None
-    if robustness:
-        obs_component_scores = [robustness.noise_agreement_bit]
-        ood_by_type: dict[str, list] = {}
-        for sample in robustness.ood_samples:
-            st = getattr(sample, "sample_type", "multiply_positive")
-            ood_by_type.setdefault(st, []).append(sample)
-        for st in ["multiply_positive", "multiply_negative", "add", "subtract", "bimodal", "bimodal_inv"]:
-            samples = ood_by_type.get(st, [])
-            if samples:
-                agreement = sum(s.agreement_bit for s in samples) / len(samples)
-                obs_component_scores.append(agreement)
+    observational = faithfulness.observational if faithfulness else None
+    if observational:
+        obs_component_scores = []
+        # Noise agreement
+        if observational.noise:
+            obs_component_scores.append(observational.noise.agreement_bit)
+        # OOD agreement by type
+        if observational.ood:
+            ood_by_type: dict[str, list] = {}
+            for sample in observational.ood.samples:
+                st = getattr(sample, "sample_type", "multiply_positive")
+                ood_by_type.setdefault(st, []).append(sample)
+            for st in ["multiply_positive", "multiply_negative", "add", "subtract", "bimodal", "bimodal_inv"]:
+                samples = ood_by_type.get(st, [])
+                if samples:
+                    agreement = sum(s.agreement_bit for s in samples) / len(samples)
+                    obs_component_scores.append(agreement)
         obs_valid_scores = [s for s in obs_component_scores if s > 0]
         if obs_valid_scores:
             obs_score = sum(obs_valid_scores) / len(obs_valid_scores)

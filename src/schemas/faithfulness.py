@@ -5,10 +5,10 @@ from dataclasses import dataclass, field
 from .samples import CounterfactualSample, InterventionalSample, ObservationalSample
 from .schema_class import SchemaClass
 
-# Alias for naming consistency with InterventionalSample, ObservationalSample
-ObservationalEffect = ObservationalSample
-InterventionalEffect = InterventionalSample
+# Aliases for backwards compatibility
 CounterfactualEffect = CounterfactualSample
+InterventionalEffect = InterventionalSample
+ObservationalEffect = ObservationalSample
 
 # =============================================================================
 # Basic Building Blocks
@@ -32,38 +32,37 @@ class PatchStatistics(SchemaClass):
 
 
 # =============================================================================
-# Detailed Metrics Classes (contain samples and full data)
+# Observational Metrics Components
 # =============================================================================
 
 
 @dataclass
-class ObservationalMetrics(SchemaClass):
-    """Observational robustness metrics for a subcircuit.
+class NoiseRobustnessMetrics(SchemaClass):
+    """Metrics from Gaussian noise perturbation tests."""
 
-    This is part of observational faithfulness analysis. Measures how well
-    subcircuit predictions match full model predictions under perturbations.
-    """
+    samples: list[ObservationalSample] = field(default_factory=list)
+    gate_accuracy: float = 0.0
+    subcircuit_accuracy: float = 0.0
+    agreement_bit: float = 0.0
+    agreement_best: float = 0.0
+    mse_mean: float = 0.0
+    n_samples: int = 0
 
-    # All samples (for scatter plots by actual noise magnitude)
-    noise_samples: list[ObservationalSample] = field(default_factory=list)
-    ood_samples: list[ObservationalSample] = field(default_factory=list)
 
-    # Noise perturbation metrics
-    noise_gate_accuracy: float = 0.0
-    noise_subcircuit_accuracy: float = 0.0
-    noise_agreement_bit: float = 0.0
-    noise_agreement_best: float = 0.0
-    noise_mse_mean: float = 0.0
-    noise_n_samples: int = 0
+@dataclass
+class OutOfDistributionMetrics(SchemaClass):
+    """Metrics from out-of-distribution transformation tests."""
+
+    samples: list[ObservationalSample] = field(default_factory=list)
 
     # Aggregate OOD metrics
-    ood_gate_accuracy: float = 0.0
-    ood_subcircuit_accuracy: float = 0.0
-    ood_agreement_bit: float = 0.0
-    ood_agreement_best: float = 0.0
-    ood_mse_mean: float = 0.0
+    gate_accuracy: float = 0.0
+    subcircuit_accuracy: float = 0.0
+    agreement_bit: float = 0.0
+    agreement_best: float = 0.0
+    mse_mean: float = 0.0
 
-    # Per-type OOD metrics
+    # Per-type metrics
     multiply_positive_agreement: float = 0.0
     multiply_positive_n_samples: int = 0
     multiply_negative_agreement: float = 0.0
@@ -80,7 +79,21 @@ class ObservationalMetrics(SchemaClass):
     bimodal_inv_agreement: float = 0.0
     bimodal_inv_n_samples: int = 0
 
-    # Overall
+
+# =============================================================================
+# Detailed Metrics Classes (contain samples and full data)
+# =============================================================================
+
+
+@dataclass
+class ObservationalMetrics(SchemaClass):
+    """Observational robustness metrics for a subcircuit.
+
+    Contains noise perturbation and OOD transformation results.
+    """
+
+    noise: NoiseRobustnessMetrics | None = None
+    ood: OutOfDistributionMetrics | None = None
     overall_observational: float = 0.0
 
 
@@ -170,18 +183,22 @@ class FaithfulnessMetrics(SchemaClass):
 
 
 @dataclass
-class ObservationalSummary(SchemaClass):
-    """Aggregated observational summary for result.json."""
+class NoiseRobustnessSummary(SchemaClass):
+    """Summary of noise robustness metrics for result.json."""
 
-    # Noise perturbation metrics
-    noise_gate_accuracy: float = 0.0
-    noise_subcircuit_accuracy: float = 0.0
-    noise_agreement_bit: float = 0.0
-    noise_agreement_best: float = 0.0
-    noise_mse_mean: float = 0.0
-    noise_n_samples: int = 0
+    gate_accuracy: float = 0.0
+    subcircuit_accuracy: float = 0.0
+    agreement_bit: float = 0.0
+    agreement_best: float = 0.0
+    mse_mean: float = 0.0
+    n_samples: int = 0
 
-    # Per-type OOD metrics
+
+@dataclass
+class OutOfDistributionSummary(SchemaClass):
+    """Summary of OOD metrics for result.json."""
+
+    # Per-type metrics
     multiply_positive_agreement: float = 0.0
     multiply_positive_n_samples: int = 0
     multiply_negative_agreement: float = 0.0
@@ -198,7 +215,13 @@ class ObservationalSummary(SchemaClass):
     bimodal_inv_agreement: float = 0.0
     bimodal_inv_n_samples: int = 0
 
-    # Overall
+
+@dataclass
+class ObservationalSummary(SchemaClass):
+    """Aggregated observational summary for result.json."""
+
+    noise: NoiseRobustnessSummary = field(default_factory=NoiseRobustnessSummary)
+    ood: OutOfDistributionSummary = field(default_factory=OutOfDistributionSummary)
     overall_observational: float = 0.0
 
 
