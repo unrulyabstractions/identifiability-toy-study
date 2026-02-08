@@ -168,7 +168,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
             print(
                 f"[VIZ] Gate {gname}: {len(best_indices)} best subcircuits to visualize"
             )
-            bests_robust = trial.metrics.per_gate_bests_robust.get(gname, [])
+            bests_faith = trial.metrics.per_gate_bests_faith.get(gname, [])
             decomposed_indices = trial.decomposed_subcircuit_indices.get(gname, [])
 
             for i, sc_idx in enumerate(best_indices):
@@ -210,12 +210,11 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     viz_paths[trial_id][gname][sc_idx]["activations_mean"] = mean_act_path
 
                 # Robustness and Faithfulness visualization
-                bests_faith = trial.metrics.per_gate_bests_faith.get(gname, [])
-                has_robust = i < len(bests_robust)
+                # Robustness is now inside faithfulness.observational
                 has_faith = i < len(bests_faith)
-
-                robustness_data = bests_robust[i] if has_robust else None
                 faithfulness_data = bests_faith[i] if has_faith else None
+                robustness_data = faithfulness_data.observational if faithfulness_data else None
+                has_robust = robustness_data is not None
 
                 # Create directories upfront
                 # Faithfulness contains: observational/ (robustness), counterfactual/, interventional/
@@ -278,7 +277,6 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     interventional_dir=interventional_dir,
                     counterfactual_dir=counterfactual_dir,
                     faithfulness_dir=faithfulness_dir,
-                    robustness=robustness_data,
                     faithfulness=faithfulness_data,
                 )
                 viz_paths[trial_id][gname][sc_idx]["faithfulness"]["json"] = json_paths

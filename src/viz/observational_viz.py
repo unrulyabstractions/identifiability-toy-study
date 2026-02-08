@@ -16,7 +16,7 @@ import torch
 
 from src.circuit import Circuit
 from src.infra import profile
-from src.schemas import RobustnessMetrics
+from src.schemas import ObservationalMetrics
 from .constants import (
     LAYOUT_RECT_DEFAULT,
     TITLE_Y,
@@ -144,7 +144,7 @@ def _generate_robustness_circuit_figure(args):
 
 
 def visualize_robustness_circuit_samples(
-    robustness: RobustnessMetrics,
+    robustness: ObservationalMetrics,
     circuit: Circuit,
     layer_weights: list[torch.Tensor],
     output_dir: str,
@@ -348,7 +348,7 @@ def visualize_robustness_circuit_samples(
 
 
 def visualize_robustness_curves(
-    robustness: RobustnessMetrics,
+    robustness: ObservationalMetrics,
     output_dir: str,
     gate_name: str = "",
 ) -> dict[str, str]:

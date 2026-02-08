@@ -14,13 +14,13 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.schemas import FaithfulnessMetrics, Metrics, RobustnessMetrics
+    from src.schemas import FaithfulnessMetrics, Metrics, ObservationalMetrics
 
 from src.schemas import FaithfulnessCategoryScore, FaithfulnessSummary
 
 
-def compute_observational_metrics(robustness: "RobustnessMetrics") -> dict:
-    """Compute observational metrics dict from RobustnessMetrics with nested structure.
+def compute_observational_metrics(robustness: "ObservationalMetrics") -> dict:
+    """Compute observational metrics dict from ObservationalMetrics with nested structure.
 
     Returns nested dict structure:
     {
@@ -133,10 +133,11 @@ def compute_interventional_metrics(faithfulness: "FaithfulnessMetrics") -> dict:
             "mean_logit_similarity": sum(logit_sims) / len(logit_sims) if logit_sims else 0.0,
         }
 
-    in_circuit_id = compute_stats(faithfulness.in_circuit_stats)
-    in_circuit_ood = compute_stats(faithfulness.in_circuit_stats_ood)
-    out_circuit_id = compute_stats(faithfulness.out_circuit_stats)
-    out_circuit_ood = compute_stats(faithfulness.out_circuit_stats_ood)
+    interventional = faithfulness.interventional
+    in_circuit_id = compute_stats(interventional.in_circuit_stats if interventional else {})
+    in_circuit_ood = compute_stats(interventional.in_circuit_stats_ood if interventional else {})
+    out_circuit_id = compute_stats(interventional.out_circuit_stats if interventional else {})
+    out_circuit_ood = compute_stats(interventional.out_circuit_stats_ood if interventional else {})
 
     # Overall: average of bit similarities
     sims = [
@@ -179,13 +180,14 @@ def compute_counterfactual_metrics(faithfulness: "FaithfulnessMetrics") -> dict:
         "overall_score": 0.91
     }
     """
-    suff = faithfulness.mean_sufficiency
-    comp = faithfulness.mean_completeness
-    nec = faithfulness.mean_necessity
-    ind = faithfulness.mean_independence
+    cf = faithfulness.counterfactual
+    suff = cf.mean_sufficiency if cf else 0.0
+    comp = cf.mean_completeness if cf else 0.0
+    nec = cf.mean_necessity if cf else 0.0
+    ind = cf.mean_independence if cf else 0.0
 
-    n_denoising = len(faithfulness.sufficiency_effects) + len(faithfulness.completeness_effects)
-    n_noising = len(faithfulness.necessity_effects) + len(faithfulness.independence_effects)
+    n_denoising = (len(cf.sufficiency_effects) + len(cf.completeness_effects)) if cf else 0
+    n_noising = (len(cf.necessity_effects) + len(cf.independence_effects)) if cf else 0
 
     # Overall: average of all counterfactual scores
     scores = [suff, comp, nec, ind]
@@ -212,7 +214,6 @@ def save_faithfulness_json(
     interventional_dir: str | None,
     counterfactual_dir: str | None,
     faithfulness_dir: str,
-    robustness: "RobustnessMetrics | None",
     faithfulness: "FaithfulnessMetrics | None",
 ) -> dict[str, str]:
     """Save result.json in each subfolder and summary.json in faithfulness/."""
@@ -221,7 +222,8 @@ def save_faithfulness_json(
     int_overall = 0.0
     cf_overall = 0.0
 
-    # Observational result.json
+    # Observational result.json (from faithfulness.observational)
+    robustness = faithfulness.observational if faithfulness else None
     if observational_dir and robustness:
         obs_metrics = compute_observational_metrics(robustness)
         obs_overall = obs_metrics.get("overall_score", 0.0)
@@ -422,13 +424,13 @@ A faithful circuit should score high (>0.85) on all three categories.
 
 
 def _compute_subcircuit_scores(
-    robustness: "RobustnessMetrics | None",
     faithfulness: "FaithfulnessMetrics | None",
 ) -> dict:
     """Compute observational, interventional, counterfactual scores and epsilons for a subcircuit."""
-    # Observational score and epsilon
+    # Observational score and epsilon (from faithfulness.observational)
     obs_score = 0.0
     obs_epsilon = 0.0
+    robustness = faithfulness.observational if faithfulness else None
     if robustness:
         obs_component_scores = [robustness.noise_agreement_bit]
         ood_by_type: dict[str, list] = {}
@@ -445,13 +447,14 @@ def _compute_subcircuit_scores(
             obs_score = sum(obs_valid_scores) / len(obs_valid_scores)
             obs_epsilon = abs(min(1.0 - s for s in obs_valid_scores))
 
-    # Interventional score and epsilon
+    # Interventional score and epsilon (from faithfulness.interventional)
     int_score = 0.0
     int_epsilon = 0.0
-    if faithfulness:
+    interventional = faithfulness.interventional if faithfulness else None
+    if interventional:
         int_component_scores = []
-        for stats_dict in [faithfulness.in_circuit_stats, faithfulness.out_circuit_stats,
-                          faithfulness.in_circuit_stats_ood, faithfulness.out_circuit_stats_ood]:
+        for stats_dict in [interventional.in_circuit_stats, interventional.out_circuit_stats,
+                          interventional.in_circuit_stats_ood, interventional.out_circuit_stats_ood]:
             if stats_dict:
                 bit_sims = [ps.mean_bit_similarity for ps in stats_dict.values()]
                 if bit_sims:
@@ -461,15 +464,16 @@ def _compute_subcircuit_scores(
             int_score = sum(int_valid_scores) / len(int_valid_scores)
             int_epsilon = abs(min(1.0 - s for s in int_valid_scores))
 
-    # Counterfactual score and epsilon
+    # Counterfactual score and epsilon (from faithfulness.counterfactual)
     cf_score = 0.0
     cf_epsilon = 0.0
-    if faithfulness:
+    counterfactual = faithfulness.counterfactual if faithfulness else None
+    if counterfactual:
         cf_component_scores = [
-            faithfulness.mean_sufficiency,
-            faithfulness.mean_completeness,
-            faithfulness.mean_necessity,
-            faithfulness.mean_independence,
+            counterfactual.mean_sufficiency,
+            counterfactual.mean_completeness,
+            counterfactual.mean_necessity,
+            counterfactual.mean_independence,
         ]
         cf_valid_scores = [s for s in cf_component_scores if s > 0]
         if cf_valid_scores:
@@ -503,16 +507,14 @@ def save_gate_summary(
     - Per-subcircuit scores (observational, interventional, counterfactual, overall)
     """
     best_indices = metrics.per_gate_bests.get(gate_name, [])
-    bests_robust = metrics.per_gate_bests_robust.get(gate_name, [])
     bests_faith = metrics.per_gate_bests_faith.get(gate_name, [])
 
     # Build subcircuit summaries with scores
     subcircuit_summaries = []
     for i, sc_idx in enumerate(best_indices):
-        robust = bests_robust[i] if i < len(bests_robust) else None
         faith = bests_faith[i] if i < len(bests_faith) else None
 
-        scores = _compute_subcircuit_scores(robust, faith)
+        scores = _compute_subcircuit_scores(faith)
         sc_summary = {"index": sc_idx, **scores}
         subcircuit_summaries.append(sc_summary)
 

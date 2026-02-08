@@ -11,8 +11,10 @@ from src.circuit import CircuitStructure
 from src.model import InterventionEffect, MLP, PatchShape
 from src.schemas import (
     CounterfactualEffect,
+    CounterfactualMetrics,
     FaithfulnessConfig,
     FaithfulnessMetrics,
+    InterventionalMetrics,
 )
 from src.tensor_ops import logits_to_binary
 
@@ -342,8 +344,8 @@ def calculate_faithfulness_metrics(
         mean_sufficiency + mean_completeness + mean_necessity + mean_independence
     ) / 4.0
 
-    return FaithfulnessMetrics(
-        # Interventional stats
+    # Build nested metrics
+    interventional = InterventionalMetrics(
         in_circuit_stats=stats["in_circuit_stats"],
         out_circuit_stats=stats["out_circuit_stats"],
         in_circuit_stats_ood=stats["in_circuit_stats_ood"],
@@ -352,15 +354,21 @@ def calculate_faithfulness_metrics(
         mean_out_circuit_similarity=stats["mean_out_sim"],
         mean_in_circuit_similarity_ood=stats["mean_in_sim_ood"],
         mean_out_circuit_similarity_ood=stats["mean_out_sim_ood"],
-        # 2x2 Matrix effects
+    )
+
+    counterfactual = CounterfactualMetrics(
         sufficiency_effects=sufficiency_effects,
         completeness_effects=completeness_effects,
         necessity_effects=necessity_effects,
         independence_effects=independence_effects,
-        # 2x2 Matrix aggregate scores
         mean_sufficiency=mean_sufficiency,
         mean_completeness=mean_completeness,
         mean_necessity=mean_necessity,
         mean_independence=mean_independence,
+    )
+
+    return FaithfulnessMetrics(
+        interventional=interventional,
+        counterfactual=counterfactual,
         overall_faithfulness=overall_faithfulness,
     )

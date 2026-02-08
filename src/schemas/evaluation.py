@@ -16,7 +16,7 @@ from .schema_class import SchemaClass
 
 # Forward references for circular imports
 if TYPE_CHECKING:
-    from .faithfulness import FaithfulnessMetrics, RobustnessMetrics
+    from .faithfulness import FaithfulnessMetrics
 
 
 @dataclass
@@ -72,9 +72,7 @@ class Metrics(SchemaClass):
     per_gate_bests: dict[str, list[int]] = field(
         default_factory=lambda: defaultdict(list)
     )
-    per_gate_bests_robust: dict[str, list["RobustnessMetrics"]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
+    # Faithfulness metrics for each best subcircuit (includes observational robustness)
     per_gate_bests_faith: dict[str, list["FaithfulnessMetrics"]] = field(
         default_factory=lambda: defaultdict(list)
     )

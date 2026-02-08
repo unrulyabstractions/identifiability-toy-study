@@ -9,7 +9,7 @@ We compare:
 import torch
 
 from src.model import MLP
-from src.schemas import RobustnessMetrics, RobustnessSample, SampleType
+from src.schemas import ObservationalMetrics, RobustnessSample, SampleType
 from src.tensor_ops import calculate_mse, logits_to_binary
 
 from .perturbations import (
@@ -106,7 +106,7 @@ def calculate_observational_metrics(
     full_model: MLP,
     n_samples_per_base: int = 100,
     device: str = "cpu",
-) -> RobustnessMetrics:
+) -> ObservationalMetrics:
     """
     Calculate observational metrics by perturbing BOTH gate_model and subcircuit the SAME way.
 
@@ -131,7 +131,7 @@ def calculate_observational_metrics(
         device: Device for tensor operations
 
     Returns:
-        RobustnessMetrics with all samples and aggregates
+        ObservationalMetrics with all samples and aggregates
     """
     base_inputs = [
         torch.tensor([0.0, 0.0]),
@@ -178,7 +178,7 @@ def calculate_observational_metrics(
     # Overall robustness: focus on agreement (models matching each other)
     overall = (noise_agree_bit + ood_agree_bit) / 2.0
 
-    return RobustnessMetrics(
+    return ObservationalMetrics(
         noise_samples=noise_samples,
         ood_samples=ood_samples,
         noise_gate_accuracy=float(noise_gate_acc),
@@ -186,10 +186,11 @@ def calculate_observational_metrics(
         noise_agreement_bit=float(noise_agree_bit),
         noise_agreement_best=float(noise_agree_best),
         noise_mse_mean=float(noise_mse),
+        noise_n_samples=n_noise,
         ood_gate_accuracy=float(ood_gate_acc),
         ood_subcircuit_accuracy=float(ood_sc_acc),
         ood_agreement_bit=float(ood_agree_bit),
         ood_agreement_best=float(ood_agree_best),
         ood_mse_mean=float(ood_mse),
-        overall_robustness=float(overall),
+        overall_observational=float(overall),
     )

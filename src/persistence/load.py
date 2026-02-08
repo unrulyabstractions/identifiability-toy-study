@@ -15,13 +15,15 @@ from src.circuit import Circuit
 from src.model import DecomposedMLP, MLP
 from src.schemas import (
     CounterfactualEffect,
+    CounterfactualMetrics,
     ExperimentConfig,
     ExperimentResult,
     FaithfulnessMetrics,
     GateMetrics,
     InterventionSample,
+    InterventionalMetrics,
+    ObservationalMetrics,
     PatchStatistics,
-    RobustnessMetrics,
     RobustnessSample,
     SubcircuitMetrics,
     TrialResult,
@@ -319,62 +321,88 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
         # Load bests
         trial.metrics.per_gate_bests = metrics_data.get("per_gate_bests", {})
 
-        # Load robustness (simplified - just need samples for viz)
-        bests_robust = metrics_data.get("per_gate_bests_robust", {})
-        for gate_name, robust_list in bests_robust.items():
-            trial.metrics.per_gate_bests_robust[gate_name] = []
-            for r in robust_list:
-                noise = [RobustnessSample(**s) for s in r.get("noise_samples", [])]
-                ood = [RobustnessSample(**s) for s in r.get("ood_samples", [])]
-                trial.metrics.per_gate_bests_robust[gate_name].append(
-                    RobustnessMetrics(noise_samples=noise, ood_samples=ood)
-                )
-
-        # Load faithfulness
+        # Load faithfulness (includes observational, interventional, counterfactual)
         bests_faith = metrics_data.get("per_gate_bests_faith", {})
         for gate_name, faith_list in bests_faith.items():
             trial.metrics.per_gate_bests_faith[gate_name] = []
             for f in faith_list:
-                # Reconstruct PatchStatistics with samples
-                in_stats = {}
-                for pk, ps in f.get("in_circuit_stats", {}).items():
-                    samples = [InterventionSample(**s) for s in ps.get("samples", [])]
-                    in_stats[pk] = PatchStatistics(
-                        mean_bit_similarity=ps.get("mean_bit_similarity", 0),
-                        samples=samples,
+                # Load observational metrics
+                obs_data = f.get("observational")
+                observational = None
+                if obs_data:
+                    noise = [RobustnessSample(**s) for s in obs_data.get("noise_samples", [])]
+                    ood = [RobustnessSample(**s) for s in obs_data.get("ood_samples", [])]
+                    observational = ObservationalMetrics(
+                        noise_samples=noise,
+                        ood_samples=ood,
+                        noise_gate_accuracy=obs_data.get("noise_gate_accuracy", 0),
+                        noise_subcircuit_accuracy=obs_data.get("noise_subcircuit_accuracy", 0),
+                        noise_agreement_bit=obs_data.get("noise_agreement_bit", 0),
+                        noise_agreement_best=obs_data.get("noise_agreement_best", 0),
+                        noise_mse_mean=obs_data.get("noise_mse_mean", 0),
+                        overall_observational=obs_data.get("overall_observational", 0),
                     )
-                out_stats = {}
-                for pk, ps in f.get("out_circuit_stats", {}).items():
-                    samples = [InterventionSample(**s) for s in ps.get("samples", [])]
-                    out_stats[pk] = PatchStatistics(
-                        mean_bit_similarity=ps.get("mean_bit_similarity", 0),
-                        samples=samples,
-                    )
-                # OOD stats
-                in_stats_ood = {}
-                for pk, ps in f.get("in_circuit_stats_ood", {}).items():
-                    samples = [InterventionSample(**s) for s in ps.get("samples", [])]
-                    in_stats_ood[pk] = PatchStatistics(
-                        mean_bit_similarity=ps.get("mean_bit_similarity", 0),
-                        samples=samples,
-                    )
-                out_stats_ood = {}
-                for pk, ps in f.get("out_circuit_stats_ood", {}).items():
-                    samples = [InterventionSample(**s) for s in ps.get("samples", [])]
-                    out_stats_ood[pk] = PatchStatistics(
-                        mean_bit_similarity=ps.get("mean_bit_similarity", 0),
-                        samples=samples,
-                    )
-                trial.metrics.per_gate_bests_faith[gate_name].append(
-                    FaithfulnessMetrics(
+
+                # Load interventional metrics
+                interv_data = f.get("interventional", {})
+                interventional = None
+                if interv_data:
+                    # Reconstruct PatchStatistics with samples
+                    in_stats = {}
+                    for pk, ps in interv_data.get("in_circuit_stats", {}).items():
+                        samples = [InterventionSample(**s) for s in ps.get("samples", [])]
+                        in_stats[pk] = PatchStatistics(
+                            mean_bit_similarity=ps.get("mean_bit_similarity", 0),
+                            samples=samples,
+                        )
+                    out_stats = {}
+                    for pk, ps in interv_data.get("out_circuit_stats", {}).items():
+                        samples = [InterventionSample(**s) for s in ps.get("samples", [])]
+                        out_stats[pk] = PatchStatistics(
+                            mean_bit_similarity=ps.get("mean_bit_similarity", 0),
+                            samples=samples,
+                        )
+                    in_stats_ood = {}
+                    for pk, ps in interv_data.get("in_circuit_stats_ood", {}).items():
+                        samples = [InterventionSample(**s) for s in ps.get("samples", [])]
+                        in_stats_ood[pk] = PatchStatistics(
+                            mean_bit_similarity=ps.get("mean_bit_similarity", 0),
+                            samples=samples,
+                        )
+                    out_stats_ood = {}
+                    for pk, ps in interv_data.get("out_circuit_stats_ood", {}).items():
+                        samples = [InterventionSample(**s) for s in ps.get("samples", [])]
+                        out_stats_ood[pk] = PatchStatistics(
+                            mean_bit_similarity=ps.get("mean_bit_similarity", 0),
+                            samples=samples,
+                        )
+                    interventional = InterventionalMetrics(
                         in_circuit_stats=in_stats,
                         out_circuit_stats=out_stats,
                         in_circuit_stats_ood=in_stats_ood,
                         out_circuit_stats_ood=out_stats_ood,
-                        mean_in_circuit_similarity=f.get("mean_in_circuit_similarity", 0),
-                        mean_out_circuit_similarity=f.get("mean_out_circuit_similarity", 0),
-                        mean_in_circuit_similarity_ood=f.get("mean_in_circuit_similarity_ood", 0),
-                        mean_out_circuit_similarity_ood=f.get("mean_out_circuit_similarity_ood", 0),
+                        mean_in_circuit_similarity=interv_data.get("mean_in_circuit_similarity", 0),
+                        mean_out_circuit_similarity=interv_data.get("mean_out_circuit_similarity", 0),
+                        mean_in_circuit_similarity_ood=interv_data.get("mean_in_circuit_similarity_ood", 0),
+                        mean_out_circuit_similarity_ood=interv_data.get("mean_out_circuit_similarity_ood", 0),
+                    )
+
+                # Load counterfactual metrics
+                cf_data = f.get("counterfactual", {})
+                counterfactual = None
+                if cf_data:
+                    counterfactual = CounterfactualMetrics(
+                        mean_sufficiency=cf_data.get("mean_sufficiency", 0),
+                        mean_completeness=cf_data.get("mean_completeness", 0),
+                        mean_necessity=cf_data.get("mean_necessity", 0),
+                        mean_independence=cf_data.get("mean_independence", 0),
+                    )
+
+                trial.metrics.per_gate_bests_faith[gate_name].append(
+                    FaithfulnessMetrics(
+                        observational=observational,
+                        interventional=interventional,
+                        counterfactual=counterfactual,
                         overall_faithfulness=f.get("overall_faithfulness", 0),
                     )
                 )

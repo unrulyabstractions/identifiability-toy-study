@@ -60,7 +60,6 @@ def analyze_gate(
     """
     per_gate_metrics = trial_metrics.per_gate_metrics
     per_gate_bests = trial_metrics.per_gate_bests
-    per_gate_bests_robust = trial_metrics.per_gate_bests_robust
     per_gate_bests_faith = trial_metrics.per_gate_bests_faith
 
     y_gate = y_pred[..., [gate_idx]]  # [n_samples, 1] - model logits for this gate
@@ -158,7 +157,6 @@ def analyze_gate(
     robustness_results = robustness_phase(
         best_indices, best_subcircuit_models, gate_model, device, parallel_config
     )
-    per_gate_bests_robust[gate_name].extend(robustness_results)
     update_status(f"FINISHED_ROBUSTNESS:{gate_idx}")
 
     update_status(f"STARTED_FAITH:{gate_idx}")
@@ -175,5 +173,8 @@ def analyze_gate(
         device,
         parallel_config,
     )
+    # Attach observational metrics to faithfulness results
+    for faith_result, obs_result in zip(faithfulness_results, robustness_results):
+        faith_result.observational = obs_result
     per_gate_bests_faith[gate_name].extend(faithfulness_results)
     update_status(f"FINISHED_FAITH:{gate_idx}")

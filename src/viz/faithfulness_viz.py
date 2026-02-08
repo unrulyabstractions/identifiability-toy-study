@@ -246,28 +246,28 @@ def visualize_faithfulness_intervention_effects(
         return path
 
     # In-circuit stats
-    if faithfulness.in_circuit_stats:
+    if faithfulness.interventional.in_circuit_stats if faithfulness.interventional else {}:
         path = _create_circuit_distribution_summary(
-            faithfulness.in_circuit_stats, "in_circuit", "in_distribution", interventional_base)
+            faithfulness.interventional.in_circuit_stats if faithfulness.interventional else {}, "in_circuit", "in_distribution", interventional_base)
         if path:
             paths["interventional/in_circuit/in_distribution_stats"] = path
 
-    if faithfulness.in_circuit_stats_ood:
+    if faithfulness.interventional.in_circuit_stats_ood if faithfulness.interventional else {}:
         path = _create_circuit_distribution_summary(
-            faithfulness.in_circuit_stats_ood, "in_circuit", "out_of_distribution", interventional_base)
+            faithfulness.interventional.in_circuit_stats_ood if faithfulness.interventional else {}, "in_circuit", "out_of_distribution", interventional_base)
         if path:
             paths["interventional/in_circuit/out_of_distribution_stats"] = path
 
     # Out-circuit stats
-    if faithfulness.out_circuit_stats:
+    if faithfulness.interventional.out_circuit_stats if faithfulness.interventional else {}:
         path = _create_circuit_distribution_summary(
-            faithfulness.out_circuit_stats, "out_circuit", "in_distribution", interventional_base)
+            faithfulness.interventional.out_circuit_stats if faithfulness.interventional else {}, "out_circuit", "in_distribution", interventional_base)
         if path:
             paths["interventional/out_circuit/in_distribution_stats"] = path
 
-    if faithfulness.out_circuit_stats_ood:
+    if faithfulness.interventional.out_circuit_stats_ood if faithfulness.interventional else {}:
         path = _create_circuit_distribution_summary(
-            faithfulness.out_circuit_stats_ood, "out_circuit", "out_of_distribution", interventional_base)
+            faithfulness.interventional.out_circuit_stats_ood if faithfulness.interventional else {}, "out_circuit", "out_of_distribution", interventional_base)
         if path:
             paths["interventional/out_circuit/out_of_distribution_stats"] = path
 
@@ -341,8 +341,8 @@ def visualize_faithfulness_intervention_effects(
 
     # In-distribution summary (combined bar chart)
     path = _create_intervention_summary(
-        faithfulness.in_circuit_stats,
-        faithfulness.out_circuit_stats,
+        faithfulness.interventional.in_circuit_stats if faithfulness.interventional else {},
+        faithfulness.interventional.out_circuit_stats if faithfulness.interventional else {},
         "In-Distribution Summary",
         "in_distribution_summary.png"
     )
@@ -350,10 +350,10 @@ def visualize_faithfulness_intervention_effects(
         paths["interventional/in_distribution_summary"] = path
 
     # Out-of-distribution summary (if OOD stats exist)
-    if faithfulness.in_circuit_stats_ood or faithfulness.out_circuit_stats_ood:
+    if faithfulness.interventional.in_circuit_stats_ood if faithfulness.interventional else {} or faithfulness.interventional.out_circuit_stats_ood if faithfulness.interventional else {}:
         path = _create_intervention_summary(
-            faithfulness.in_circuit_stats_ood,
-            faithfulness.out_circuit_stats_ood,
+            faithfulness.interventional.in_circuit_stats_ood if faithfulness.interventional else {},
+            faithfulness.interventional.out_circuit_stats_ood if faithfulness.interventional else {},
             "Out-of-Distribution Summary",
             "out_distribution_summary.png"
         )
@@ -361,10 +361,10 @@ def visualize_faithfulness_intervention_effects(
             paths["interventional/out_distribution_summary"] = path
 
     # === 3. Intervention Summary (2x2 Matrix of Patching Experiments) ===
-    suff_cf = faithfulness.sufficiency_effects or []
-    comp_cf = faithfulness.completeness_effects or []
-    nec_cf = faithfulness.necessity_effects or []
-    ind_cf = faithfulness.independence_effects or []
+    suff_cf = faithfulness.counterfactual.sufficiency_effects if faithfulness.counterfactual else [] or []
+    comp_cf = faithfulness.counterfactual.completeness_effects if faithfulness.counterfactual else [] or []
+    nec_cf = faithfulness.counterfactual.necessity_effects if faithfulness.counterfactual else [] or []
+    ind_cf = faithfulness.counterfactual.independence_effects if faithfulness.counterfactual else [] or []
 
     # Build per-node scores from intervention stats (bit similarity)
     # Key: (layer, node_idx) -> score
@@ -380,8 +380,8 @@ def visualize_faithfulness_intervention_effects(
                 scores[(layer, node)] = patch_stats.mean_bit_similarity
         return scores
 
-    in_bit_scores = _build_node_scores(faithfulness.in_circuit_stats)
-    out_bit_scores = _build_node_scores(faithfulness.out_circuit_stats)
+    in_bit_scores = _build_node_scores(faithfulness.interventional.in_circuit_stats if faithfulness.interventional else {})
+    out_bit_scores = _build_node_scores(faithfulness.interventional.out_circuit_stats if faithfulness.interventional else {})
 
     # Build per-node faithfulness scores from counterfactual effects
     def _build_cf_node_scores(cf_effects, circuit_node_masks, is_in_circuit=True):
@@ -400,7 +400,7 @@ def visualize_faithfulness_intervention_effects(
 
     # Get circuit node masks for determining in/out circuit nodes
     circuit_node_masks = None
-    if faithfulness.in_circuit_stats or faithfulness.out_circuit_stats:
+    if faithfulness.interventional.in_circuit_stats if faithfulness.interventional else {} or faithfulness.interventional.out_circuit_stats if faithfulness.interventional else {}:
         # Infer from stats
         all_keys = list(in_bit_scores.keys()) + list(out_bit_scores.keys())
         if all_keys:
@@ -482,13 +482,13 @@ def visualize_faithfulness_intervention_effects(
         fig, axes = plt.subplots(2, 2, figsize=(10, 9))
 
         # Compute mean scores for each experiment
-        suff_mean = faithfulness.mean_sufficiency if hasattr(faithfulness, 'mean_sufficiency') else (
+        suff_mean = faithfulness.counterfactual.mean_sufficiency if faithfulness.counterfactual else 0 if hasattr(faithfulness, 'mean_sufficiency') else (
             np.mean([e.faithfulness_score for e in suff_cf]) if suff_cf else 0.5)
-        comp_mean = faithfulness.mean_completeness if hasattr(faithfulness, 'mean_completeness') else (
+        comp_mean = faithfulness.counterfactual.mean_completeness if faithfulness.counterfactual else 0 if hasattr(faithfulness, 'mean_completeness') else (
             np.mean([e.faithfulness_score for e in comp_cf]) if comp_cf else 0.5)
-        nec_mean = faithfulness.mean_necessity if hasattr(faithfulness, 'mean_necessity') else (
+        nec_mean = faithfulness.counterfactual.mean_necessity if faithfulness.counterfactual else 0 if hasattr(faithfulness, 'mean_necessity') else (
             np.mean([e.faithfulness_score for e in nec_cf]) if nec_cf else 0.5)
-        ind_mean = faithfulness.mean_independence if hasattr(faithfulness, 'mean_independence') else (
+        ind_mean = faithfulness.counterfactual.mean_independence if faithfulness.counterfactual else 0 if hasattr(faithfulness, 'mean_independence') else (
             np.mean([e.faithfulness_score for e in ind_cf]) if ind_cf else 0.5)
 
         # Row 1: DENOISING (run corrupted, patch with clean)
@@ -867,24 +867,24 @@ def visualize_faithfulness_circuit_samples(
     # ===== 2x2 Matrix Counterfactuals =====
     # Denoising experiments (run corrupted, patch with clean)
     _add_counterfactual_tasks(
-        faithfulness.sufficiency_effects,
+        faithfulness.counterfactual.sufficiency_effects if faithfulness.counterfactual else [],
         "sufficiency",
         in_circuit_nodes,
     )
     _add_counterfactual_tasks(
-        faithfulness.completeness_effects,
+        faithfulness.counterfactual.completeness_effects if faithfulness.counterfactual else [],
         "completeness",
         out_circuit_nodes,
     )
 
     # Noising experiments (run clean, patch with corrupted)
     _add_counterfactual_tasks(
-        faithfulness.necessity_effects,
+        faithfulness.counterfactual.necessity_effects if faithfulness.counterfactual else [],
         "necessity",
         in_circuit_nodes,
     )
     _add_counterfactual_tasks(
-        faithfulness.independence_effects,
+        faithfulness.counterfactual.independence_effects if faithfulness.counterfactual else [],
         "independence",
         out_circuit_nodes,
     )
@@ -1043,35 +1043,35 @@ def visualize_faithfulness_circuit_samples(
     out_circuit_base = os.path.join(interventional_dir, "out_circuit")
 
     # In-distribution interventions
-    if faithfulness.in_circuit_stats:
+    if faithfulness.interventional.in_circuit_stats if faithfulness.interventional else {}:
         in_circuit_id_dir = os.path.join(in_circuit_base, "in_distribution")
         paths["interventional/in_circuit/in_distribution"] = visualize_patch_circuits(
-            faithfulness.in_circuit_stats,
+            faithfulness.interventional.in_circuit_stats if faithfulness.interventional else {},
             "In-Circuit (ID)",
             in_circuit_id_dir,
         )
 
-    if faithfulness.out_circuit_stats:
+    if faithfulness.interventional.out_circuit_stats if faithfulness.interventional else {}:
         out_circuit_id_dir = os.path.join(out_circuit_base, "in_distribution")
         paths["interventional/out_circuit/in_distribution"] = visualize_patch_circuits(
-            faithfulness.out_circuit_stats,
+            faithfulness.interventional.out_circuit_stats if faithfulness.interventional else {},
             "Out-of-Circuit (ID)",
             out_circuit_id_dir,
         )
 
     # Out-of-distribution interventions (if OOD stats exist)
-    if faithfulness.in_circuit_stats_ood:
+    if faithfulness.interventional.in_circuit_stats_ood if faithfulness.interventional else {}:
         in_circuit_ood_dir = os.path.join(in_circuit_base, "out_of_distribution")
         paths["interventional/in_circuit/out_of_distribution"] = visualize_patch_circuits(
-            faithfulness.in_circuit_stats_ood,
+            faithfulness.interventional.in_circuit_stats_ood if faithfulness.interventional else {},
             "In-Circuit (OOD)",
             in_circuit_ood_dir,
         )
 
-    if faithfulness.out_circuit_stats_ood:
+    if faithfulness.interventional.out_circuit_stats_ood if faithfulness.interventional else {}:
         out_circuit_ood_dir = os.path.join(out_circuit_base, "out_of_distribution")
         paths["interventional/out_circuit/out_of_distribution"] = visualize_patch_circuits(
-            faithfulness.out_circuit_stats_ood,
+            faithfulness.interventional.out_circuit_stats_ood if faithfulness.interventional else {},
             "Out-of-Circuit (OOD)",
             out_circuit_ood_dir,
         )

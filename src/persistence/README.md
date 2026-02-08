@@ -74,8 +74,7 @@ Training and analysis results:
     }
   },
   "per_gate_bests": {"XOR": [0, 5, 12]},
-  "per_gate_bests_robust": {...},
-  "per_gate_bests_faith": {...}
+  "per_gate_bests_faith": {...}  // Contains observational, interventional, counterfactual metrics
 }
 ```
 
