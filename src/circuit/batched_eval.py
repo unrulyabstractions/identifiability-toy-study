@@ -16,7 +16,7 @@ import numpy as np
 import torch
 
 from src.infra import profile_fn
-from src.tensor_ops import (
+from src.math import (
     calculate_best_match_rate_batched,
     calculate_logit_similarity_batched,
     calculate_match_rate_batched,

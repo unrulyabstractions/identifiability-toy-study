@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 
-from .config import ExperimentConfig, TrialSetup
+from src.experiment_config import ExperimentConfig, TrialSetup
 from .evaluation import Metrics, ProfilingData
 from .schema_class import SchemaClass
 

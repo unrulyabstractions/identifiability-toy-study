@@ -13,7 +13,7 @@ from torch import nn
 from tqdm import tqdm
 
 from src.model import Intervention, PatchShape
-from src.tensor_ops import calculate_logit_similarity, logits_to_binary
+from src.math import calculate_logit_similarity, logits_to_binary
 from src.domain import name_gate
 from src.infra import get_node_size
 

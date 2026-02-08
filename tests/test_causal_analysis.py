@@ -6,7 +6,8 @@ import torch
 
 from src.circuit import Circuit, enumerate_all_valid_circuit
 from src.model import MLP
-from src.schemas import IdentifiabilityConstraints, SubcircuitMetrics
+from src.experiment_config import IdentifiabilityConstraints
+from src.schemas import SubcircuitMetrics
 from src.analysis import (
     filter_subcircuits,
     _generate_ood_multiply_samples,

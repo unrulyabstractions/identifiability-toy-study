@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import torch
 
 from src.model import Intervention, PatchShape
-from src.tensor_ops import logits_to_binary
+from src.math import logits_to_binary
 
 
 @dataclass

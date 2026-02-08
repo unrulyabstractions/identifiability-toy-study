@@ -5,10 +5,11 @@ Contains all configuration-related dataclasses:
 - ModelParams: Neural network architecture parameters
 - TrainParams: Training hyperparameters
 - FaithfulnessConfig: Faithfulness analysis configuration
-- ParallelConfig: Parallelization configuration
 - IdentifiabilityConstraints: Constraints for identifiability analysis
 - TrialSetup: Complete trial configuration
 - ExperimentConfig: Multi-trial experiment configuration
+
+Note: ParallelConfig is in src.infra.parallel to avoid circular imports.
 """
 
 import copy
@@ -16,7 +17,7 @@ import json
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Optional
 
-from .schema_class import SchemaClass
+from src.schemas.schema_class import SchemaClass
 
 
 @dataclass
@@ -62,40 +63,6 @@ class FaithfulnessConfig(SchemaClass):
 
 
 @dataclass
-class ParallelConfig(SchemaClass):
-    """Configuration for parallelization and compute optimization.
-
-    Optimized defaults based on M4 Max benchmarks:
-    - MPS precomputed is 2.7x faster than CPU for batched eval
-    - Sequential structure analysis is FASTER than parallel (thread overhead dominates)
-    - Larger batch sizes improve throughput
-
-    PyTorch GPU ops are NOT thread-safe, so we avoid threading for GPU work.
-    """
-
-    # Device selection for batched circuit evaluation
-    eval_device: str = "mps"  # "cpu" or "mps" - MPS is 2.7x faster with precompute
-    use_mps_if_available: bool = True
-
-    # Structure analysis parallelization
-    # BENCHMARK RESULT: Sequential is FASTER (77ms vs 130ms) because
-    # thread overhead exceeds computation time per circuit
-    max_workers_structure: int = 1  # 1 = sequential (fastest based on benchmark)
-    enable_parallel_structure: bool = False  # Disabled - sequential is faster
-
-    # Batched evaluation settings (GPU)
-    precompute_masks: bool = True  # Pre-stack masks: 5.8ms vs 9.6ms on MPS
-
-    # Robustness/Faithfulness - these involve GPU, so threading is risky
-    # KEEP FALSE to avoid GPU thread safety issues
-    enable_parallel_robustness: bool = False
-    enable_parallel_faithfulness: bool = False
-
-    # Memory optimization - use more memory for speed
-    cache_subcircuit_models: bool = True  # Cache models for best subcircuits
-
-
-@dataclass
 class TrialSetup(SchemaClass):
     seed: int = 0
     data_params: DataParams = field(default_factory=DataParams)
@@ -105,7 +72,6 @@ class TrialSetup(SchemaClass):
         default_factory=IdentifiabilityConstraints
     )
     faithfulness_config: FaithfulnessConfig = field(default_factory=FaithfulnessConfig)
-    parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
 
     def __str__(self) -> str:
         setup_dict = asdict(self)

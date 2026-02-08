@@ -12,7 +12,7 @@ import torch
 
 from src.model import Intervention, InterventionEffect, MLP, PatchShape
 from src.schemas import InterventionalSample, PatchStatistics, Similarity
-from src.tensor_ops import (
+from src.math import (
     calculate_best_match_rate,
     calculate_logit_similarity,
     calculate_match_rate,

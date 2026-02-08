@@ -13,10 +13,10 @@ import torch
 
 from src.circuit import Circuit
 from src.model import DecomposedMLP, MLP
+from src.experiment_config import ExperimentConfig, TrialSetup
 from src.schemas import (
     CounterfactualEffect,
     CounterfactualMetrics,
-    ExperimentConfig,
     ExperimentResult,
     FaithfulnessMetrics,
     GateMetrics,
@@ -30,7 +30,6 @@ from src.schemas import (
     Similarity,
     SubcircuitMetrics,
     TrialResult,
-    TrialSetup,
 )
 
 
@@ -246,7 +245,7 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
         tensors = load_tensors(trial_dir, device=device)
 
         # Create TrialSetup from saved data
-        from src.schemas import ModelParams, FaithfulnessConfig
+        from src.experiment_config import FaithfulnessConfig, ModelParams
 
         model_params_data = setup_data.get("model_params", {})
         model_params = ModelParams(

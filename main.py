@@ -3,6 +3,7 @@ import datetime
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from src.experiment import run_experiment
 from src.infra import print_profile, profile, profile_fn, setup_logging
@@ -11,15 +12,13 @@ from src.persistence import (
     load_results,
     save_results,
 )
-from src.schemas import (
-    ExperimentConfig,
-    ExperimentResult,
-)
+from src.experiment_config import ExperimentConfig
+from src.schemas import ExperimentResult
 from src.spd import SpdResults, load_spd_results, run_spd, save_spd_results
 from src.viz import visualize_experiment, visualize_spd_experiment
 
 
-def get_args():
+def get_args() -> Any:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--device",
@@ -63,7 +62,7 @@ def get_args():
 
 
 @profile_fn("rerun_all")
-def rerun_all(output_dir, process_fn, process_name=""):
+def rerun_all(output_dir: Path, process_fn: Any, process_name: str = "") -> None:
     """Re-run processing on all runs."""
     runs = get_all_runs(output_dir)
     if not runs:
@@ -83,7 +82,7 @@ def rerun_all(output_dir, process_fn, process_name=""):
 
 
 @profile_fn("do_viz")
-def do_viz(result, run_dir, spd):
+def do_viz(result: ExperimentResult, run_dir: str, spd: bool) -> None:
     visualize_experiment(result, run_dir=run_dir)
     if spd:
         spd_result = load_spd_results(run_dir)
@@ -92,15 +91,17 @@ def do_viz(result, run_dir, spd):
 
 
 @profile_fn("do_spd")
-def do_spd(result, run_dir, viz, spd_device):
-    spd_result: SpdResults = run_spd(result, run_dir=run_dir, device=spd_device)
+def do_spd(
+    result: ExperimentResult, run_dir: str, viz: bool, spd_device: str
+) -> SpdResults:
+    spd_result = run_spd(result, run_dir=run_dir, device=spd_device)
     save_spd_results(spd_result, run_dir=run_dir)
     if viz:
         visualize_spd_experiment(spd_result, run_dir=run_dir)
     return spd_result
 
 
-def rerun_pipeline(output_dir, args) -> bool:
+def rerun_pipeline(output_dir: Path, args: Any) -> bool:
     did_rerun_pipeline = False
     if args.spd_only:
         do_fx = lambda *a: do_spd(*a, viz=not args.no_viz, spd_device=args.spd_device)
@@ -113,7 +114,9 @@ def rerun_pipeline(output_dir, args) -> bool:
     return did_rerun_pipeline
 
 
-def print_summary(experiment_result, spd_result, logger):
+def print_summary(
+    experiment_result: ExperimentResult, spd_result: SpdResults, logger: Any
+) -> None:
     logger.info("\n\n\n\n")
     logger.info("experiment_result")
     logger.info("\n\n\n\n")
@@ -127,13 +130,13 @@ def print_summary(experiment_result, spd_result, logger):
         logger.info(spd_summary)
 
 
-def exit_fx():
+def exit_fx() -> None:
     # Print profiling
     print_profile()
     sys.exit(0)
 
 
-if __name__ == "__main__":
+def main() -> None:
     args = get_args()
 
     # Output path
@@ -182,3 +185,7 @@ if __name__ == "__main__":
     print_summary(experiment_result, spd_result, logger)
 
     exit_fx()
+
+
+if __name__ == "__main__":
+    main()

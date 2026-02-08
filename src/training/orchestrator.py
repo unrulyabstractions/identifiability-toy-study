@@ -3,12 +3,9 @@
 
 from src.infra import profile_fn
 from src.model import MLP
-from src.schemas import (
-    ModelParams,
-    TrainParams,
-    TrialData,
-)
-from src.tensor_ops import (
+from src.experiment_config import ModelParams, TrainParams
+from src.schemas import TrialData
+from src.math import (
     calculate_match_rate,
     logits_to_binary,
 )

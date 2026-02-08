@@ -17,7 +17,7 @@ from src.schemas import (
     SampleType,
     Similarity,
 )
-from src.tensor_ops import calculate_mse, logits_to_binary
+from src.math import calculate_mse, logits_to_binary
 
 from .perturbations import (
     GROUND_TRUTH,

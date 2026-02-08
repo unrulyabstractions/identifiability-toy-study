@@ -2,13 +2,11 @@ import copy
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import product
+from typing import Optional
 
-from src.infra import set_seeds
-from src.schemas import (
-    ExperimentConfig,
-    ExperimentResult,
-    TrialSetup,
-)
+from src.infra import ParallelConfig, set_seeds
+from src.experiment_config import ExperimentConfig, TrialSetup
+from src.schemas import ExperimentResult
 from src.training import generate_trial_data
 
 from .trial import run_trial
@@ -22,7 +20,10 @@ Look at .common.schemas for full definitions
 
 
 def run_experiment(
-    cfg: ExperimentConfig, logger=None, max_parallel_trials: int = 4
+    cfg: ExperimentConfig,
+    logger=None,
+    max_parallel_trials: int = 4,
+    parallel_config: Optional[ParallelConfig] = None,
 ) -> ExperimentResult:
     logger and logger.info(f"\n\n ExperimentConfig: \n {cfg} \n\n")
 
@@ -83,6 +84,7 @@ def run_experiment(
             device=cfg.device,
             logger=logger,
             debug=cfg.debug,
+            parallel_config=parallel_config,
         )
         experiment_result.trials[trial_result.trial_id] = trial_result
     else:
@@ -100,6 +102,7 @@ def run_experiment(
                 device=cfg.device,
                 logger=None,  # Disable logging in parallel to avoid interleaving
                 debug=cfg.debug,
+                parallel_config=parallel_config,
             )
 
         with ThreadPoolExecutor(max_workers=n_workers) as executor:

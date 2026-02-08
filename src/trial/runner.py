@@ -1,11 +1,12 @@
 """Main trial runner - orchestrates the full trial pipeline."""
 
-from typing import Any
+from typing import Any, Optional
 
 from src.domain import ALL_LOGIC_GATES
-from src.infra import get_eval_device, set_seeds, update_status_fx
-from src.schemas import TrialData, TrialResult, TrialSetup
-from src.tensor_ops import calculate_match_rate, logits_to_binary
+from src.infra import get_eval_device, ParallelConfig, set_seeds, update_status_fx
+from src.experiment_config import TrialSetup
+from src.schemas import TrialData, TrialResult
+from src.math import calculate_match_rate, logits_to_binary
 from src.training import train_model
 
 from .gate_analysis import analyze_gate
@@ -22,6 +23,7 @@ def run_trial(
     device: str,
     logger: Any = None,
     debug: bool = False,
+    parallel_config: Optional[ParallelConfig] = None,
 ) -> TrialResult:
     """Run a complete training and analysis trial.
 
@@ -39,10 +41,13 @@ def run_trial(
         device: Main compute device (e.g., "cpu", "cuda", "mps")
         logger: Optional logger for status updates
         debug: Enable debug output
+        parallel_config: Optional parallelization config (defaults to ParallelConfig())
 
     Returns:
         TrialResult containing model, metrics, and analysis results
     """
+    if parallel_config is None:
+        parallel_config = ParallelConfig()
     # This also sets deterministic behavior
     set_seeds(setup.seed)
 
@@ -101,7 +106,6 @@ def run_trial(
     trial_metrics.test_acc = calculate_match_rate(bit_gt, bit_pred).item()
 
     # ===== Circuit Finding =====
-    parallel_config = setup.parallel_config
     update_status("STARTED_CIRCUITS")
     subcircuits, subcircuit_structures = enumerate_circuits_phase(
         model, parallel_config

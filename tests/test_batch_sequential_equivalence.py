@@ -11,7 +11,7 @@ These tests verify correctness by comparing:
 import numpy as np
 import pytest
 import torch
-from src.tensor_ops import calculate_best_match_rate, logits_to_binary
+from src.math import calculate_best_match_rate, logits_to_binary
 
 from src.circuit import (
     batch_compute_metrics,

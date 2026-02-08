@@ -7,7 +7,7 @@ from src.infra.logging import (
     log_gate_faithfulness_summary,
 )
 from src.schemas import GateMetrics, SubcircuitMetrics
-from src.tensor_ops import calculate_match_rate
+from src.math import calculate_match_rate
 
 from .phases import faithfulness_phase
 

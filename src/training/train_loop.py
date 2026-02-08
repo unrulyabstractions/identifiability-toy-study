@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch import optim
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.tensor_ops import calculate_loss, calculate_match_rate, logits_to_binary
+from src.math import calculate_loss, calculate_match_rate, logits_to_binary
 
 
 def train_mlp(

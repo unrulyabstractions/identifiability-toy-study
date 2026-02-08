@@ -9,14 +9,14 @@ import torch
 
 from src.circuit import CircuitStructure
 from src.model import InterventionEffect, MLP, PatchShape
+from src.experiment_config import FaithfulnessConfig
 from src.schemas import (
     CounterfactualEffect,
     CounterfactualMetrics,
-    FaithfulnessConfig,
     FaithfulnessMetrics,
     InterventionalMetrics,
 )
-from src.tensor_ops import logits_to_binary
+from src.math import logits_to_binary
 
 from .counterfactual import CleanCorruptedPair, create_patch_intervention
 from .interventional import _compute_patch_statistics, calculate_patches_causal_effect

@@ -1,4 +1,4 @@
-"""Pure tensor operations for similarity and metric calculations."""
+"""Math operations for tensor calculations and similarity metrics."""
 
 from src.auto_export import auto_export
 

@@ -4,13 +4,47 @@ Provides clean interfaces for running independent computations in parallel
 using ThreadPoolExecutor (appropriate for PyTorch operations that release GIL).
 """
 
-from concurrent.futures import ThreadPoolExecutor, Future
-from typing import Callable, TypeVar
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Callable, TypeVar
 
 import torch
 
-from src.schemas.config import ParallelConfig
+from src.schemas.schema_class import SchemaClass
+
+
+@dataclass
+class ParallelConfig(SchemaClass):
+    """Configuration for parallelization and compute optimization.
+
+    Optimized defaults based on M4 Max benchmarks:
+    - MPS precomputed is 2.7x faster than CPU for batched eval
+    - Sequential structure analysis is FASTER than parallel (thread overhead dominates)
+    - Larger batch sizes improve throughput
+
+    PyTorch GPU ops are NOT thread-safe, so we avoid threading for GPU work.
+    """
+
+    # Device selection for batched circuit evaluation
+    eval_device: str = "mps"  # "cpu" or "mps" - MPS is 2.7x faster with precompute
+    use_mps_if_available: bool = True
+
+    # Structure analysis parallelization
+    # BENCHMARK RESULT: Sequential is FASTER (77ms vs 130ms) because
+    # thread overhead exceeds computation time per circuit
+    max_workers_structure: int = 1  # 1 = sequential (fastest based on benchmark)
+    enable_parallel_structure: bool = False  # Disabled - sequential is faster
+
+    # Batched evaluation settings (GPU)
+    precompute_masks: bool = True  # Pre-stack masks: 5.8ms vs 9.6ms on MPS
+
+    # Robustness/Faithfulness - these involve GPU, so threading is risky
+    # KEEP FALSE to avoid GPU thread safety issues
+    enable_parallel_robustness: bool = False
+    enable_parallel_faithfulness: bool = False
+
+    # Memory optimization - use more memory for speed
+    cache_subcircuit_models: bool = True  # Cache models for best subcircuits
 
 
 def get_eval_device(parallel_config: ParallelConfig, default_device: str) -> str:
@@ -27,6 +61,7 @@ def get_eval_device(parallel_config: ParallelConfig, default_device: str) -> str
         if parallel_config.eval_device != "mps"
         else default_device
     )
+
 
 T = TypeVar("T")
 

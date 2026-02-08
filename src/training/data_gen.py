@@ -7,11 +7,8 @@ from src.domain import (
     ALL_LOGIC_GATES,
     generate_noisy_multi_gate_data,
 )
-from src.schemas import (
-    DataParams,
-    Dataset,
-    TrialData,
-)
+from src.experiment_config import DataParams
+from src.schemas import Dataset, TrialData
 
 
 def generate_dataset(

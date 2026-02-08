@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.circuit import Circuit, CircuitStructure
-    from src.schemas import IdentifiabilityConstraints, SubcircuitMetrics
+    from src.experiment_config import IdentifiabilityConstraints
+    from src.schemas import SubcircuitMetrics
 
 
 def _node_masks_key(circuit: "Circuit") -> tuple:
