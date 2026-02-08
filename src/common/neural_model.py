@@ -139,7 +139,7 @@ class MLP(nn.Module):
         hidden_sizes: list,
         input_size: int = 2,
         output_size: int = 1,
-        activation: str = "relu",
+        activation: str = "leaky_relu",
         device: str = "cpu",
         debug: bool = False,
         logger=None,
@@ -552,7 +552,7 @@ class MLP(nn.Module):
         loss_target: float = 0.001,
         val_frequency: int = 1,
         early_stopping_steps: int = 10,
-        l1_lambda: float = 1e-5,
+        l1_lambda: float = 0.0,
         logger=None,
     ):
         """

@@ -25,21 +25,23 @@ class DataParams(SchemaClass):
     n_samples_train: int = 2**14
     n_samples_val: int = 2**10
     n_samples_test: int = 2**10
-    noise_std: float = 0.075
+    # noise_std: float = 0.075
+    noise_std: float = 0
     skewed_distribution: bool = False
 
 
 @dataclass
 class ModelParams(SchemaClass):
-    logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
+    # logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
+    logic_gates: list[str] = field(default_factory=lambda: ["XOR"])
     width: int = 3
     depth: int = 2
 
 
 @dataclass
 class TrainParams(SchemaClass):
-    learning_rate: float = 0.01
-    batch_size: int = DataParams().n_samples_train
+    learning_rate: float = 0.001
+    batch_size: int = DataParams().n_samples_train // 2
     epochs: int = 4000
     val_frequency: int = 1
 
@@ -48,16 +50,20 @@ class TrainParams(SchemaClass):
 class IdentifiabilityConstraints(SchemaClass):
     # Max deviation from bit_similarity=1.0 to be considered "best"
     # 0.01 = only 99%+ similar, 0.1 = 90%+ similar, 0.2 = 80%+ similar
-    epsilon: float = 0.1
+    epsilon: float = 0.001
 
 
 @dataclass
 class FaithfulnessConfig(SchemaClass):
     """Configuration for faithfulness analysis."""
 
-    max_subcircuits_per_gate: int = 100
-    n_interventions_per_patch: int = 200
-    n_counterfactual_pairs: int = 200
+    # max_subcircuits_per_gate: int = 100
+    # n_interventions_per_patch: int = 200
+    # n_counterfactual_pairs: int = 200
+
+    max_subcircuits_per_gate: int = 1
+    n_interventions_per_patch: int = 10
+    n_counterfactual_pairs: int = 10
 
 
 @dataclass
