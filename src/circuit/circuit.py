@@ -673,7 +673,7 @@ class Circuit:
                 G,
                 pos,
                 labels=labels,
-                font_size=15,
+                font_size=8,
                 font_color="black",
                 alpha=0.9,
                 ax=ax,

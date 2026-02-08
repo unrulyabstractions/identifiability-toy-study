@@ -4,8 +4,11 @@ Contains functions for computing and exporting metrics:
 - compute_observational_metrics: Compute observational metrics from observational data
 - compute_interventional_metrics: Compute interventional metrics from faithfulness data
 - compute_counterfactual_metrics: Compute counterfactual metrics from faithfulness data
+- rank_subcircuits: Rank subcircuits by faithfulness scores (single source of truth)
 - save_faithfulness_json: Save result.json files and summary.json
-- save_gate_summary: Save summary.json for a specific gate
+- save_gate_summary: Save summary.json for a specific gate (best per node pattern)
+- save_node_pattern_summary: Save summary.json ranking edge variations within a node pattern
+- save_full_results: Save full_results.json in leaf folders
 """
 
 import json
@@ -17,6 +20,30 @@ if TYPE_CHECKING:
     from src.schemas import FaithfulnessMetrics, Metrics, ObservationalMetrics
 
 from src.schemas import FaithfulnessCategoryScore, FaithfulnessSummary
+
+
+def rank_subcircuits(
+    subcircuit_scores: list[dict],
+    key: str = "overall",
+    reverse: bool = True,
+) -> list[dict]:
+    """Rank subcircuits by a score field.
+
+    This is the single source of truth for ranking logic.
+    Change this function to change ranking everywhere.
+
+    Args:
+        subcircuit_scores: List of dicts with score fields
+        key: Which score field to sort by (default: "overall")
+        reverse: If True, higher scores rank first (default: True)
+
+    Returns:
+        Sorted list with "rank" field added (1-indexed)
+    """
+    sorted_list = sorted(subcircuit_scores, key=lambda x: x.get(key, 0), reverse=reverse)
+    for i, item in enumerate(sorted_list):
+        item["rank"] = i + 1
+    return sorted_list
 
 
 def compute_observational_metrics(observational: "ObservationalMetrics") -> dict:
@@ -511,39 +538,153 @@ def save_gate_summary(
 ) -> str:
     """Save summary.json for a specific gate.
 
-    Creates a summary file with:
-    - Gate name
-    - Number of subcircuits
-    - List of subcircuit indices (ranked by overall score)
-    - Per-subcircuit scores (observational, interventional, counterfactual, overall)
+    Shows ONLY the best edge variation per node pattern for readability.
+    For full edge variation details, see each node pattern's summary.json.
+
+    Creates a clean, readable summary with:
+    - Gate name and accuracy
+    - Number of node patterns analyzed
+    - Best subcircuit per node pattern (ranked by overall score)
     """
-    best_indices = metrics.per_gate_bests.get(gate_name, [])
+    best_keys = metrics.per_gate_bests.get(gate_name, [])
     bests_faith = metrics.per_gate_bests_faith.get(gate_name, [])
+    gate_metrics = metrics.per_gate_metrics.get(gate_name)
 
-    # Build subcircuit summaries with scores
-    subcircuit_summaries = []
-    for i, sc_idx in enumerate(best_indices):
+    # Group by node pattern and find best edge variation per pattern
+    node_pattern_best: dict[int, tuple[int, dict, "FaithfulnessMetrics | None"]] = {}
+
+    for i, key in enumerate(best_keys):
         faith = bests_faith[i] if i < len(bests_faith) else None
-
         scores = _compute_subcircuit_scores(faith)
-        sc_summary = {"index": sc_idx, **scores}
-        subcircuit_summaries.append(sc_summary)
 
-    # Sort by overall score (descending)
-    subcircuit_summaries.sort(key=lambda x: x["overall"], reverse=True)
+        # Get node_idx (handle both tuple and int keys)
+        if isinstance(key, tuple):
+            node_idx, edge_var_idx = key
+        else:
+            node_idx = key
+            edge_var_idx = 0
 
-    # Extract sorted indices
-    sorted_indices = [sc["index"] for sc in subcircuit_summaries]
+        # Keep only the best edge variation per node pattern
+        if node_idx not in node_pattern_best:
+            node_pattern_best[node_idx] = (edge_var_idx, scores, faith)
+        else:
+            _, existing_scores, _ = node_pattern_best[node_idx]
+            if scores["overall"] > existing_scores["overall"]:
+                node_pattern_best[node_idx] = (edge_var_idx, scores, faith)
+
+    # Build summaries for best per node pattern
+    node_summaries = []
+    for node_idx, (edge_var_idx, scores, _) in node_pattern_best.items():
+        node_summaries.append({
+            "node_pattern": node_idx,
+            "best_edge_variation": edge_var_idx,
+            "observational": round(scores["observational"]["score"], 3),
+            "interventional": round(scores["interventional"]["score"], 3),
+            "counterfactual": round(scores["counterfactual"]["score"], 3),
+            "overall": round(scores["overall"], 3),
+        })
+
+    # Rank using the standard ranking function
+    ranked_summaries = rank_subcircuits(node_summaries, key="overall")
 
     summary = {
         "gate": gate_name,
-        "n_subcircuits": len(best_indices),
-        "subcircuit_indices": sorted_indices,
-        "subcircuits": subcircuit_summaries,
+        "accuracy": round(gate_metrics.test_acc, 4) if gate_metrics else None,
+        "n_node_patterns": len(node_pattern_best),
+        "subcircuits": ranked_summaries,
     }
 
     path = os.path.join(gate_dir, "summary.json")
     with open(path, "w") as f:
         json.dump(summary, f, indent=2)
+
+    return path
+
+
+def save_node_pattern_summary(
+    node_idx: int,
+    node_dir: str,
+    edge_variations: list[tuple[int, "FaithfulnessMetrics | None"]],
+) -> str:
+    """Save summary.json for a node pattern, ranking its edge variations.
+
+    Args:
+        node_idx: The node pattern index
+        node_dir: Directory for this node pattern (e.g., XOR/46/)
+        edge_variations: List of (edge_var_idx, faithfulness_metrics) tuples
+
+    Returns:
+        Path to the saved summary.json
+    """
+    # Build edge variation summaries
+    edge_summaries = []
+    for edge_var_idx, faith in edge_variations:
+        scores = _compute_subcircuit_scores(faith)
+        edge_summaries.append({
+            "edge_variation": edge_var_idx,
+            "observational": round(scores["observational"]["score"], 3),
+            "interventional": round(scores["interventional"]["score"], 3),
+            "counterfactual": round(scores["counterfactual"]["score"], 3),
+            "overall": round(scores["overall"], 3),
+        })
+
+    # Rank using the standard ranking function
+    ranked_edges = rank_subcircuits(edge_summaries, key="overall")
+
+    summary = {
+        "node_pattern": node_idx,
+        "n_edge_variations": len(edge_variations),
+        "edge_variations": ranked_edges,
+    }
+
+    os.makedirs(node_dir, exist_ok=True)
+    path = os.path.join(node_dir, "summary.json")
+    with open(path, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    return path
+
+
+def save_full_results(
+    output_dir: str,
+    faithfulness: "FaithfulnessMetrics | None",
+    subcircuit_key: int | tuple[int, int],
+) -> str:
+    """Save full_results.json with complete faithfulness data.
+
+    This file contains all detailed metrics and is saved in leaf folders only.
+
+    Args:
+        output_dir: Directory to save to (e.g., XOR/46/0/)
+        faithfulness: Full faithfulness metrics
+        subcircuit_key: The subcircuit key (int or tuple)
+
+    Returns:
+        Path to the saved full_results.json
+    """
+    if faithfulness is None:
+        return ""
+
+    # Format the key for JSON
+    if isinstance(subcircuit_key, tuple):
+        key_info = {"node_pattern": subcircuit_key[0], "edge_variation": subcircuit_key[1]}
+    else:
+        key_info = {"index": subcircuit_key}
+
+    # Compute all scores
+    scores = _compute_subcircuit_scores(faithfulness)
+
+    # Build full results with detailed breakdowns
+    full_results = {
+        "subcircuit": key_info,
+        "scores": scores,
+        "observational": compute_observational_metrics(faithfulness.observational) if faithfulness.observational else None,
+        "interventional": compute_interventional_metrics(faithfulness) if faithfulness.interventional else None,
+        "counterfactual": compute_counterfactual_metrics(faithfulness) if faithfulness.counterfactual else None,
+    }
+
+    path = os.path.join(output_dir, "full_results.json")
+    with open(path, "w") as f:
+        json.dump(full_results, f, indent=2)
 
     return path
