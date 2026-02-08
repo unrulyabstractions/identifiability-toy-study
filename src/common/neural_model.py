@@ -185,10 +185,17 @@ class MLP(nn.Module):
 
     def _init_weights(self):
         """Initialize weights with Kaiming normal for better convergence."""
+        # Map activation names to kaiming nonlinearity parameter
+        nonlinearity = self.activation.replace("_", "")  # leaky_relu -> leakyrelu
+        if nonlinearity not in ("relu", "leakyrelu", "tanh", "sigmoid"):
+            nonlinearity = "leaky_relu"  # default fallback
+        else:
+            nonlinearity = self.activation  # use as-is (leaky_relu works)
+
         for layer in self.layers:
             linear = layer[0]  # First module is Linear
             if isinstance(linear, nn.Linear):
-                nn.init.kaiming_normal_(linear.weight, nonlinearity="leaky_relu")
+                nn.init.kaiming_normal_(linear.weight, nonlinearity=nonlinearity)
                 nn.init.zeros_(linear.bias)
 
     def save_to_file(self, filepath: str):
