@@ -1,13 +1,15 @@
 """Gate analysis - per-gate metric computation, edge optimization, and faithfulness."""
 
-from src.analysis import create_clean_corrupted_data, filter_subcircuits
+from src.analysis import FilterResult, create_clean_corrupted_data, filter_subcircuits
 from src.circuit import batch_compute_metrics, batch_evaluate_edge_variants
+from src.infra.logging import (
+    log_filtering_result,
+    log_gate_faithfulness_summary,
+)
 from src.schemas import GateMetrics, SubcircuitMetrics
 from src.tensor_ops import calculate_match_rate
-from .phases import (
-    faithfulness_phase,
-    robustness_phase,
-)
+
+from .phases import faithfulness_phase
 
 
 def analyze_gate(
@@ -114,16 +116,29 @@ def analyze_gate(
         subcircuit_metrics=subcircuit_metrics,
     )
 
-    per_gate_bests[gate_name] = filter_subcircuits(
+    filter_result = filter_subcircuits(
         setup.constraints,
         per_gate_metrics[gate_name].subcircuit_metrics,
         subcircuits,
         subcircuit_structures,
         max_subcircuits=setup.faithfulness_config.max_subcircuits_per_gate,
     )
+    per_gate_bests[gate_name] = filter_result.indices
 
-    best_indices = per_gate_bests[gate_name]
-    best_circuits_for_gate = [subcircuits[idx] for idx in best_indices]
+    # Log gate summary with best passing and best failing
+    log_filtering_result(
+        gate_name=gate_name,
+        gate_acc=gate_acc,
+        n_passing=filter_result.n_passing,
+        n_total=filter_result.n_total,
+        epsilon=setup.constraints.epsilon,
+        selected_indices=filter_result.indices,
+        best_passing=filter_result.best_metrics,
+        best_failing=filter_result.best_failing,
+    )
+
+    best_node_indices = filter_result.indices
+    best_circuits_for_gate = [subcircuits[idx] for idx in best_node_indices]
 
     # batch_evaluate_edge_variants has @profile_fn("Edge Variants") directly
     edge_results = batch_evaluate_edge_variants(
@@ -134,16 +149,31 @@ def analyze_gate(
         y_pred=y_gate_eval,
         gate_idx=gate_idx,
         eval_device=eval_device,
+        max_edge_variations=setup.faithfulness_config.max_edge_variations_per_subcircuits,
     )
 
-    optimized_circuits = {
-        best_indices[orig_idx]: opt_circuit
-        for orig_idx, opt_circuit, _, _, _ in edge_results
-    }
+    # Build hierarchical structure: node_pattern_idx -> [edge_variations]
+    # Each entry is (node_idx, edge_var_idx, circuit)
+    all_subcircuit_keys = []  # List of (node_idx, edge_var_idx)
+    all_circuits = {}  # (node_idx, edge_var_idx) -> circuit
+    all_structures = {}  # (node_idx, edge_var_idx) -> structure
 
+    for orig_idx, top_variants, stats in edge_results:
+        node_idx = best_node_indices[orig_idx]
+        for edge_var_idx, variant in enumerate(top_variants):
+            key = (node_idx, edge_var_idx)
+            all_subcircuit_keys.append(key)
+            all_circuits[key] = variant.circuit
+            # Use the node pattern's structure (edge variations share the same structure)
+            all_structures[key] = subcircuit_structures[node_idx]
+
+    # Store the hierarchical indices for this gate
+    per_gate_bests[gate_name] = all_subcircuit_keys
+
+    # Create subcircuit models for all variations
     best_subcircuit_models = {
-        idx: gate_model.separate_subcircuit(optimized_circuits[idx], gate_idx=gate_idx)
-        for idx in best_indices
+        key: gate_model.separate_subcircuit(all_circuits[key], gate_idx=gate_idx)
+        for key in all_subcircuit_keys
     }
 
     counterfactual_pairs = create_clean_corrupted_data(
@@ -153,28 +183,22 @@ def analyze_gate(
         n_pairs=setup.faithfulness_config.n_counterfactual_pairs,
     )
 
-    update_status(f"STARTED_ROBUSTNESS:{gate_idx}")
-    robustness_results = robustness_phase(
-        best_indices, best_subcircuit_models, gate_model, device, parallel_config
-    )
-    update_status(f"FINISHED_ROBUSTNESS:{gate_idx}")
-
     update_status(f"STARTED_FAITH:{gate_idx}")
     faithfulness_results = faithfulness_phase(
-        best_indices,
+        all_subcircuit_keys,
         best_subcircuit_models,
         gate_model,
         x,
         y_gate,
         activations,
-        subcircuit_structures,
+        all_structures,
         counterfactual_pairs,
         setup.faithfulness_config,
         device,
         parallel_config,
     )
-    # Attach observational metrics to faithfulness results
-    for faith_result, obs_result in zip(faithfulness_results, robustness_results):
-        faith_result.observational = obs_result
     per_gate_bests_faith[gate_name].extend(faithfulness_results)
     update_status(f"FINISHED_FAITH:{gate_idx}")
+
+    # Log faithfulness results for this gate
+    log_gate_faithfulness_summary(gate_name, all_subcircuit_keys, faithfulness_results)

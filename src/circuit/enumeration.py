@@ -83,7 +83,15 @@ def enumerate_node_patterns(
 
     total_hidden = sum(hidden_widths)
 
+    # Compute full masks for each hidden layer (all nodes active)
+    full_hidden_masks = tuple((1 << w) - 1 for w in hidden_widths)
+
     for hidden_masks in itertools.product(*hidden_mask_ranges):
+        # Exclude the full circuit (all hidden nodes active in all layers)
+        # A subcircuit must have at least one inactive node somewhere
+        if hidden_masks == full_hidden_masks:
+            continue
+
         # Optional sparsity filter
         if min_sparsity > 0:
             active = sum(bin(m).count('1') for m in hidden_masks)
@@ -99,18 +107,19 @@ def enumerate_node_patterns(
 
 def count_node_patterns(layer_widths: list[int]) -> int:
     """
-    Count valid node patterns without generating them.
+    Count valid node patterns (subcircuits) without generating them.
 
-    Formula: (2^w1 - 1) * (2^w2 - 1) * ... for hidden layer widths.
+    Formula: (2^w1 - 1) * (2^w2 - 1) * ... - 1 for hidden layer widths.
+    The -1 excludes the full circuit (all nodes active in all layers).
     """
     hidden_widths = layer_widths[1:-1]
     if not hidden_widths:
-        return 1
+        return 0  # No hidden layers = no subcircuits possible
 
     count = 1
     for w in hidden_widths:
         count *= (1 << w) - 1  # 2^w - 1
-    return count
+    return count - 1  # Exclude the full circuit
 
 
 def enumerate_edge_configs(

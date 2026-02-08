@@ -9,6 +9,7 @@ Large batches are automatically chunked to avoid OOM errors.
 """
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -25,8 +26,9 @@ from src.tensor_ops import (
 from .circuit import enumerate_edge_variants
 
 if TYPE_CHECKING:
-    from .circuit import Circuit
     from src.model import MLP
+
+    from .circuit import Circuit
 
 # Default max circuits per batch to avoid OOM
 # 64 is very conservative for CPU; can be increased for GPU with more memory
@@ -509,16 +511,43 @@ def batch_compute_metrics(
 # =============================================================================
 
 
-def _find_best_variant(
+@dataclass
+class EdgeVariantResult:
+    """Result for a single edge variant."""
+
+    circuit: "Circuit"
+    local_idx: int
+    acc: float
+    logit_sim: float
+    bit_sim: float
+
+
+@dataclass
+class EdgeVariantStats:
+    """Statistics for edge variant evaluation of a node pattern."""
+
+    top_variants: list[EdgeVariantResult]  # Top N variants sorted by quality
+    worst_acc: float
+    worst_bit_sim: float
+    n_variants: int
+
+    @property
+    def best(self) -> EdgeVariantResult:
+        """Get the best variant."""
+        return self.top_variants[0] if self.top_variants else None
+
+
+def _find_top_variants(
     edge_variants: list["Circuit"],
     accs: np.ndarray,
     bit_sims: np.ndarray,
     logit_sims: np.ndarray,
     start_idx: int,
     end_idx: int,
-) -> tuple["Circuit", int, float, float, float]:
+    max_variants: int = 1,
+) -> EdgeVariantStats:
     """
-    Find the best edge variant in a range based on accuracy, bit similarity, and sparsity.
+    Find the top N edge variants in a range based on accuracy, bit similarity, and sparsity.
 
     Args:
         edge_variants: List of edge variant circuits
@@ -527,36 +556,50 @@ def _find_best_variant(
         logit_sims: Array of logit similarities for all variants
         start_idx: Start index in the metrics arrays
         end_idx: End index in the metrics arrays
+        max_variants: Maximum number of top variants to return
 
     Returns:
-        Tuple of (best_circuit, local_variant_idx, accuracy, logit_sim, bit_sim)
+        EdgeVariantStats with top variants and worst metrics
     """
-    # Find best by (accuracy DESC, bit_similarity DESC, edge_sparsity DESC)
-    best_global_idx = start_idx
-    best_score = (
-        -accs[start_idx],
-        -bit_sims[start_idx],
-        -edge_variants[0].sparsity()[1],
-    )
+    n_variants = end_idx - start_idx
 
-    for global_idx in range(start_idx + 1, end_idx):
+    # Build list of (score, global_idx, local_idx) for sorting
+    scored_variants = []
+    for global_idx in range(start_idx, end_idx):
         local_idx = global_idx - start_idx
+        # Score: (bit_similarity DESC, accuracy DESC, edge_sparsity DESC)
+        # Negate for ascending sort
         score = (
-            -accs[global_idx],
             -bit_sims[global_idx],
+            -accs[global_idx],
             -edge_variants[local_idx].sparsity()[1],
         )
-        if score < best_score:
-            best_score = score
-            best_global_idx = global_idx
+        scored_variants.append((score, global_idx, local_idx))
 
-    local_best_idx = best_global_idx - start_idx
-    return (
-        edge_variants[local_best_idx],
-        local_best_idx,
-        float(accs[best_global_idx]),
-        float(logit_sims[best_global_idx]),
-        float(bit_sims[best_global_idx]),
+    # Sort by score (ascending, so best = lowest negated values = first)
+    scored_variants.sort(key=lambda x: x[0])
+
+    # Get top N variants
+    top_n = min(max_variants, len(scored_variants))
+    top_variants = []
+    for i in range(top_n):
+        _, global_idx, local_idx = scored_variants[i]
+        top_variants.append(EdgeVariantResult(
+            circuit=edge_variants[local_idx],
+            local_idx=local_idx,
+            acc=float(accs[global_idx]),
+            logit_sim=float(logit_sims[global_idx]),
+            bit_sim=float(bit_sims[global_idx]),
+        ))
+
+    # Get worst variant (last in sorted list)
+    _, worst_global_idx, _ = scored_variants[-1]
+
+    return EdgeVariantStats(
+        top_variants=top_variants,
+        worst_acc=float(accs[worst_global_idx]),
+        worst_bit_sim=float(bit_sims[worst_global_idx]),
+        n_variants=n_variants,
     )
 
 
@@ -571,12 +614,13 @@ def batch_evaluate_edge_variants(
     eval_device: str | None = None,
     max_batch_size: int = DEFAULT_MAX_BATCH_SIZE,
     max_memory_gb: float = 16.0,
-) -> list[tuple[int, "Circuit", float, float, float]]:
+    max_edge_variations: int = 1,
+) -> list[tuple[int, list[EdgeVariantResult], EdgeVariantStats]]:
     """
-    For each node pattern, enumerate edge variants and find the best one.
+    For each node pattern, enumerate edge variants and find the top N.
 
     This function explores edge configurations for promising node patterns.
-    It returns the best edge configuration for each input circuit.
+    It returns the top edge configurations for each input circuit.
 
     Args:
         model: The full trained model
@@ -588,10 +632,11 @@ def batch_evaluate_edge_variants(
         eval_device: Device for evaluation
         max_batch_size: Maximum circuits per batch to avoid OOM errors.
         max_memory_gb: Target max memory usage in GB. Batch size adapts to stay under this.
+        max_edge_variations: Maximum number of top edge variants to return per node pattern.
 
     Returns:
-        List of (original_idx, best_circuit, accuracy, logit_sim, bit_sim)
-        for each input circuit, with the best edge configuration found.
+        List of (original_idx, top_variants, stats) for each input circuit.
+        Each top_variants is a list of EdgeVariantResult with the best edge configurations.
     """
     device = eval_device if eval_device is not None else model.device
 
@@ -647,18 +692,42 @@ def batch_evaluate_edge_variants(
         max_batch_size=adaptive_batch_size,
     )
 
-    # Find best variant for each original circuit
+    # Find top variants for each original circuit
     results = []
+    print("    Edge Variant Results:")
     for orig_idx, (start, end, edge_variants) in enumerate(variant_ranges):
         if start == end:
             # No variants (shouldn't happen)
-            results.append((orig_idx, base_circuits[orig_idx], 0.0, 0.0, 0.0))
+            empty_result = EdgeVariantResult(
+                circuit=base_circuits[orig_idx],
+                local_idx=0,
+                acc=0.0,
+                logit_sim=0.0,
+                bit_sim=0.0,
+            )
+            empty_stats = EdgeVariantStats(
+                top_variants=[empty_result],
+                worst_acc=0.0,
+                worst_bit_sim=0.0,
+                n_variants=0,
+            )
+            results.append((orig_idx, [empty_result], empty_stats))
             continue
 
-        best_circuit, _, acc, logit_sim, bit_sim = _find_best_variant(
-            edge_variants, accs, bit_sims, logit_sims, start, end
+        stats = _find_top_variants(
+            edge_variants, accs, bit_sims, logit_sims, start, end,
+            max_variants=max_edge_variations,
         )
-        results.append((orig_idx, best_circuit, acc, logit_sim, bit_sim))
+        results.append((orig_idx, stats.top_variants, stats))
+
+        # Log best vs worst for this subcircuit
+        best = stats.best
+        print(
+            f"      Node #{orig_idx}: {stats.n_variants} edge variants, "
+            f"keeping top {len(stats.top_variants)}  "
+            f"best=(acc={best.acc:.2%}, sim={best.bit_sim:.2%})  "
+            f"worst=(acc={stats.worst_acc:.2%}, sim={stats.worst_bit_sim:.2%})"
+        )
 
     return results
 

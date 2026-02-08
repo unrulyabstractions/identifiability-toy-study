@@ -16,16 +16,27 @@ ObservationalEffect = ObservationalSample
 
 
 @dataclass
+class Similarity(SchemaClass):
+    """Similarity metrics between two outputs.
+
+    Three ways to measure similarity:
+    - bit: Binary agreement (round(a) == round(b))
+    - logit: 1 - MSE between raw logits
+    - best: Agreement after clamping to [0,1]
+    """
+
+    bit: float = 0.0
+    logit: float = 0.0
+    best: float = 0.0
+
+
+@dataclass
 class PatchStatistics(SchemaClass):
     """Statistics for a single patch's intervention effects."""
 
-    mean_logit_similarity: float = 0.0
-    std_logit_similarity: float = 0.0
-    mean_bit_similarity: float = 0.0
-    std_bit_similarity: float = 0.0
-    mean_best_similarity: float = 0.0
-    std_best_similarity: float = 0.0
-    n_interventions: int = 0
+    mean: Similarity = field(default_factory=Similarity)
+    std: Similarity = field(default_factory=Similarity)
+    n_samples: int = 0
 
     # Individual samples for visualization (optional, may be large)
     samples: list[InterventionalSample] = field(default_factory=list)
@@ -43,9 +54,7 @@ class NoiseRobustnessMetrics(SchemaClass):
     samples: list[ObservationalSample] = field(default_factory=list)
     gate_accuracy: float = 0.0
     subcircuit_accuracy: float = 0.0
-    agreement_bit: float = 0.0
-    agreement_best: float = 0.0
-    mse_mean: float = 0.0
+    similarity: Similarity = field(default_factory=Similarity)
     n_samples: int = 0
 
 
@@ -58,11 +67,9 @@ class OutOfDistributionMetrics(SchemaClass):
     # Aggregate OOD metrics
     gate_accuracy: float = 0.0
     subcircuit_accuracy: float = 0.0
-    agreement_bit: float = 0.0
-    agreement_best: float = 0.0
-    mse_mean: float = 0.0
+    similarity: Similarity = field(default_factory=Similarity)
 
-    # Per-type metrics
+    # Per-type metrics (each has similarity.bit as agreement)
     multiply_positive_agreement: float = 0.0
     multiply_positive_n_samples: int = 0
     multiply_negative_agreement: float = 0.0
@@ -188,9 +195,7 @@ class NoiseRobustnessSummary(SchemaClass):
 
     gate_accuracy: float = 0.0
     subcircuit_accuracy: float = 0.0
-    agreement_bit: float = 0.0
-    agreement_best: float = 0.0
-    mse_mean: float = 0.0
+    similarity: Similarity = field(default_factory=Similarity)
     n_samples: int = 0
 
 
@@ -230,24 +235,20 @@ class InterventionalSummary(SchemaClass):
     """Aggregated interventional summary for result.json."""
 
     # In-circuit (in-distribution)
-    in_circuit_mean_bit_similarity: float = 0.0
-    in_circuit_mean_logit_similarity: float = 0.0
-    in_circuit_n_interventions: int = 0
+    in_circuit_mean: Similarity = field(default_factory=Similarity)
+    in_circuit_n: int = 0
 
     # In-circuit (out-of-distribution)
-    in_circuit_ood_mean_bit_similarity: float = 0.0
-    in_circuit_ood_mean_logit_similarity: float = 0.0
-    in_circuit_ood_n_interventions: int = 0
+    in_circuit_ood_mean: Similarity = field(default_factory=Similarity)
+    in_circuit_ood_n: int = 0
 
     # Out-circuit (in-distribution)
-    out_circuit_mean_bit_similarity: float = 0.0
-    out_circuit_mean_logit_similarity: float = 0.0
-    out_circuit_n_interventions: int = 0
+    out_circuit_mean: Similarity = field(default_factory=Similarity)
+    out_circuit_n: int = 0
 
     # Out-circuit (out-of-distribution)
-    out_circuit_ood_mean_bit_similarity: float = 0.0
-    out_circuit_ood_mean_logit_similarity: float = 0.0
-    out_circuit_ood_n_interventions: int = 0
+    out_circuit_ood_mean: Similarity = field(default_factory=Similarity)
+    out_circuit_ood_n: int = 0
 
     # Overall
     overall_interventional: float = 0.0

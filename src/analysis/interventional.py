@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from src.model import Intervention, InterventionEffect, MLP, PatchShape
-from src.schemas import InterventionalSample, PatchStatistics
+from src.schemas import InterventionalSample, PatchStatistics, Similarity
 from src.tensor_ops import (
     calculate_best_match_rate,
     calculate_logit_similarity,
@@ -296,13 +296,17 @@ def _compute_patch_statistics(
         samples = _create_intervention_samples(patch_key, effects)
 
         stats[patch_key] = PatchStatistics(
-            mean_logit_similarity=float(np.mean(logit_sims)),
-            std_logit_similarity=float(np.std(logit_sims)),
-            mean_bit_similarity=float(np.mean(bit_sims)),
-            std_bit_similarity=float(np.std(bit_sims)),
-            mean_best_similarity=float(np.mean(best_sims)),
-            std_best_similarity=float(np.std(best_sims)),
-            n_interventions=len(effects),
+            mean=Similarity(
+                bit=float(np.mean(bit_sims)),
+                logit=float(np.mean(logit_sims)),
+                best=float(np.mean(best_sims)),
+            ),
+            std=Similarity(
+                bit=float(np.std(bit_sims)),
+                logit=float(np.std(logit_sims)),
+                best=float(np.std(best_sims)),
+            ),
+            n_samples=len(effects),
             samples=samples,
         )
     return stats, all_sims

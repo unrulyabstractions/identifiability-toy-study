@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from src.circuit import Circuit
-from src.infra import profile
+from src.infra import profile, get_memory_mb, log_memory
 from src.schemas import ExperimentResult
 from .activation_viz import (
     visualize_circuit_activations_from_data,
@@ -21,8 +21,8 @@ from .faithfulness_viz import (
 )
 from .export import save_faithfulness_json, save_gate_summary
 from .observational_viz import (
-    visualize_robustness_circuit_samples,
-    visualize_robustness_curves,
+    visualize_observational_circuits,
+    visualize_observational_curves,
 )
 from .profiling_viz import (
     visualize_profiling_phases,
@@ -30,6 +30,24 @@ from .profiling_viz import (
     visualize_profiling_timeline,
 )
 from .spd_viz import visualize_spd_components
+
+
+def _print_viz_phase(phase_name: str, mem_before: float, is_start: bool = True):
+    """Print visualization phase header or footer."""
+    if is_start:
+        print(f"\n{'=' * 60}")
+        print(f"  [VIZ] {phase_name}")
+        print(f"  Memory before: {mem_before:.1f} MB")
+        print("=" * 60)
+
+
+def _print_viz_phase_end(phase_name: str, elapsed_ms: float, mem_before: float):
+    """Print visualization phase completion."""
+    mem_after = get_memory_mb()
+    mem_delta = mem_after - mem_before
+    print(f"  -> Completed in {elapsed_ms:.0f}ms")
+    print(f"  -> Memory after: {mem_after:.1f} MB (delta: {mem_delta:+.1f} MB)")
+    log_memory(f"after_viz_{phase_name.lower().replace(' ', '_')}")
 
 
 def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
@@ -43,6 +61,16 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
 
     Returns paths dict.
     """
+    import time
+
+    # Overall viz profiling
+    viz_start = time.time()
+    viz_mem_start = get_memory_mb()
+    print(f"\n{'~' * 60}")
+    print(f"  VISUALIZATION PHASE")
+    print(f"  Memory before: {viz_mem_start:.1f} MB")
+    print(f"{'~' * 60}")
+
     os.makedirs(run_dir, exist_ok=True)
 
     viz_paths = {}
@@ -94,19 +122,24 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
         _layout_cache.get_positions(tuple(layer_sizes))
 
         # --- all_gates/ (full multi-gate model) ---
+        _mem_before = get_memory_mb()
+        _t0 = time.time()
+        _print_viz_phase("Activation Visualizations", _mem_before)
+
         folder = os.path.join(trial_dir, "all_gates")
         os.makedirs(folder, exist_ok=True)
         viz_paths[trial_id]["all_gates"] = {}
         all_gates_label = "All Gates (" + ", ".join(gate_names) + ")"
 
-        act_path = visualize_circuit_activations_from_data(
-            canonical_activations,
-            layer_weights,
-            full_circuit,
-            folder,
-            gate_name=all_gates_label,
-            layer_biases=layer_biases if layer_biases else None,
-        )
+        with profile("viz_activations"):
+            act_path = visualize_circuit_activations_from_data(
+                canonical_activations,
+                layer_weights,
+                full_circuit,
+                folder,
+                gate_name=all_gates_label,
+                layer_biases=layer_biases if layer_biases else None,
+            )
         viz_paths[trial_id]["all_gates"]["activations"] = act_path
 
         if trial.decomposed_model:
@@ -123,21 +156,9 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
 
             gate_label = f"{gname} (Full)"
 
-            act_path = visualize_circuit_activations_from_data(
-                canonical_activations,
-                layer_weights,
-                full_circuit,
-                folder,
-                gate_name=gate_label,
-                layer_biases=layer_biases if layer_biases else None,
-                gate_idx=gate_idx,
-            )
-            viz_paths[trial_id][gname]["full"]["activations"] = act_path
-
-            # Mean activations for different input ranges
-            if mean_activations_by_range:
-                mean_act_path = visualize_circuit_activations_mean(
-                    mean_activations_by_range,
+            with profile("viz_activations"):
+                act_path = visualize_circuit_activations_from_data(
+                    canonical_activations,
                     layer_weights,
                     full_circuit,
                     folder,
@@ -145,6 +166,20 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     layer_biases=layer_biases if layer_biases else None,
                     gate_idx=gate_idx,
                 )
+            viz_paths[trial_id][gname]["full"]["activations"] = act_path
+
+            # Mean activations for different input ranges
+            if mean_activations_by_range:
+                with profile("viz_activations"):
+                    mean_act_path = visualize_circuit_activations_mean(
+                        mean_activations_by_range,
+                        layer_weights,
+                        full_circuit,
+                        folder,
+                        gate_name=gate_label,
+                        layer_biases=layer_biases if layer_biases else None,
+                        gate_idx=gate_idx,
+                    )
                 viz_paths[trial_id][gname]["full"]["activations_mean"] = mean_act_path
 
             if gname in trial.decomposed_gate_models:
@@ -159,30 +194,40 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
             summary_path = save_gate_summary(gname, gate_folder, trial.metrics)
             viz_paths[trial_id][gname]["summary"] = summary_path
 
+        _print_viz_phase_end("activations", (time.time() - _t0) * 1000, _mem_before)
+
         # --- Subcircuit visualization ---
         for gate_idx, gname in enumerate(gate_names):
-            best_indices = trial.metrics.per_gate_bests.get(gname, [])
-            if not best_indices:
+            best_keys = trial.metrics.per_gate_bests.get(gname, [])
+            if not best_keys:
                 continue
 
             print(
-                f"[VIZ] Gate {gname}: {len(best_indices)} best subcircuits to visualize"
+                f"[VIZ] Gate {gname}: {len(best_keys)} best subcircuits to visualize"
             )
             bests_faith = trial.metrics.per_gate_bests_faith.get(gname, [])
             decomposed_indices = trial.decomposed_subcircuit_indices.get(gname, [])
 
-            for i, sc_idx in enumerate(best_indices):
-                circuit = subcircuits[sc_idx]
-                folder = os.path.join(trial_dir, gname, str(sc_idx))
-                os.makedirs(folder, exist_ok=True)
-                viz_paths[trial_id].setdefault(gname, {})[sc_idx] = {}
+            for i, sc_key in enumerate(best_keys):
+                # Handle both legacy int keys and new (node_idx, edge_var_idx) tuple keys
+                if isinstance(sc_key, tuple):
+                    node_idx, edge_var_idx = sc_key
+                    circuit = subcircuits[node_idx]  # Use node pattern's circuit structure
+                    folder = os.path.join(trial_dir, gname, str(node_idx), str(edge_var_idx))
+                    sc_label = f"{gname} (Node#{node_idx}/Edge#{edge_var_idx})"
+                else:
+                    node_idx = sc_key
+                    circuit = subcircuits[sc_key]
+                    folder = os.path.join(trial_dir, gname, str(sc_key))
+                    sc_label = f"{gname} (SC #{sc_key})"
 
-                sc_label = f"{gname} (SC #{sc_idx})"
+                os.makedirs(folder, exist_ok=True)
+                viz_paths[trial_id].setdefault(gname, {})[sc_key] = {}
 
                 # Static circuit structure
                 path = os.path.join(folder, "circuit.png")
                 circuit.visualize(file_path=path, node_size="small")
-                viz_paths[trial_id][gname][sc_idx]["circuit"] = path
+                viz_paths[trial_id][gname][sc_key]["circuit"] = path
 
                 # Circuit activations
                 act_path = visualize_circuit_activations_from_data(
@@ -194,7 +239,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     layer_biases=layer_biases if layer_biases else None,
                     gate_idx=gate_idx,
                 )
-                viz_paths[trial_id][gname][sc_idx]["activations"] = act_path
+                viz_paths[trial_id][gname][sc_key]["activations"] = act_path
 
                 # Mean activations for different input ranges
                 if mean_activations_by_range:
@@ -207,65 +252,82 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                         layer_biases=layer_biases if layer_biases else None,
                         gate_idx=gate_idx,
                     )
-                    viz_paths[trial_id][gname][sc_idx]["activations_mean"] = mean_act_path
+                    viz_paths[trial_id][gname][sc_key]["activations_mean"] = mean_act_path
 
                 # Robustness and Faithfulness visualization
                 # Robustness is now inside faithfulness.observational
                 has_faith = i < len(bests_faith)
                 faithfulness_data = bests_faith[i] if has_faith else None
-                robustness_data = faithfulness_data.observational if faithfulness_data else None
-                has_robust = robustness_data is not None
+                observational_data = faithfulness_data.observational if faithfulness_data else None
+                has_observational = observational_data is not None
 
                 # Create directories upfront
                 # Faithfulness contains: observational/ (robustness), counterfactual/, interventional/
                 faithfulness_dir = os.path.join(folder, "faithfulness")
                 os.makedirs(faithfulness_dir, exist_ok=True)
-                viz_paths[trial_id][gname][sc_idx]["faithfulness"] = {}
+                viz_paths[trial_id][gname][sc_key]["faithfulness"] = {}
 
                 # Observational dir (renamed from robustness) - lives inside faithfulness/
                 observational_dir = (
-                    os.path.join(faithfulness_dir, "observational") if has_robust else None
+                    os.path.join(faithfulness_dir, "observational") if has_observational else None
                 )
                 if observational_dir:
                     os.makedirs(observational_dir, exist_ok=True)
-                    viz_paths[trial_id][gname][sc_idx]["faithfulness"]["observational"] = {}
+                    viz_paths[trial_id][gname][sc_key]["faithfulness"]["observational"] = {}
 
                 # Run quick visualizations sequentially (matplotlib is not thread-safe)
-                if has_robust and observational_dir:
-                    with profile("robust_curves"):
-                        viz_paths[trial_id][gname][sc_idx]["faithfulness"]["observational"]["stats"] = (
-                            visualize_robustness_curves(
-                                robustness_data, observational_dir, sc_label
+                if has_observational and observational_dir:
+                    _mem_before = get_memory_mb()
+                    _t0 = time.time()
+                    _print_viz_phase("Observational Curves", _mem_before)
+                    with profile("viz_observational_curves"):
+                        viz_paths[trial_id][gname][sc_key]["faithfulness"]["observational"]["stats"] = (
+                            visualize_observational_curves(
+                                observational_data, observational_dir, sc_label
                             )
                         )
+                    _print_viz_phase_end("observational_curves", (time.time() - _t0) * 1000, _mem_before)
+
                 # Run expensive circuit visualizations sequentially (they use ProcessPoolExecutor internally)
-                if has_robust and observational_dir:
-                    with profile("robust_circuit_viz"):
-                        circuit_paths = visualize_robustness_circuit_samples(
-                            robustness_data, circuit, layer_weights, observational_dir,
+                if has_observational and observational_dir:
+                    _mem_before = get_memory_mb()
+                    _t0 = time.time()
+                    _print_viz_phase("Observational Circuit Viz", _mem_before)
+                    with profile("viz_observational_circuit"):
+                        circuit_paths = visualize_observational_circuits(
+                            observational_data, circuit, layer_weights, observational_dir,
                             canonical_activations=canonical_activations,
                             layer_biases=layer_biases if layer_biases else None,
                         )
-                    viz_paths[trial_id][gname][sc_idx]["faithfulness"]["observational"]["circuit_viz"] = (
+                    _print_viz_phase_end("observational_circuit", (time.time() - _t0) * 1000, _mem_before)
+                    viz_paths[trial_id][gname][sc_key]["faithfulness"]["observational"]["circuit_viz"] = (
                         circuit_paths
                     )
 
                 if has_faith:
-                    with profile("faith_circuit_viz"):
+                    _mem_before = get_memory_mb()
+                    _t0 = time.time()
+                    _print_viz_phase("Faithfulness Circuit Viz", _mem_before)
+                    with profile("viz_faith_circuit"):
                         circuit_paths = visualize_faithfulness_circuit_samples(
                             faithfulness_data, circuit, layer_weights, faithfulness_dir,
                             layer_biases=layer_biases if layer_biases else None,
                         )
-                    viz_paths[trial_id][gname][sc_idx]["faithfulness"][
+                    _print_viz_phase_end("faith_circuit", (time.time() - _t0) * 1000, _mem_before)
+                    viz_paths[trial_id][gname][sc_key]["faithfulness"][
                         "circuit_viz"
                     ] = circuit_paths
 
                     # Add intervention effect plots (like noise_by_input for robustness)
-                    with profile("faith_intervention_effects"):
+                    _mem_before = get_memory_mb()
+                    _t0 = time.time()
+                    _print_viz_phase("Intervention Effects", _mem_before)
+                    with profile("viz_intervention_effects"):
                         intervention_paths = visualize_faithfulness_intervention_effects(
                             faithfulness_data, faithfulness_dir, sc_label
                         )
-                    viz_paths[trial_id][gname][sc_idx]["faithfulness"][
+                    _print_viz_phase_end("intervention_effects", (time.time() - _t0) * 1000, _mem_before)
+                    viz_paths[trial_id][gname][sc_key]["faithfulness"][
                         "intervention_effects"
                     ] = intervention_paths
 
@@ -279,15 +341,26 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     faithfulness_dir=faithfulness_dir,
                     faithfulness=faithfulness_data,
                 )
-                viz_paths[trial_id][gname][sc_idx]["faithfulness"]["json"] = json_paths
+                viz_paths[trial_id][gname][sc_key]["faithfulness"]["json"] = json_paths
 
-                # SPD
+                # SPD (only for node patterns, not edge variations)
                 if gname in trial.decomposed_subcircuits:
-                    if sc_idx in trial.decomposed_subcircuits[gname]:
-                        decomposed = trial.decomposed_subcircuits[gname][sc_idx]
+                    if node_idx in trial.decomposed_subcircuits[gname]:
+                        decomposed = trial.decomposed_subcircuits[gname][node_idx]
                         if path := visualize_spd_components(
                             decomposed, folder, gate_name=sc_label
                         ):
-                            viz_paths[trial_id][gname][sc_idx]["spd"] = path
+                            viz_paths[trial_id][gname][sc_key]["spd"] = path
+
+    # Final viz profiling summary
+    viz_elapsed_ms = (time.time() - viz_start) * 1000
+    viz_mem_end = get_memory_mb()
+    viz_mem_delta = viz_mem_end - viz_mem_start
+    log_memory("after_visualization")
+    print(f"\n{'~' * 60}")
+    print(f"  VISUALIZATION COMPLETE")
+    print(f"  Total time: {viz_elapsed_ms:.0f}ms")
+    print(f"  Memory after: {viz_mem_end:.1f} MB (delta: {viz_mem_delta:+.1f} MB)")
+    print(f"{'~' * 60}")
 
     return viz_paths

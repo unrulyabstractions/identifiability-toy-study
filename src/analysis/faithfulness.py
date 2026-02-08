@@ -1,6 +1,6 @@
 """Metrics calculation functions for faithfulness analysis.
 
-Combines interventional and counterfactual analysis to compute
+Combines observational, interventional, and counterfactual analysis to compute
 comprehensive faithfulness metrics for subcircuits.
 """
 
@@ -20,6 +20,7 @@ from src.tensor_ops import logits_to_binary
 
 from .counterfactual import CleanCorruptedPair, create_patch_intervention
 from .interventional import _compute_patch_statistics, calculate_patches_causal_effect
+from .observational import calculate_observational_metrics
 from .scoring import (
     compute_completeness_score,
     compute_independence_score,
@@ -93,7 +94,12 @@ def calculate_faithfulness_metrics(
     """
     Calculate comprehensive faithfulness metrics for a subcircuit.
 
-    Implements the full 2x2 patching matrix:
+    Three categories of faithfulness:
+    1. OBSERVATIONAL: How well subcircuit matches model under input perturbations
+    2. INTERVENTIONAL: How well subcircuit matches under activation patching
+    3. COUNTERFACTUAL: 2x2 patching matrix (sufficiency, completeness, necessity, independence)
+
+    The counterfactual 2x2 matrix:
 
     |                | IN-Circuit Patch     | OUT-Circuit Patch      |
     |----------------|----------------------|------------------------|
@@ -108,7 +114,7 @@ def calculate_faithfulness_metrics(
     Args:
         x: Input data
         y: Ground truth outputs
-        model: Full model
+        model: Full model (gate model)
         activations: Activations from model forward pass on x
         subcircuit: Subcircuit model to evaluate
         structure: CircuitStructure with patch information
@@ -117,12 +123,20 @@ def calculate_faithfulness_metrics(
         device: Device for tensor operations
 
     Returns:
-        FaithfulnessMetrics with all computed statistics
+        FaithfulnessMetrics with observational, interventional, and counterfactual metrics
     """
     if config is None:
         config = FaithfulnessConfig()
 
     n_interventions_per_patch = config.n_interventions_per_patch
+
+    # ===== OBSERVATIONAL: Input perturbation analysis =====
+    observational = calculate_observational_metrics(
+        subcircuit=subcircuit,
+        full_model=model,
+        n_samples_per_base=200,
+        device=device,
+    )
 
     # ===== Helper: Build CounterfactualEffect from intervention =====
     def _build_effect(
@@ -338,9 +352,8 @@ def calculate_faithfulness_metrics(
     mean_necessity = _mean_score(necessity_effects)
     mean_independence = _mean_score(independence_effects)
 
-    # Overall faithfulness: average of all 4 scores
-
-    overall_faithfulness = (
+    # Overall counterfactual: average of all 4 scores
+    overall_counterfactual = (
         mean_sufficiency + mean_completeness + mean_necessity + mean_independence
     ) / 4.0
 
@@ -354,6 +367,7 @@ def calculate_faithfulness_metrics(
         mean_out_circuit_similarity=stats["mean_out_sim"],
         mean_in_circuit_similarity_ood=stats["mean_in_sim_ood"],
         mean_out_circuit_similarity_ood=stats["mean_out_sim_ood"],
+        overall_interventional=(stats["mean_in_sim"] + stats["mean_out_sim"]) / 2.0,
     )
 
     counterfactual = CounterfactualMetrics(
@@ -365,9 +379,18 @@ def calculate_faithfulness_metrics(
         mean_completeness=mean_completeness,
         mean_necessity=mean_necessity,
         mean_independence=mean_independence,
+        overall_counterfactual=overall_counterfactual,
     )
 
+    # Overall faithfulness: average of observational, interventional, and counterfactual
+    overall_faithfulness = (
+        observational.overall_observational
+        + interventional.overall_interventional
+        + overall_counterfactual
+    ) / 3.0
+
     return FaithfulnessMetrics(
+        observational=observational,
         interventional=interventional,
         counterfactual=counterfactual,
         overall_faithfulness=overall_faithfulness,

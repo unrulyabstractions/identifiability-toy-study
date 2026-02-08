@@ -122,18 +122,36 @@ class ExperimentResult(SchemaClass):
                 by_idx = {sm.idx: sm for sm in gm.subcircuit_metrics}
                 bests = trial.metrics.per_gate_bests.get(gate, [])[:5]
                 viz = viz_paths.get(trial_id, {}).get(gate, {})
+                best_list = []
+                for key in bests:
+                    # Handle both legacy int keys and new (node_idx, edge_var_idx) tuple keys
+                    if isinstance(key, tuple):
+                        node_idx, edge_var_idx = key
+                        if node_idx in by_idx:
+                            sm = by_idx[node_idx]
+                            entry = {
+                                "node_idx": node_idx,
+                                "edge_var_idx": edge_var_idx,
+                                "acc": sm.accuracy,
+                                "sim": sm.bit_similarity,
+                            }
+                            if key in viz:
+                                entry["viz"] = viz[key]
+                            best_list.append(entry)
+                    else:
+                        if key in by_idx:
+                            sm = by_idx[key]
+                            entry = {
+                                "idx": key,
+                                "acc": sm.accuracy,
+                                "sim": sm.bit_similarity,
+                            }
+                            if key in viz:
+                                entry["viz"] = viz[key]
+                            best_list.append(entry)
                 gates[gate] = {
                     "test_acc": gm.test_acc,
-                    "best": [
-                        {
-                            "idx": i,
-                            "acc": by_idx[i].accuracy,
-                            "sim": by_idx[i].bit_similarity,
-                            **({"viz": viz[i]} if i in viz else {}),
-                        }
-                        for i in bests
-                        if i in by_idx
-                    ],
+                    "best": best_list,
                 }
             summary["trials"][trial_id] = {
                 "status": trial.status,

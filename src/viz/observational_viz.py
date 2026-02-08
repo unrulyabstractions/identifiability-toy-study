@@ -1,9 +1,9 @@
-"""Observational (robustness) visualization.
+"""Observational visualization.
 
-Contains functions for visualizing robustness tests:
-- _generate_robustness_circuit_figure: Worker function for parallel generation
-- visualize_robustness_circuit_samples: Visualize circuit diagrams under noise
-- visualize_robustness_curves: Visualize robustness curves
+Contains functions for visualizing observational tests (noise + OOD perturbations):
+- _generate_observational_circuit_figure: Worker function for parallel generation
+- visualize_observational_circuits: Visualize circuit diagrams under perturbations
+- visualize_observational_curves: Visualize observational agreement curves
 """
 
 import multiprocessing as mp
@@ -26,11 +26,11 @@ from .constants import (
 from .circuit_drawing import draw_intervened_circuit
 
 
-def _generate_robustness_circuit_figure(args):
-    """Worker function for parallel robustness circuit generation.
+def _generate_observational_circuit_figure(args):
+    """Worker function for parallel observational circuit generation.
 
     Uses draw_intervened_circuit for consistent visualization.
-    Input nodes are marked as intervened since robustness tests vary inputs.
+    Input nodes are marked as intervened since observational tests vary inputs.
     Shows original (canonical) activations below current values for comparison.
     """
     (
@@ -143,8 +143,8 @@ def _generate_robustness_circuit_figure(args):
     return output_path
 
 
-def visualize_robustness_circuit_samples(
-    robustness: ObservationalMetrics,
+def visualize_observational_circuits(
+    observational: ObservationalMetrics,
     circuit: Circuit,
     layer_weights: list[torch.Tensor],
     output_dir: str,
@@ -215,14 +215,14 @@ def visualize_robustness_circuit_samples(
     }
 
     # Process noise samples
-    noise_samples = robustness.noise.samples if robustness.noise else []
+    noise_samples = observational.noise.samples if observational.noise else []
     for sample in noise_samples:
         base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
         if base_key:
             samples_by_base[base_key]["noise"].append(sample)
 
     # Process OOD samples using sample_type field
-    ood_samples = robustness.ood.samples if robustness.ood else []
+    ood_samples = observational.ood.samples if observational.ood else []
     for sample in ood_samples:
         base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
         if base_key:
@@ -341,20 +341,20 @@ def visualize_robustness_circuit_samples(
     if tasks:
         n_workers = min(len(tasks), mp.cpu_count())
         print(
-            f"[VIZ] Generating {len(tasks)} robustness circuit figures with {n_workers} workers"
+            f"[VIZ] Generating {len(tasks)} observational circuit figures with {n_workers} workers"
         )
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            list(executor.map(_generate_robustness_circuit_figure, tasks))
+            list(executor.map(_generate_observational_circuit_figure, tasks))
 
     return paths
 
 
-def visualize_robustness_curves(
-    robustness: ObservationalMetrics,
+def visualize_observational_curves(
+    observational: ObservationalMetrics,
     output_dir: str,
     gate_name: str = "",
 ) -> dict[str, str]:
-    """Visualize robustness showing raw output values colored by correctness."""
+    """Visualize observational showing raw output values colored by correctness."""
     paths = {}
     prefix = f"{gate_name} - " if gate_name else ""
 
@@ -512,8 +512,8 @@ def visualize_robustness_curves(
         ax2.tick_params(axis="y", labelcolor=color_line)
 
     # Per-input breakdown for noise samples (4 rows x 3 cols: SC | Gate | Agreement)
-    with profile("robust_curves.per_input"):
-        noise_samples = robustness.noise.samples if robustness.noise else []
+    with profile("observational_curves.per_input"):
+        noise_samples = observational.noise.samples if observational.noise else []
         samples_by_base = {k: [] for k in input_keys}
         for sample in noise_samples:
             base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
@@ -615,7 +615,7 @@ def visualize_robustness_curves(
         paths["noise_perturbations/summary"] = path
 
     # Per-input breakdown for OOD samples - create per-subtype summaries
-    with profile("robust_curves.ood_per_input"):
+    with profile("observational_curves.ood_per_input"):
         # Each subtype gets its own summary file
         # For multiply: summary_positive.png, summary_negative.png
         # For bimodal: summary.png, summary_inv.png
@@ -671,7 +671,7 @@ def visualize_robustness_curves(
             },
         ]
 
-        ood_samples = robustness.ood.samples if robustness.ood else []
+        ood_samples = observational.ood.samples if observational.ood else []
         for subtype_info in ood_subtypes:
             samples_by_base = {k: [] for k in input_keys}
             for sample in ood_samples:

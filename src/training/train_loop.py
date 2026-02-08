@@ -22,7 +22,6 @@ def train_mlp(
     loss_target: float = 0.001,
     val_frequency: int = 1,
     early_stopping_steps: int = 10,
-    l1_lambda: float = 1e-5,
     logger=None,
 ) -> float:
     """
@@ -52,8 +51,7 @@ def train_mlp(
     dataset = TensorDataset(x, y)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    # Loss and optimizer
-    criterion = nn.BCEWithLogitsLoss()
+    # Optimizer
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.0)
 
     best_loss = float("inf")
@@ -69,9 +67,9 @@ def train_mlp(
             targets = targets.to(device)
 
             optimizer.zero_grad()
-            outputs = model(inputs)
+            logits = model(inputs)
 
-            loss = calculate_loss(model, outputs, targets)
+            loss = calculate_loss(model, logits, targets)
 
             loss.backward()
             optimizer.step()
@@ -94,7 +92,7 @@ def train_mlp(
                 train_acc = calculate_match_rate(y, train_predictions).item()
 
                 val_logits = model(x_val.to(device))
-                val_loss = criterion(val_logits, y_val.to(device)).item()
+                val_loss = calculate_loss(model, val_logits, y_val.to(device)).item()
                 val_predictions = logits_to_binary(val_logits)
                 val_acc = calculate_match_rate(y_val, val_predictions).item()
 

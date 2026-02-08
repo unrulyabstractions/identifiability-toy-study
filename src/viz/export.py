@@ -1,7 +1,7 @@
 """Metrics computation and JSON export.
 
 Contains functions for computing and exporting metrics:
-- compute_observational_metrics: Compute observational metrics from robustness data
+- compute_observational_metrics: Compute observational metrics from observational data
 - compute_interventional_metrics: Compute interventional metrics from faithfulness data
 - compute_counterfactual_metrics: Compute counterfactual metrics from faithfulness data
 - save_faithfulness_json: Save result.json files and summary.json
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 from src.schemas import FaithfulnessCategoryScore, FaithfulnessSummary
 
 
-def compute_observational_metrics(robustness: "ObservationalMetrics") -> dict:
+def compute_observational_metrics(observational: "ObservationalMetrics") -> dict:
     """Compute observational metrics dict from ObservationalMetrics with nested structure.
 
     Returns nested dict structure:
@@ -44,19 +44,19 @@ def compute_observational_metrics(robustness: "ObservationalMetrics") -> dict:
     }
     """
     # Noise perturbation metrics
-    noise = robustness.noise
+    noise = observational.noise
     noise_samples = noise.samples if noise else []
     noise_metrics = {
         "n_samples": len(noise_samples) if noise_samples else 0,
         "gate_accuracy": noise.gate_accuracy if noise else 0,
         "subcircuit_accuracy": noise.subcircuit_accuracy if noise else 0,
-        "agreement_bit": noise.agreement_bit if noise else 0,
-        "agreement_best": noise.agreement_best if noise else 0,
-        "mse_mean": noise.mse_mean if noise else 0,
+        "agreement_bit": noise.similarity.bit if noise else 0,
+        "agreement_best": noise.similarity.best if noise else 0,
+        "mse_mean": 1.0 - noise.similarity.logit if noise else 0,
     }
 
     # Group OOD samples by type
-    ood = robustness.ood
+    ood = observational.ood
     ood_samples = ood.samples if ood else []
     ood_by_type: dict[str, list] = {}
     for sample in ood_samples:
@@ -128,8 +128,8 @@ def compute_interventional_metrics(faithfulness: "FaithfulnessMetrics") -> dict:
     def compute_stats(stats_dict):
         if not stats_dict:
             return {"n_interventions": 0, "mean_bit_similarity": 0.0, "mean_logit_similarity": 0.0}
-        bit_sims = [ps.mean_bit_similarity for ps in stats_dict.values()]
-        logit_sims = [ps.mean_logit_similarity for ps in stats_dict.values()]
+        bit_sims = [ps.mean.bit for ps in stats_dict.values()]
+        logit_sims = [ps.mean.logit for ps in stats_dict.values()]
         return {
             "n_interventions": len(stats_dict),
             "mean_bit_similarity": sum(bit_sims) / len(bit_sims) if bit_sims else 0.0,
@@ -226,9 +226,9 @@ def save_faithfulness_json(
     cf_overall = 0.0
 
     # Observational result.json (from faithfulness.observational)
-    robustness = faithfulness.observational if faithfulness else None
-    if observational_dir and robustness:
-        obs_metrics = compute_observational_metrics(robustness)
+    observational = faithfulness.observational if faithfulness else None
+    if observational_dir and observational:
+        obs_metrics = compute_observational_metrics(observational)
         obs_overall = obs_metrics.get("overall_score", 0.0)
         path = os.path.join(observational_dir, "result.json")
         with open(path, "w") as f:
@@ -258,18 +258,21 @@ def save_faithfulness_json(
 
     # Observational: epsilon from the 7 agreement rates that make up the overall
     obs_epsilon = 0.0
-    if robustness:
-        obs_component_scores = [robustness.noise_agreement_bit]
+    if observational:
+        obs_component_scores = []
+        if observational.noise:
+            obs_component_scores.append(observational.noise.similarity.bit)
         # Get per-type OOD agreements
-        ood_by_type: dict[str, list] = {}
-        for sample in robustness.ood_samples:
-            st = getattr(sample, "sample_type", "multiply_positive")
-            ood_by_type.setdefault(st, []).append(sample)
-        for st in ["multiply_positive", "multiply_negative", "add", "subtract", "bimodal", "bimodal_inv"]:
-            samples = ood_by_type.get(st, [])
-            if samples:
-                agreement = sum(s.agreement_bit for s in samples) / len(samples)
-                obs_component_scores.append(agreement)
+        if observational.ood:
+            ood_by_type: dict[str, list] = {}
+            for sample in observational.ood.samples:
+                st = getattr(sample, "sample_type", "multiply_positive")
+                ood_by_type.setdefault(st, []).append(sample)
+            for st in ["multiply_positive", "multiply_negative", "add", "subtract", "bimodal", "bimodal_inv"]:
+                samples = ood_by_type.get(st, [])
+                if samples:
+                    agreement = sum(s.agreement_bit for s in samples) / len(samples)
+                    obs_component_scores.append(agreement)
         # Filter to only valid (non-zero) scores that contributed to overall
         obs_valid_scores = [s for s in obs_component_scores if s > 0]
         if obs_valid_scores:
@@ -277,12 +280,12 @@ def save_faithfulness_json(
 
     # Interventional: epsilon from the 4 mean bit similarities
     int_epsilon = 0.0
-    if faithfulness:
+    if faithfulness and faithfulness.interventional:
         int_component_scores = []
-        for stats_dict in [faithfulness.in_circuit_stats, faithfulness.out_circuit_stats,
-                          faithfulness.in_circuit_stats_ood, faithfulness.out_circuit_stats_ood]:
+        for stats_dict in [faithfulness.interventional.in_circuit_stats, faithfulness.interventional.out_circuit_stats,
+                          faithfulness.interventional.in_circuit_stats_ood, faithfulness.interventional.out_circuit_stats_ood]:
             if stats_dict:
-                bit_sims = [ps.mean_bit_similarity for ps in stats_dict.values()]
+                bit_sims = [ps.mean.bit for ps in stats_dict.values()]
                 if bit_sims:
                     int_component_scores.append(sum(bit_sims) / len(bit_sims))
         int_valid_scores = [s for s in int_component_scores if s > 0]
@@ -291,12 +294,12 @@ def save_faithfulness_json(
 
     # Counterfactual: epsilon from the 4 mean scores (suff, comp, nec, ind)
     cf_epsilon = 0.0
-    if faithfulness:
+    if faithfulness and faithfulness.counterfactual:
         cf_component_scores = [
-            faithfulness.mean_sufficiency,
-            faithfulness.mean_completeness,
-            faithfulness.mean_necessity,
-            faithfulness.mean_independence,
+            faithfulness.counterfactual.mean_sufficiency,
+            faithfulness.counterfactual.mean_completeness,
+            faithfulness.counterfactual.mean_necessity,
+            faithfulness.counterfactual.mean_independence,
         ]
         cf_valid_scores = [s for s in cf_component_scores if s > 0]
         if cf_valid_scores:
@@ -399,7 +402,7 @@ faithfulness/
 |- summary.json          # Overall scores and epsilons
 |- explanation.md        # This file
 |- observational/
-|   |-- result.json       # Detailed robustness metrics
+|   |-- result.json       # Detailed observational metrics
 |- interventional/
 |   |-- result.json       # Detailed intervention metrics
 |-- counterfactual/
@@ -438,7 +441,7 @@ def _compute_subcircuit_scores(
         obs_component_scores = []
         # Noise agreement
         if observational.noise:
-            obs_component_scores.append(observational.noise.agreement_bit)
+            obs_component_scores.append(observational.noise.similarity.bit)
         # OOD agreement by type
         if observational.ood:
             ood_by_type: dict[str, list] = {}
@@ -464,7 +467,7 @@ def _compute_subcircuit_scores(
         for stats_dict in [interventional.in_circuit_stats, interventional.out_circuit_stats,
                           interventional.in_circuit_stats_ood, interventional.out_circuit_stats_ood]:
             if stats_dict:
-                bit_sims = [ps.mean_bit_similarity for ps in stats_dict.values()]
+                bit_sims = [ps.mean.bit for ps in stats_dict.values()]
                 if bit_sims:
                     int_component_scores.append(sum(bit_sims) / len(bit_sims))
         int_valid_scores = [s for s in int_component_scores if s > 0]

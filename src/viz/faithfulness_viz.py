@@ -193,10 +193,10 @@ def visualize_faithfulness_intervention_effects(
 
         # Extract metrics from patch stats
         labels = [_patch_key_to_filename(pk) for pk, _ in sorted_patches]
-        bit_sim = [ps.mean_bit_similarity for _, ps in sorted_patches]
-        logit_sim = [ps.mean_logit_similarity for _, ps in sorted_patches]
-        best_sim = [ps.mean_best_similarity for _, ps in sorted_patches]
-        n_samples = [ps.n_interventions for _, ps in sorted_patches]
+        bit_sim = [ps.mean.bit for _, ps in sorted_patches]
+        logit_sim = [ps.mean.logit for _, ps in sorted_patches]
+        best_sim = [ps.mean.best for _, ps in sorted_patches]
+        n_samples = [ps.n_samples for _, ps in sorted_patches]
 
         # Create bar chart (same format as observational/interventional summaries)
         fig, ax = plt.subplots(1, 1, figsize=(max(12, n_patches * 1.2), 6))
@@ -297,10 +297,10 @@ def visualize_faithfulness_intervention_effects(
         n_patches = len(all_patches)
         labels = [_patch_key_to_filename(p[1]) for p in all_patches]
 
-        bit_sim = [p[2].mean_bit_similarity for p in all_patches]
-        logit_sim = [p[2].mean_logit_similarity for p in all_patches]
-        best_sim = [p[2].mean_best_similarity for p in all_patches]
-        n_samples = [p[2].n_interventions for p in all_patches]
+        bit_sim = [p[2].mean.bit for p in all_patches]
+        logit_sim = [p[2].mean.logit for p in all_patches]
+        best_sim = [p[2].mean.best for p in all_patches]
+        n_samples = [p[2].n_samples for p in all_patches]
         is_in_circuit = [p[0] == "in" for p in all_patches]
 
         fig, ax = plt.subplots(1, 1, figsize=(max(14, n_patches * 1.5), 7))
@@ -377,7 +377,7 @@ def visualize_faithfulness_intervention_effects(
             if layer_match and idx_match:
                 layer = int(layer_match.group(1))
                 node = int(idx_match.group(1))
-                scores[(layer, node)] = patch_stats.mean_bit_similarity
+                scores[(layer, node)] = patch_stats.mean.bit
         return scores
 
     in_bit_scores = _build_node_scores(faithfulness.interventional.in_circuit_stats if faithfulness.interventional else {})

@@ -27,6 +27,7 @@ from src.schemas import (
     ObservationalSample,
     OutOfDistributionMetrics,
     PatchStatistics,
+    Similarity,
     SubcircuitMetrics,
     TrialResult,
     TrialSetup,
@@ -337,13 +338,18 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                     noise_metrics = None
                     if noise_data:
                         noise_samples = [ObservationalSample(**s) for s in noise_data.get("samples", [])]
+                        # Load similarity from nested structure or legacy flat fields
+                        sim_data = noise_data.get("similarity", {})
+                        similarity = Similarity(
+                            bit=sim_data.get("bit", noise_data.get("agreement_bit", 0)),
+                            logit=sim_data.get("logit", 1.0 - noise_data.get("mse_mean", 0)),
+                            best=sim_data.get("best", noise_data.get("agreement_best", 0)),
+                        )
                         noise_metrics = NoiseRobustnessMetrics(
                             samples=noise_samples,
                             gate_accuracy=noise_data.get("gate_accuracy", 0),
                             subcircuit_accuracy=noise_data.get("subcircuit_accuracy", 0),
-                            agreement_bit=noise_data.get("agreement_bit", 0),
-                            agreement_best=noise_data.get("agreement_best", 0),
-                            mse_mean=noise_data.get("mse_mean", 0),
+                            similarity=similarity,
                             n_samples=noise_data.get("n_samples", 0),
                         )
                     # Load OOD metrics
@@ -351,13 +357,18 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                     ood_metrics = None
                     if ood_data:
                         ood_samples = [ObservationalSample(**s) for s in ood_data.get("samples", [])]
+                        # Load similarity from nested structure or legacy flat fields
+                        sim_data = ood_data.get("similarity", {})
+                        similarity = Similarity(
+                            bit=sim_data.get("bit", ood_data.get("agreement_bit", 0)),
+                            logit=sim_data.get("logit", 1.0 - ood_data.get("mse_mean", 0)),
+                            best=sim_data.get("best", ood_data.get("agreement_best", 0)),
+                        )
                         ood_metrics = OutOfDistributionMetrics(
                             samples=ood_samples,
                             gate_accuracy=ood_data.get("gate_accuracy", 0),
                             subcircuit_accuracy=ood_data.get("subcircuit_accuracy", 0),
-                            agreement_bit=ood_data.get("agreement_bit", 0),
-                            agreement_best=ood_data.get("agreement_best", 0),
-                            mse_mean=ood_data.get("mse_mean", 0),
+                            similarity=similarity,
                         )
                     observational = ObservationalMetrics(
                         noise=noise_metrics,
@@ -369,35 +380,42 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                 interv_data = f.get("interventional", {})
                 interventional = None
                 if interv_data:
+                    # Helper to load PatchStatistics with Similarity
+                    def _load_patch_stats(ps_data):
+                        samples = [InterventionalSample(**s) for s in ps_data.get("samples", [])]
+                        # Load from nested structure or legacy flat fields
+                        mean_data = ps_data.get("mean", {})
+                        std_data = ps_data.get("std", {})
+                        mean = Similarity(
+                            bit=mean_data.get("bit", ps_data.get("mean_bit_similarity", 0)),
+                            logit=mean_data.get("logit", ps_data.get("mean_logit_similarity", 0)),
+                            best=mean_data.get("best", ps_data.get("mean_best_similarity", 0)),
+                        )
+                        std = Similarity(
+                            bit=std_data.get("bit", ps_data.get("std_bit_similarity", 0)),
+                            logit=std_data.get("logit", ps_data.get("std_logit_similarity", 0)),
+                            best=std_data.get("best", ps_data.get("std_best_similarity", 0)),
+                        )
+                        return PatchStatistics(
+                            mean=mean,
+                            std=std,
+                            n_samples=ps_data.get("n_samples", ps_data.get("n_interventions", 0)),
+                            samples=samples,
+                        )
+
                     # Reconstruct PatchStatistics with samples
                     in_stats = {}
                     for pk, ps in interv_data.get("in_circuit_stats", {}).items():
-                        samples = [InterventionalSample(**s) for s in ps.get("samples", [])]
-                        in_stats[pk] = PatchStatistics(
-                            mean_bit_similarity=ps.get("mean_bit_similarity", 0),
-                            samples=samples,
-                        )
+                        in_stats[pk] = _load_patch_stats(ps)
                     out_stats = {}
                     for pk, ps in interv_data.get("out_circuit_stats", {}).items():
-                        samples = [InterventionalSample(**s) for s in ps.get("samples", [])]
-                        out_stats[pk] = PatchStatistics(
-                            mean_bit_similarity=ps.get("mean_bit_similarity", 0),
-                            samples=samples,
-                        )
+                        out_stats[pk] = _load_patch_stats(ps)
                     in_stats_ood = {}
                     for pk, ps in interv_data.get("in_circuit_stats_ood", {}).items():
-                        samples = [InterventionalSample(**s) for s in ps.get("samples", [])]
-                        in_stats_ood[pk] = PatchStatistics(
-                            mean_bit_similarity=ps.get("mean_bit_similarity", 0),
-                            samples=samples,
-                        )
+                        in_stats_ood[pk] = _load_patch_stats(ps)
                     out_stats_ood = {}
                     for pk, ps in interv_data.get("out_circuit_stats_ood", {}).items():
-                        samples = [InterventionalSample(**s) for s in ps.get("samples", [])]
-                        out_stats_ood[pk] = PatchStatistics(
-                            mean_bit_similarity=ps.get("mean_bit_similarity", 0),
-                            samples=samples,
-                        )
+                        out_stats_ood[pk] = _load_patch_stats(ps)
                     interventional = InterventionalMetrics(
                         in_circuit_stats=in_stats,
                         out_circuit_stats=out_stats,

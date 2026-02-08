@@ -15,6 +15,7 @@ from src.schemas import (
     ObservationalSample,
     OutOfDistributionMetrics,
     SampleType,
+    Similarity,
 )
 from src.tensor_ops import calculate_mse, logits_to_binary
 
@@ -188,9 +189,11 @@ def calculate_observational_metrics(
         samples=noise_samples,
         gate_accuracy=float(noise_gate_acc),
         subcircuit_accuracy=float(noise_sc_acc),
-        agreement_bit=float(noise_agree_bit),
-        agreement_best=float(noise_agree_best),
-        mse_mean=float(noise_mse),
+        similarity=Similarity(
+            bit=float(noise_agree_bit),
+            logit=1.0 - float(noise_mse),
+            best=float(noise_agree_best),
+        ),
         n_samples=n_noise,
     )
 
@@ -198,9 +201,11 @@ def calculate_observational_metrics(
         samples=ood_samples,
         gate_accuracy=float(ood_gate_acc),
         subcircuit_accuracy=float(ood_sc_acc),
-        agreement_bit=float(ood_agree_bit),
-        agreement_best=float(ood_agree_best),
-        mse_mean=float(ood_mse),
+        similarity=Similarity(
+            bit=float(ood_agree_bit),
+            logit=1.0 - float(ood_mse),
+            best=float(ood_agree_best),
+        ),
     )
 
     return ObservationalMetrics(

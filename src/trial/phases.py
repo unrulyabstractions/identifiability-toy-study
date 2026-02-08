@@ -5,8 +5,7 @@ Each phase is a distinct step in the trial pipeline:
 - SPD decomposition
 - Enumerating circuits
 - Precomputing masks
-- Robustness analysis
-- Faithfulness analysis
+- Faithfulness analysis (includes observational, interventional, counterfactual)
 
 Note: Some phases like train_model, batch_compute_metrics, and
 batch_evaluate_edge_variants are now decorated with @profile_fn directly
@@ -15,7 +14,7 @@ in their source modules (helpers.py and batched_eval.py).
 
 import torch
 
-from src.analysis import calculate_faithfulness_metrics, calculate_observational_metrics
+from src.analysis import calculate_faithfulness_metrics
 from src.circuit import (
     adapt_masks_for_gate,
     batch_compute_metrics,
@@ -37,7 +36,6 @@ __all__ = [
     "enumerate_circuits_phase",
     "faithfulness_phase",
     "precompute_masks_phase",
-    "robustness_phase",
     "spd_phase",
     "train_model",
 ]
@@ -174,39 +172,10 @@ def precompute_masks_phase(subcircuits, model, gate_names, eval_device, output_s
     return precomputed_masks_per_gate
 
 
-@profile_fn("Robustness Analysis")
-def robustness_phase(
-    best_indices, best_subcircuit_models, gate_model, device, parallel_config
-):
-    """Compute robustness metrics for best subcircuits."""
-
-    def compute_single_robustness(subcircuit_idx):
-        subcircuit_model = best_subcircuit_models[subcircuit_idx]
-        return calculate_observational_metrics(
-            subcircuit=subcircuit_model,
-            full_model=gate_model,
-            n_samples_per_base=200,
-            device=device,
-        )
-
-    if parallel_config.enable_parallel_robustness and len(best_indices) > 1:
-        with ParallelTasks(max_workers=min(4, len(best_indices))) as tasks:
-            futures = [
-                tasks.submit(compute_single_robustness, idx) for idx in best_indices
-            ]
-        return [f.result() for f in futures]
-    else:
-        results = []
-        for subcircuit_idx in best_indices:
-            with profile("calc_robustness"):
-                results.append(compute_single_robustness(subcircuit_idx))
-        return results
-
-
 @profile_fn("Faithfulness Analysis")
 def faithfulness_phase(
-    best_indices,
-    best_subcircuit_models,
+    subcircuit_keys,
+    subcircuit_models,
     gate_model,
     x,
     y_gate,
@@ -217,31 +186,45 @@ def faithfulness_phase(
     device,
     parallel_config,
 ):
-    """Compute faithfulness metrics for best subcircuits."""
+    """Compute complete faithfulness metrics (observational + interventional + counterfactual).
 
-    def compute_single_faithfulness(subcircuit_idx):
-        subcircuit_model = best_subcircuit_models[subcircuit_idx]
+    For each subcircuit, computes:
+    - Observational: How well subcircuit matches gate model under perturbations
+    - Interventional: How well subcircuit matches under activation patching
+    - Counterfactual: 2x2 patching matrix (sufficiency, completeness, necessity, independence)
+
+    Args:
+        subcircuit_keys: List of keys identifying subcircuits. Can be:
+            - Integers (legacy: node pattern indices)
+            - Tuples of (node_idx, edge_var_idx) for hierarchical structure
+        subcircuit_models: Dict mapping keys to subcircuit models
+        subcircuit_structures: Dict mapping keys to circuit structures
+    """
+
+    def compute_single_faithfulness(key):
+        subcircuit_model = subcircuit_models[key]
+        structure = subcircuit_structures[key]
         return calculate_faithfulness_metrics(
             x=x,
             y=y_gate,
             model=gate_model,
             activations=activations,
             subcircuit=subcircuit_model,
-            structure=subcircuit_structures[subcircuit_idx],
+            structure=structure,
             counterfactual_pairs=counterfactual_pairs,
             config=config,
             device=device,
         )
 
-    if parallel_config.enable_parallel_faithfulness and len(best_indices) > 1:
-        with ParallelTasks(max_workers=min(4, len(best_indices))) as tasks:
+    if parallel_config.enable_parallel_faithfulness and len(subcircuit_keys) > 1:
+        with ParallelTasks(max_workers=min(4, len(subcircuit_keys))) as tasks:
             futures = [
-                tasks.submit(compute_single_faithfulness, idx) for idx in best_indices
+                tasks.submit(compute_single_faithfulness, key) for key in subcircuit_keys
             ]
         return [f.result() for f in futures]
     else:
         results = []
-        for subcircuit_idx in best_indices:
+        for key in subcircuit_keys:
             with profile("calc_faithfulness"):
-                results.append(compute_single_faithfulness(subcircuit_idx))
+                results.append(compute_single_faithfulness(key))
         return results
