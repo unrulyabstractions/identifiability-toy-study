@@ -49,7 +49,7 @@ from pathlib import Path
 import torch
 
 from src.schemas import ExperimentResult
-from src.schemas.serialization import filter_non_serializable
+from src.serialization import filter_non_serializable
 
 
 def _save_json(data: dict, path: Path):

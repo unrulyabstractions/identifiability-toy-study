@@ -4,8 +4,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import product
 from typing import Optional
 
-from src.infra import ParallelConfig, set_seeds
 from src.experiment_config import ExperimentConfig, TrialSetup
+from src.infra import ParallelConfig, set_seeds
 from src.schemas import ExperimentResult
 from src.training import generate_trial_data
 

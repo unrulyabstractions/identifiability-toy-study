@@ -17,7 +17,7 @@ import json
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Optional
 
-from src.schemas.schema_class import SchemaClass
+from src.schema_class import SchemaClass
 
 
 @dataclass

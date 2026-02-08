@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
-from src.schemas.schema_class import SchemaClass
+from src.schema_class import SchemaClass
 
 if TYPE_CHECKING:
     from src.model import DecomposedMLP

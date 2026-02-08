@@ -10,7 +10,7 @@ Contains sample dataclasses for storing test results:
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .schema_class import SchemaClass
+from src.schema_class import SchemaClass
 
 
 class SampleType(str, Enum):

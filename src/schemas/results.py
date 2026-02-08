@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, Any, Optional
 import torch
 
 from src.experiment_config import ExperimentConfig, TrialSetup
+from src.schema_class import SchemaClass
 from .evaluation import Metrics, ProfilingData
-from .schema_class import SchemaClass
 
 # Avoid circular import - these are only needed for type hints
 if TYPE_CHECKING:

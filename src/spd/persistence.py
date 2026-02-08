@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from src.schemas.serialization import filter_non_serializable
+from src.serialization import filter_non_serializable
 
 if TYPE_CHECKING:
     from .types import SPDSubcircuitEstimate, SpdResults, SpdTrialResult

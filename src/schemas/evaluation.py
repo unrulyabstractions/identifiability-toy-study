@@ -12,7 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from .schema_class import SchemaClass
+from src.schema_class import SchemaClass
 
 # Forward references for circular imports
 if TYPE_CHECKING:

@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 
 from .samples import CounterfactualSample, InterventionalSample, ObservationalSample
-from .schema_class import SchemaClass
+from src.schema_class import SchemaClass
 
 # Aliases for backwards compatibility
 CounterfactualEffect = CounterfactualSample

@@ -6,13 +6,13 @@ from pathlib import Path
 from typing import Any
 
 from src.experiment import run_experiment
+from src.experiment_config import ExperimentConfig
 from src.infra import print_profile, profile, profile_fn, setup_logging
 from src.persistence import (
     get_all_runs,
     load_results,
     save_results,
 )
-from src.experiment_config import ExperimentConfig
 from src.schemas import ExperimentResult
 from src.spd import SpdResults, load_spd_results, run_spd, save_spd_results
 from src.viz import visualize_experiment, visualize_spd_experiment

@@ -10,7 +10,7 @@ import copy
 import json
 from dataclasses import asdict, dataclass, fields
 
-from .serialization import deterministic_id_from_dataclass, filter_non_serializable
+from src.serialization import deterministic_id_from_dataclass, filter_non_serializable
 
 
 @dataclass

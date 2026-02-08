@@ -10,7 +10,7 @@ from typing import Callable, TypeVar
 
 import torch
 
-from src.schemas.schema_class import SchemaClass
+from src.schema_class import SchemaClass
 
 
 @dataclass
