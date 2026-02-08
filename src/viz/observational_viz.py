@@ -14,10 +14,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from ..common.circuit import Circuit
-from ..common.profiler import profile
-from ..common.schemas import RobustnessMetrics
-from .base import (
+from src.circuit import Circuit
+from src.infra import profile
+from src.schemas import RobustnessMetrics
+from .constants import (
     LAYOUT_RECT_DEFAULT,
     TITLE_Y,
     finalize_figure,

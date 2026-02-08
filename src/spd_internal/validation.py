@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from ..common.neural_model import DecomposedMLP
+    from src.model import DecomposedMLP
 
 
 def compute_validation_metrics(

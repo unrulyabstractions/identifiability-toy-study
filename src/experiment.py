@@ -3,17 +3,13 @@ import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import product
 
-from .common.helpers import (
-    generate_trial_data,
-)
-from .common.schemas import (
+from src.training import generate_trial_data
+from src.schemas import (
     ExperimentConfig,
     ExperimentResult,
     TrialSetup,
 )
-from .common.utils import (
-    set_seeds,
-)
+from src.infra import set_seeds
 from .trial import run_trial
 
 """

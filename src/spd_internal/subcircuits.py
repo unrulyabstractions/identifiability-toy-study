@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ..common.circuit import Circuit
+from src.circuit import Circuit
 from .analysis import (
     cluster_components_hierarchical,
     compute_coactivation_matrix,
@@ -25,7 +25,7 @@ from .analysis import (
 from .persistence import load_spd_estimate, save_spd_estimate
 
 if TYPE_CHECKING:
-    from ..common.neural_model import MLP, DecomposedMLP
+    from src.model import DecomposedMLP, MLP
     from .analysis import SPDAnalysisResult
 
 

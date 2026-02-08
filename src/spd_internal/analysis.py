@@ -51,7 +51,7 @@ from .visualization import (
 )
 
 if TYPE_CHECKING:
-    from ..common.neural_model import MLP, DecomposedMLP
+    from src.model import DecomposedMLP, MLP
 
 
 def run_spd_analysis(

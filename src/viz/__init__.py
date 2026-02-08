@@ -16,7 +16,7 @@ Main entry point: visualize_experiment
 """
 
 # Main entry point
-from .main import visualize_experiment
+from .experiment_viz import visualize_experiment
 
 # Activation visualization
 from .activation_viz import (
@@ -24,8 +24,8 @@ from .activation_viz import (
     visualize_circuit_activations_mean,
 )
 
-# Base utilities and constants
-from .base import (
+# Constants and utilities
+from .constants import (
     COLORS,
     MARKERS,
     JITTER,
@@ -77,8 +77,8 @@ from .profiling_viz import (
     visualize_profiling_summary,
 )
 
-# Metrics export
-from .metrics_export import (
+# Metrics export (renamed from metrics_export)
+from .export import (
     compute_observational_metrics,
     compute_interventional_metrics,
     compute_counterfactual_metrics,

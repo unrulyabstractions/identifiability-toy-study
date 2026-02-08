@@ -4,10 +4,10 @@ import pytest
 import numpy as np
 import torch
 
-from src.common.circuit import Circuit, enumerate_all_valid_circuit
-from src.common.neural_model import MLP
-from src.common.schemas import IdentifiabilityConstraints, SubcircuitMetrics
-from src.causal import (
+from src.circuit import Circuit, enumerate_all_valid_circuit
+from src.model import MLP
+from src.schemas import IdentifiabilityConstraints, SubcircuitMetrics
+from src.analysis import (
     filter_subcircuits,
     _generate_ood_multiply_samples,
     _generate_noise_samples,

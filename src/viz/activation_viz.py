@@ -10,8 +10,8 @@ import os
 import matplotlib.pyplot as plt
 import torch
 
-from ..common.circuit import Circuit
-from .base import finalize_figure
+from src.circuit import Circuit
+from .constants import finalize_figure
 from .circuit_drawing import _draw_circuit_from_data
 
 

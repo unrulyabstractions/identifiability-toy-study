@@ -8,7 +8,7 @@ from itertools import product
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..common.schemas import SPDConfig
+    from src.schemas import SPDConfig
 
 
 def generate_spd_sweep_configs(
@@ -32,7 +32,7 @@ def generate_spd_sweep_configs(
         List of SPDConfig objects for sweep
     """
     # Import here to avoid circular imports
-    from ..common.schemas import SPDConfig
+    from src.schemas import SPDConfig
 
     if base_config is None:
         base_config = SPDConfig()

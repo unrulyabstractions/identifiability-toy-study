@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 
-from ..common.logic_gates import ALL_LOGIC_GATES
+from src.domain import ALL_LOGIC_GATES
 from .schemas import ClusterInfo, SPDAnalysisResult
 
 if TYPE_CHECKING:
-    from ..common.neural_model import DecomposedMLP
+    from src.model import DecomposedMLP
 
 
 def map_clusters_to_functions(

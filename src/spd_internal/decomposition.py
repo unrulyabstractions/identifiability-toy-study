@@ -14,8 +14,8 @@ from spd.models.component_model import ComponentModel
 from spd.run_spd import expand_module_patterns, optimize
 from spd.utils.data_utils import DatasetGeneratedDataLoader
 
-from ..common.neural_model import MLP, DecomposedMLP
-from ..common.schemas import SPDConfig
+from src.model import DecomposedMLP, MLP
+from src.schemas import SPDConfig
 
 
 class SimpleDataset:

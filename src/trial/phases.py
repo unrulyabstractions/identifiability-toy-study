@@ -15,17 +15,16 @@ in their source modules (helpers.py and batched_eval.py).
 
 import torch
 
-from ..causal import calculate_faithfulness_metrics, calculate_observational_metrics
-from ..common.batched_eval import (
+from src.analysis import calculate_faithfulness_metrics, calculate_observational_metrics
+from src.circuit import (
     adapt_masks_for_gate,
     batch_compute_metrics,
     batch_evaluate_edge_variants,
+    enumerate_all_valid_circuit,
     precompute_circuit_masks_base,
 )
-from ..common.circuit import enumerate_all_valid_circuit
-from ..common.helpers import train_model
-from ..common.parallelization import ParallelTasks
-from ..common.profiler import profile, profile_fn
+from src.infra import ParallelTasks, profile, profile_fn
+from src.training import train_model
 from ..spd_internal.decomposition import decompose_mlp
 from ..spd_internal.subcircuits import estimate_spd_subcircuits
 

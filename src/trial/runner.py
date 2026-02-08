@@ -2,12 +2,11 @@
 
 from typing import Any
 
-from ..common.helpers import train_model, update_status_fx
-from ..common.metrics import calculate_match_rate, logits_to_binary
-from ..common.logic_gates import ALL_LOGIC_GATES
-from ..common.parallelization import get_eval_device
-from ..common.schemas import TrialData, TrialResult, TrialSetup
-from ..common.utils import set_seeds
+from src.domain import ALL_LOGIC_GATES
+from src.infra import get_eval_device, set_seeds, update_status_fx
+from src.schemas import TrialData, TrialResult, TrialSetup
+from src.tensor_ops import calculate_match_rate, logits_to_binary
+from src.training import train_model
 from .gate_analysis import analyze_gate
 from .phases import (
     compute_activations_phase,
@@ -102,7 +101,7 @@ def run_trial(
 
     trial_metrics.avg_loss = avg_loss
     trial_metrics.val_acc = val_acc
-    trial_metrics.test_acc = calculate_match_rate(bit_pred, bit_gt).item()
+    trial_metrics.test_acc = calculate_match_rate(bit_gt, bit_pred).item()
 
     # ===== SPD (if enabled) =====
     if run_spd:

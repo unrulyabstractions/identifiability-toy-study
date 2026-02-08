@@ -50,8 +50,8 @@ import torch
 
 from ..spd_internal.persistence import save_spd_estimate
 
-from ..common.schemas import ExperimentResult
-from ..common.utils import filter_non_serializable
+from src.schemas import ExperimentResult
+from src.schemas.serialization import filter_non_serializable
 
 
 def _save_json(data: dict, path: Path):

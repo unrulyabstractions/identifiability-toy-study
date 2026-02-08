@@ -11,9 +11,9 @@ from typing import Optional
 import numpy as np
 import torch
 
-from ..common.circuit import Circuit
-from ..common.neural_model import MLP, DecomposedMLP
-from ..common.schemas import (
+from src.circuit import Circuit
+from src.model import DecomposedMLP, MLP
+from src.schemas import (
     CounterfactualEffect,
     ExperimentConfig,
     ExperimentResult,
@@ -252,7 +252,7 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
         tensors = load_tensors(trial_dir, device=device)
 
         # Create TrialSetup from saved data
-        from ..common.schemas import ModelParams, FaithfulnessConfig
+        from src.schemas import ModelParams, FaithfulnessConfig
 
         model_params_data = setup_data.get("model_params", {})
         model_params = ModelParams(

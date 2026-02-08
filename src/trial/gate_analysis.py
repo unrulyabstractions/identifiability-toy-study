@@ -1,9 +1,9 @@
 """Gate analysis - per-gate metric computation, edge optimization, and faithfulness."""
 
-from ..causal import create_clean_corrupted_data, filter_subcircuits
-from ..common.batched_eval import batch_compute_metrics, batch_evaluate_edge_variants
-from ..common.metrics import calculate_match_rate
-from ..common.schemas import GateMetrics, SubcircuitMetrics
+from src.analysis import create_clean_corrupted_data, filter_subcircuits
+from src.circuit import batch_compute_metrics, batch_evaluate_edge_variants
+from src.schemas import GateMetrics, SubcircuitMetrics
+from src.tensor_ops import calculate_match_rate
 from .phases import (
     faithfulness_phase,
     robustness_phase,
@@ -72,7 +72,7 @@ def analyze_gate(
     print("~" * 60)
 
     update_status(f"STARTED_GATE_METRICS:{gate_idx}")
-    gate_acc = calculate_match_rate(bit_gate, bit_gate_gt).item()
+    gate_acc = calculate_match_rate(bit_gate_gt, bit_gate).item()
 
     # Move data to eval device
     x_eval = x.to(eval_device) if eval_device != device else x

@@ -4,9 +4,9 @@ import pytest
 import torch
 import numpy as np
 import time
-from src.common.neural_model import MLP
-from src.common.circuit import enumerate_all_valid_circuit
-from src.common.batched_eval import (
+from src.model import MLP
+from src.circuit import (
+    enumerate_all_valid_circuit,
     adapt_masks_for_gate,
     batch_evaluate_edge_variants,
     batch_evaluate_subcircuits,

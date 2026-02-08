@@ -11,16 +11,16 @@ These tests verify correctness by comparing:
 import numpy as np
 import pytest
 import torch
-from src.common.metrics import calculate_best_match_rate, logits_to_binary
+from src.tensor_ops import calculate_best_match_rate, logits_to_binary
 
-from src.common.batched_eval import (
+from src.circuit import (
     batch_compute_metrics,
     batch_evaluate_subcircuits,
     precompute_circuit_masks,
+    enumerate_all_valid_circuit,
 )
-from src.common.circuit import enumerate_all_valid_circuit
-from src.common.neural_model import MLP
-from src.common.parallelization import ParallelTasks
+from src.model import MLP
+from src.infra import ParallelTasks
 
 # =============================================================================
 # Fixtures

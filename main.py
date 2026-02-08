@@ -4,20 +4,19 @@ import os
 import sys
 from pathlib import Path
 
-from src.common.schemas import (
+from src.schemas import (
     ExperimentConfig,
     ExperimentResult,
     SPDConfig,
 )
 from src.spd_internal.config import generate_spd_sweep_configs
-from src.common.utils import setup_logging
+from src.infra import setup_logging, print_profile
 from src.experiment import run_experiment
 from src.persistence import (
     get_all_runs,
     load_results,
     save_results,
 )
-from src.common.profiler import print_profile
 from src.viz import visualize_experiment
 
 if __name__ == "__main__":

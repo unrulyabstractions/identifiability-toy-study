@@ -9,7 +9,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ..common.neural_model import DecomposedMLP
+from src.model import DecomposedMLP
 from .circuit_drawing import _get_spd_component_weights
 
 

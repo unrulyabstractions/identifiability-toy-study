@@ -13,9 +13,9 @@ import networkx as nx
 import numpy as np
 import torch
 
-from ..common.circuit import Circuit
-from ..common.neural_model import DecomposedMLP
-from .base import (
+from src.circuit import Circuit
+from src.model import DecomposedMLP
+from .constants import (
     _activation_to_color,
     _layout_cache,
     _symmetric_range,

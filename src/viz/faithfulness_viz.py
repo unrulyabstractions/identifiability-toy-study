@@ -18,9 +18,9 @@ import networkx as nx
 import numpy as np
 import torch
 
-from ..common.circuit import Circuit
-from ..common.schemas import FaithfulnessMetrics
-from .base import (
+from src.circuit import Circuit
+from src.schemas import FaithfulnessMetrics
+from .constants import (
     LAYOUT_RECT_DEFAULT,
     TITLE_Y,
     _layout_cache,

@@ -11,7 +11,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ..common.schemas import ProfilingData
+from src.schemas import ProfilingData
 
 
 def visualize_profiling_timeline(

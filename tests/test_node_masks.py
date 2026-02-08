@@ -2,8 +2,8 @@
 
 import pytest
 import numpy as np
-from src.common.neural_model import MLP
-from src.common.circuit import enumerate_all_valid_circuit, enumerate_edge_variants
+from src.model import MLP
+from src.circuit import enumerate_all_valid_circuit, enumerate_edge_variants
 
 
 # Node masks: 2^(w*d) total combinations for hidden layers

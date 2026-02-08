@@ -20,7 +20,7 @@ except ImportError:
     SCIPY_AVAILABLE = False
 
 if TYPE_CHECKING:
-    from ..common.neural_model import DecomposedMLP
+    from src.model import DecomposedMLP
 
 
 def detect_dead_components(

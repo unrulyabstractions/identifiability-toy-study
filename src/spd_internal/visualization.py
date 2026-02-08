@@ -16,7 +16,7 @@ import numpy as np
 from .schemas import ClusterInfo, SPDAnalysisResult
 
 if TYPE_CHECKING:
-    from ..common.neural_model import DecomposedMLP
+    from src.model import DecomposedMLP
 
 
 def visualize_importance_heatmap(

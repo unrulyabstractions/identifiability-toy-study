@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 if TYPE_CHECKING:
-    from ..common.neural_model import DecomposedMLP
+    from src.model import DecomposedMLP
 
 
 def compute_importance_matrix(
