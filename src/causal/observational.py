@@ -156,7 +156,9 @@ def calculate_robustness_metrics(
     ood_bimodal_pairs = _generate_ood_bimodal_samples(base_inputs, n_per_type)
 
     # Combine all OOD samples
-    ood_input_pairs = ood_multiply_pairs + ood_add_pairs + ood_subtract_pairs + ood_bimodal_pairs
+    ood_input_pairs = (
+        ood_multiply_pairs + ood_add_pairs + ood_subtract_pairs + ood_bimodal_pairs
+    )
 
     # Evaluate samples sequentially (GPU ops are not thread-safe)
     noise_samples = _evaluate_samples(full_model, subcircuit, noise_input_pairs, device)

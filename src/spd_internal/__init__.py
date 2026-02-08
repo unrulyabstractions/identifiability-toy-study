@@ -7,6 +7,9 @@ external goodfire-ai SPD submodule (src/spd/).
 Re-exports all public functions for convenience.
 """
 
+# Decomposition functions
+from .decomposition import SimpleDataset, decompose_mlp
+
 # Analysis functions
 from .analysis import (
     ClusterInfo,
@@ -36,12 +39,16 @@ from .analysis import (
 from .subcircuits import (
     SPDSubcircuitEstimate,
     estimate_spd_subcircuits,
-    load_spd_estimate,
-    save_spd_estimate,
     spd_clusters_to_circuits,
 )
 
+# Persistence functions
+from .persistence import load_spd_estimate, save_spd_estimate
+
 __all__ = [
+    # Decomposition
+    "SimpleDataset",
+    "decompose_mlp",
     # Analysis classes
     "ClusterInfo",
     "SPDAnalysisResult",

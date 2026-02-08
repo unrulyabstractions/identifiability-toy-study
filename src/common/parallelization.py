@@ -8,6 +8,26 @@ from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, TypeVar
 from dataclasses import dataclass
 
+import torch
+
+from .schemas import ParallelConfig
+
+
+def get_eval_device(parallel_config: ParallelConfig, default_device: str) -> str:
+    """Determine the device to use for batched circuit evaluation.
+
+    Prefers MPS if available and configured, otherwise falls back to the
+    configured eval_device or default_device.
+    """
+    if parallel_config.use_mps_if_available and parallel_config.eval_device == "mps":
+        if torch.backends.mps.is_available():
+            return "mps"
+    return (
+        parallel_config.eval_device
+        if parallel_config.eval_device != "mps"
+        else default_device
+    )
+
 T = TypeVar("T")
 
 

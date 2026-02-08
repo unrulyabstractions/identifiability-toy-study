@@ -16,7 +16,7 @@ from ..common.schemas import (
     FaithfulnessMetrics,
 )
 from .counterfactual import CleanCorruptedPair, create_patch_intervention
-from .interventional import calculate_patches_causal_effect, _compute_patch_statistics
+from .interventional import _compute_patch_statistics, calculate_patches_causal_effect
 from .scoring import (
     compute_completeness_score,
     compute_independence_score,
@@ -47,9 +47,7 @@ def calculate_statistics(
     in_stats_ood, in_sims_ood = _compute_patch_statistics(
         in_circuit_effects.get("ood", {})
     )
-    out_stats, out_sims = _compute_patch_statistics(
-        out_circuit_effects.get("in", {})
-    )
+    out_stats, out_sims = _compute_patch_statistics(out_circuit_effects.get("in", {}))
     out_stats_ood, out_sims_ood = _compute_patch_statistics(
         out_circuit_effects.get("ood", {})
     )
@@ -206,7 +204,9 @@ def calculate_faithfulness_metrics(
                 y_intervened = intervened_acts[-1]
 
             effects.append(
-                _build_effect(pair, y_intervened, intervened_acts, "noising", score_type)
+                _build_effect(
+                    pair, y_intervened, intervened_acts, "noising", score_type
+                )
             )
         return effects
 
@@ -333,6 +333,7 @@ def calculate_faithfulness_metrics(
     mean_independence = _mean_score(independence_effects)
 
     # Overall faithfulness: average of all 4 scores
+    
     overall_faithfulness = (
         mean_sufficiency + mean_completeness + mean_necessity + mean_independence
     ) / 4.0

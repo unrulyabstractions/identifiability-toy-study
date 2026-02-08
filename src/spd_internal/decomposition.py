@@ -14,8 +14,8 @@ from spd.models.component_model import ComponentModel
 from spd.run_spd import expand_module_patterns, optimize
 from spd.utils.data_utils import DatasetGeneratedDataLoader
 
-from .common.neural_model import MLP, DecomposedMLP
-from .common.schemas import SPDConfig
+from ..common.neural_model import MLP, DecomposedMLP
+from ..common.schemas import SPDConfig
 
 
 class SimpleDataset:
@@ -56,8 +56,12 @@ def decompose_mlp(
         DecomposedMLP containing the trained decomposition
     """
     dataset = SimpleDataset(x, y)
-    train_loader = DatasetGeneratedDataLoader(dataset, batch_size=spd_config.batch_size, shuffle=False)
-    eval_loader = DatasetGeneratedDataLoader(dataset, batch_size=spd_config.eval_batch_size, shuffle=False)
+    train_loader = DatasetGeneratedDataLoader(
+        dataset, batch_size=spd_config.batch_size, shuffle=False
+    )
+    eval_loader = DatasetGeneratedDataLoader(
+        dataset, batch_size=spd_config.eval_batch_size, shuffle=False
+    )
 
     # Build module info for each layer
     module_info = [

@@ -175,7 +175,7 @@ class TrainParams(SchemaClass):
 class IdentifiabilityConstraints(SchemaClass):
     # Max deviation from bit_similarity=1.0 to be considered "best"
     # 0.01 = only 99%+ similar, 0.1 = 90%+ similar, 0.2 = 80%+ similar
-    epsilon: float = 0.1  # More lenient to get more best circuits
+    epsilon: float = 0.1
 
 
 @dataclass
@@ -447,7 +447,7 @@ class RobustnessSample(SchemaClass):
     mse: float  # (gate_output - subcircuit_output)^2
 
     # Sample type for organizing visualizations
-    sample_type: str = "noise"  # noise, multiply_positive, multiply_negative, add, subtract, bimodal, bimodal_inv
+    sample_type: str = "noise"  # SampleType enum values: noise, multiply_positive, multiply_negative, add, subtract, bimodal, bimodal_inv
 
     # Pre-computed activations for visualization (NO model runs during viz!)
     # Each is a list of lists: [[layer0_acts], [layer1_acts], ...]
@@ -570,7 +570,7 @@ class FaithfulnessCategoryScore(SchemaClass):
     """Score and epsilon for a single faithfulness category."""
 
     score: float = 0.0
-    epsilon: float = 0.0  # min(1.0 - component_scores), always positive
+    epsilon: float = 0.0  # Similarity threshold used in identifiability constraints
 
 
 @dataclass
@@ -607,11 +607,9 @@ class Metrics(SchemaClass):
     per_gate_bests: dict[str, list[int]] = field(
         default_factory=lambda: defaultdict(list)
     )
-    # RobustnessMetrics for each best subcircuit per gate
     per_gate_bests_robust: dict[str, list["RobustnessMetrics"]] = field(
         default_factory=lambda: defaultdict(list)
     )
-    # FaithfulnessMetrics for each per_gate_metrics
     per_gate_bests_faith: dict[str, list[FaithfulnessMetrics]] = field(
         default_factory=lambda: defaultdict(list)
     )

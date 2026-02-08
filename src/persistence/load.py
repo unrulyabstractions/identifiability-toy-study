@@ -27,7 +27,7 @@ from ..common.schemas import (
     TrialResult,
     TrialSetup,
 )
-from ..spd_internal.subcircuits import load_spd_estimate as _load_spd_estimate
+from ..spd_internal.persistence import load_spd_estimate as _load_spd_estimate
 
 
 def get_all_runs(output_dir: str | Path) -> list[Path]:

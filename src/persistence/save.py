@@ -48,7 +48,7 @@ from pathlib import Path
 
 import torch
 
-from ..spd_internal.subcircuits import save_spd_estimate
+from ..spd_internal.persistence import save_spd_estimate
 
 from ..common.schemas import ExperimentResult
 from ..common.utils import filter_non_serializable

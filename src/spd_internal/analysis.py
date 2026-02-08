@@ -28,29 +28,37 @@ The output is organized under trial_id/spd/ with the following structure:
                 circuit.png      - Circuit diagram for this cluster
 """
 
-from dataclasses import dataclass, field, asdict
+import json
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
-import json
 
-import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import torch
 
+# Scipy imports for hierarchical clustering (optional dependency)
+try:
+    from scipy.cluster.hierarchy import fcluster, linkage
+    from scipy.spatial.distance import squareform
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+
 from ..common.logic_gates import ALL_LOGIC_GATES
 
 if TYPE_CHECKING:
-    from ..common.neural_model import DecomposedMLP, MLP
+    from ..common.neural_model import MLP, DecomposedMLP
 
 
 @dataclass
 class ClusterInfo:
     """Information about a single component cluster."""
+
     cluster_idx: int
     component_indices: list[int]  # Which components belong to this cluster
-    component_labels: list[str]   # Labels like "layers.0.0:3"
+    component_labels: list[str]  # Labels like "layers.0.0:3"
     mean_importance: float = 0.0
 
     # Analysis results (filled in later)
@@ -79,7 +87,9 @@ class SPDAnalysisResult:
     dead_component_labels: list[str] = field(default_factory=list)
 
     # Clustering results
-    cluster_assignments: list[int] = field(default_factory=list)  # component_idx -> cluster_idx
+    cluster_assignments: list[int] = field(
+        default_factory=list
+    )  # component_idx -> cluster_idx
     clusters: list[ClusterInfo] = field(default_factory=list)
 
     # Raw data (stored as numpy arrays on disk)
@@ -159,15 +169,17 @@ def compute_validation_metrics(
             mmcs_values.append(max_cos_sim)
 
         # ML2R: Ratio of reconstructed to target magnitude
-        target_norm = np.linalg.norm(target_np, 'fro')
-        recon_norm = np.linalg.norm(recon_np, 'fro')
+        target_norm = np.linalg.norm(target_np, "fro")
+        recon_norm = np.linalg.norm(recon_np, "fro")
         if target_norm > 1e-8:
             ml2r_values.append(recon_norm / target_norm)
 
     return {
         "mmcs": float(np.mean(mmcs_values)) if mmcs_values else 0.0,
         "ml2r": float(np.mean(ml2r_values)) if ml2r_values else 0.0,
-        "faithfulness_loss": float(np.mean(faithfulness_losses)) if faithfulness_losses else float("inf"),
+        "faithfulness_loss": float(np.mean(faithfulness_losses))
+        if faithfulness_losses
+        else float("inf"),
     }
 
 
@@ -244,7 +256,7 @@ def compute_importance_matrix(
     component_model = decomposed_model.component_model
 
     # Generate all binary input combinations
-    n_total_inputs = 2 ** n_inputs
+    n_total_inputs = 2**n_inputs
     all_inputs = torch.zeros(n_total_inputs, n_inputs, device=device)
     for i in range(n_total_inputs):
         for j in range(n_inputs):
@@ -356,28 +368,25 @@ def cluster_components_hierarchical(
     distance = 1 - similarity
     np.fill_diagonal(distance, 0)
 
-    try:
-        from scipy.cluster.hierarchy import linkage, fcluster
-        from scipy.spatial.distance import squareform
-
+    if SCIPY_AVAILABLE:
         # Convert to condensed distance matrix
         condensed_dist = squareform(distance, checks=False)
 
         # Perform hierarchical clustering (average linkage)
-        Z = linkage(condensed_dist, method='average')
+        Z = linkage(condensed_dist, method="average")
 
         if n_clusters is not None:
             # Cut to get exactly n_clusters
-            cluster_assignments = fcluster(Z, t=n_clusters, criterion='maxclust')
+            cluster_assignments = fcluster(Z, t=n_clusters, criterion="maxclust")
         else:
             # Cut at distance threshold (1 - merge_threshold = distance threshold)
             dist_threshold = 1 - merge_threshold
-            cluster_assignments = fcluster(Z, t=dist_threshold, criterion='distance')
+            cluster_assignments = fcluster(Z, t=dist_threshold, criterion="distance")
 
         # Convert to 0-indexed list
         cluster_assignments = [int(c - 1) for c in cluster_assignments]
 
-    except ImportError:
+    else:
         # Fallback: simple greedy clustering if scipy not available
         cluster_assignments = list(range(n_components))
 
@@ -415,21 +424,38 @@ def map_clusters_to_functions(
     gate_names: list[str] = None,
 ) -> dict[int, str]:
     """
-    Try to identify which boolean function each cluster implements.
+    Identify which boolean function each SPD component cluster implements.
+
+    Algorithm:
+    1. For each cluster, compute mean importance across all components in that cluster
+    2. Threshold importance to determine which inputs activate the cluster
+    3. Compare the cluster's activation pattern against truth tables of known logic gates
+       using Jaccard similarity (intersection over union of activating inputs)
+    4. Assign the best-matching gate if similarity > 0.5, otherwise mark as UNKNOWN
+
+    The importance matrix encodes how much each component contributes to the output
+    for each possible binary input combination (e.g., for 2 inputs: 00, 01, 10, 11).
+    Clusters that activate on the same inputs as a known gate (e.g., XOR activates
+    on 01 and 10) are mapped to that gate.
 
     Args:
-        importance_matrix: Shape [2^n_inputs, n_components]
-        cluster_assignments: Component -> cluster mapping
-        n_inputs: Number of input bits
-        gate_names: Names of the gates in the model
+        importance_matrix: Shape [2^n_inputs, n_components]. Each row is a binary
+            input pattern, each column is a component's importance for that input.
+        cluster_assignments: List mapping component index -> cluster ID.
+        n_inputs: Number of input bits (default 2 for boolean gates).
+        gate_names: Restrict matching to these gate names. If None, check all gates.
 
     Returns:
-        cluster_functions: cluster_idx -> function name
+        Dict mapping cluster_idx -> "GATE_NAME (similarity)" or "UNKNOWN"/"INACTIVE".
+
+    Example:
+        If cluster 0 has high importance on inputs (0,1) and (1,0), and low
+        importance on (0,0) and (1,1), it matches XOR pattern with high similarity.
     """
     if importance_matrix.size == 0 or not cluster_assignments:
         return {}
 
-    n_total_inputs = 2 ** n_inputs
+    n_total_inputs = 2**n_inputs
     n_clusters = max(cluster_assignments) + 1
 
     # For each cluster, find which inputs activate it
@@ -437,7 +463,9 @@ def map_clusters_to_functions(
 
     for cluster_idx in range(n_clusters):
         # Get components in this cluster
-        component_indices = [i for i, c in enumerate(cluster_assignments) if c == cluster_idx]
+        component_indices = [
+            i for i, c in enumerate(cluster_assignments) if c == cluster_idx
+        ]
 
         if not component_indices:
             cluster_functions[cluster_idx] = "EMPTY"
@@ -560,7 +588,9 @@ def run_spd_analysis(
         result.coactivation_matrix,
         n_clusters=n_clusters,
     )
-    result.n_clusters = max(result.cluster_assignments) + 1 if result.cluster_assignments else 0
+    result.n_clusters = (
+        max(result.cluster_assignments) + 1 if result.cluster_assignments else 0
+    )
 
     # Map clusters to functions
     cluster_functions = map_clusters_to_functions(
@@ -572,7 +602,9 @@ def run_spd_analysis(
 
     # Build cluster info
     for cluster_idx in range(result.n_clusters):
-        component_indices = [i for i, c in enumerate(result.cluster_assignments) if c == cluster_idx]
+        component_indices = [
+            i for i, c in enumerate(result.cluster_assignments) if c == cluster_idx
+        ]
         cluster_labels = [component_labels[i] for i in component_indices]
 
         # Mean importance over all inputs for this cluster
@@ -597,6 +629,7 @@ def run_spd_analysis(
 # Visualization Functions
 # ============================================================================
 
+
 def visualize_importance_heatmap(
     importance_matrix: np.ndarray,
     component_labels: list[str],
@@ -620,10 +653,10 @@ def visualize_importance_heatmap(
 
     fig, ax = plt.subplots(figsize=(max(12, len(component_labels) * 0.3), 6))
 
-    im = ax.imshow(importance_matrix, aspect='auto', cmap='Reds', vmin=0, vmax=1)
+    im = ax.imshow(importance_matrix, aspect="auto", cmap="Reds", vmin=0, vmax=1)
 
     # Y-axis: input patterns
-    n_total_inputs = 2 ** n_inputs
+    n_total_inputs = 2**n_inputs
     input_labels = []
     for i in range(n_total_inputs):
         bits = tuple((i >> j) & 1 for j in range(n_inputs))
@@ -637,7 +670,7 @@ def visualize_importance_heatmap(
     if len(component_labels) <= 30:
         ax.set_xticks(range(len(component_labels)))
         short_labels = [l.split(".")[-1] for l in component_labels]
-        ax.set_xticklabels(short_labels, rotation=45, ha='right', fontsize=8)
+        ax.set_xticklabels(short_labels, rotation=45, ha="right", fontsize=8)
     else:
         ax.set_xlabel(f"Component Index (total: {len(component_labels)})")
 
@@ -645,7 +678,7 @@ def visualize_importance_heatmap(
 
     plt.colorbar(im, ax=ax, label="Importance")
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     return output_path
@@ -687,7 +720,7 @@ def visualize_coactivation_matrix(
 
     fig, ax = plt.subplots(figsize=(10, 8))
 
-    im = ax.imshow(normalized, cmap='viridis', aspect='equal')
+    im = ax.imshow(normalized, cmap="viridis", aspect="equal")
 
     # Add cluster boundaries
     n_clusters = max(cluster_assignments) + 1 if cluster_assignments else 0
@@ -699,8 +732,8 @@ def visualize_coactivation_matrix(
     cumsum = 0
     for count in cluster_counts[:-1]:
         cumsum += count
-        ax.axhline(cumsum - 0.5, color='white', linewidth=2)
-        ax.axvline(cumsum - 0.5, color='white', linewidth=2)
+        ax.axhline(cumsum - 0.5, color="white", linewidth=2)
+        ax.axvline(cumsum - 0.5, color="white", linewidth=2)
 
     ax.set_xlabel("Component Index (sorted by cluster)")
     ax.set_ylabel("Component Index (sorted by cluster)")
@@ -708,7 +741,7 @@ def visualize_coactivation_matrix(
 
     plt.colorbar(im, ax=ax, label="Normalized Coactivation")
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     return output_path
@@ -735,8 +768,8 @@ def _get_all_component_neuron_weights(
     layer_matrices = {}
     for layer_name, comp in cm.components.items():
         layer_matrices[layer_name] = {
-            'U': comp.U.detach().cpu().numpy(),  # [C, d_out]
-            'V': comp.V.detach().cpu().numpy(),  # [d_in, C]
+            "U": comp.U.detach().cpu().numpy(),  # [C, d_out]
+            "V": comp.V.detach().cpu().numpy(),  # [d_in, C]
         }
 
     for comp_label in all_component_labels:
@@ -750,8 +783,8 @@ def _get_all_component_neuron_weights(
             result[comp_label] = {}
             continue
 
-        U = layer_matrices[layer_name]['U']
-        V = layer_matrices[layer_name]['V']
+        U = layer_matrices[layer_name]["U"]
+        V = layer_matrices[layer_name]["V"]
 
         reads = set()
         writes = set()
@@ -916,13 +949,19 @@ def _draw_cluster_circuit(
     # Draw
     nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=400, ax=ax)
     nx.draw_networkx_edges(
-        G, pos, edge_color=edge_colors, width=edge_widths,
-        arrows=True, arrowsize=8, ax=ax, connectionstyle="arc3,rad=0.1"
+        G,
+        pos,
+        edge_color=edge_colors,
+        width=edge_widths,
+        arrows=True,
+        arrowsize=8,
+        ax=ax,
+        connectionstyle="arc3,rad=0.1",
     )
 
     # Add layer labels
     for layer_idx in range(n_layers):
-        ax.text(layer_idx, -0.8, f"L{layer_idx}", ha='center', fontsize=8)
+        ax.text(layer_idx, -0.8, f"L{layer_idx}", ha="center", fontsize=8)
 
     # Title
     title = f"Cluster {cluster_info.cluster_idx}"
@@ -930,7 +969,7 @@ def _draw_cluster_circuit(
         title += f"\n{cluster_info.function_mapping}"
     title += f"\n({len(cluster_info.component_indices)} comp)"
     ax.set_title(title, fontsize=9)
-    ax.axis('off')
+    ax.axis("off")
 
 
 def visualize_components_as_circuits(
@@ -1022,13 +1061,13 @@ def visualize_components_as_circuits(
         for idx in range(n, n_rows * n_cols):
             row = idx // n_cols
             col = idx % n_cols
-            axes[row, col].axis('off')
+            axes[row, col].axis("off")
 
         plt.suptitle(f"SPD Clusters: {category_name} ({n} clusters)", fontsize=12)
         plt.tight_layout()
 
         path = base_dir / filename
-        plt.savefig(path, dpi=150, bbox_inches='tight')
+        plt.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return str(path)
 
@@ -1085,23 +1124,23 @@ def visualize_uv_matrices(
 
         # Plot V
         ax = axes[idx, 0]
-        im = ax.imshow(V.T, aspect='auto', cmap='RdBu_r')
-        ax.set_xlabel('Input dimension')
-        ax.set_ylabel('Component')
-        ax.set_title(f'{name} - V matrix')
+        im = ax.imshow(V.T, aspect="auto", cmap="RdBu_r")
+        ax.set_xlabel("Input dimension")
+        ax.set_ylabel("Component")
+        ax.set_title(f"{name} - V matrix")
         plt.colorbar(im, ax=ax)
 
         # Plot U
         ax = axes[idx, 1]
-        im = ax.imshow(U, aspect='auto', cmap='RdBu_r')
-        ax.set_xlabel('Output dimension')
-        ax.set_ylabel('Component')
-        ax.set_title(f'{name} - U matrix')
+        im = ax.imshow(U, aspect="auto", cmap="RdBu_r")
+        ax.set_xlabel("Output dimension")
+        ax.set_ylabel("Component")
+        ax.set_title(f"{name} - U matrix")
         plt.colorbar(im, ax=ax)
 
     plt.suptitle("SPD U and V Decomposition Matrices", fontsize=14)
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     return output_path
@@ -1148,16 +1187,16 @@ def visualize_ci_histograms(
         ax = axes[idx]
         layer_ci = importance_matrix[:, comp_indices].flatten()
 
-        ax.hist(layer_ci, bins=50, alpha=0.7, color='steelblue', edgecolor='black')
+        ax.hist(layer_ci, bins=50, alpha=0.7, color="steelblue", edgecolor="black")
         ax.set_xlabel("Causal Importance")
         ax.set_ylabel("Frequency")
         ax.set_title(f"{layer_name.replace('.', '_')}")
-        ax.set_yscale('log')
+        ax.set_yscale("log")
         ax.set_xlim(0, 1)
 
     plt.suptitle("Causal Importance Distribution per Layer", fontsize=12)
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     return output_path
@@ -1208,23 +1247,27 @@ def visualize_mean_ci_per_component(
 
         # Linear scale
         ax = axes[0, idx]
-        ax.scatter(range(len(sorted_mean_ci)), sorted_mean_ci, marker='x', s=30, c='steelblue')
+        ax.scatter(
+            range(len(sorted_mean_ci)), sorted_mean_ci, marker="x", s=30, c="steelblue"
+        )
         ax.set_xlabel("Component (sorted)")
         ax.set_ylabel("Mean CI")
         ax.set_title(f"{layer_name.replace('.', '_')} (linear)")
-        ax.axhline(0.5, color='red', linestyle='--', alpha=0.5, label='threshold')
+        ax.axhline(0.5, color="red", linestyle="--", alpha=0.5, label="threshold")
 
         # Log scale
         ax = axes[1, idx]
-        ax.scatter(range(len(sorted_mean_ci)), sorted_mean_ci, marker='x', s=30, c='steelblue')
+        ax.scatter(
+            range(len(sorted_mean_ci)), sorted_mean_ci, marker="x", s=30, c="steelblue"
+        )
         ax.set_xlabel("Component (sorted)")
         ax.set_ylabel("Mean CI")
         ax.set_title(f"{layer_name.replace('.', '_')} (log)")
-        ax.set_yscale('log')
+        ax.set_yscale("log")
 
     plt.suptitle("Mean Causal Importance per Component", fontsize=12)
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     return output_path
@@ -1273,24 +1316,30 @@ def visualize_l0_sparsity(
         # L0 = mean count of active components per input
         active_count = (layer_ci > threshold).sum(axis=1)
         l0 = active_count.mean()
-        layer_names.append(layer_name.replace('.', '_'))
+        layer_names.append(layer_name.replace(".", "_"))
         l0_values.append(l0)
 
     fig, ax = plt.subplots(figsize=(max(6, len(layer_names) * 1.5), 5))
 
     colors = plt.cm.Set2(np.linspace(0, 1, len(layer_names)))
-    bars = ax.bar(layer_names, l0_values, color=colors, edgecolor='black')
+    bars = ax.bar(layer_names, l0_values, color=colors, edgecolor="black")
 
     # Add value labels on bars
     for bar, val in zip(bars, l0_values):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
-                f'{val:.2f}', ha='center', va='bottom', fontsize=10)
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.1,
+            f"{val:.2f}",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
 
     ax.set_xlabel("Layer")
     ax.set_ylabel(f"L0 (threshold={threshold})")
-    ax.set_title(f"L0 Sparsity per Layer (avg active components per input)")
+    ax.set_title("L0 Sparsity per Layer (avg active components per input)")
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     return output_path
@@ -1335,21 +1384,23 @@ def visualize_summary(
 
     # 3. Function mapping table
     ax = axes[1, 0]
-    ax.axis('off')
+    ax.axis("off")
     table_data = []
     for c in analysis_result.clusters:
-        table_data.append([
-            f"Cluster {c.cluster_idx}",
-            c.function_mapping or "Unknown",
-            len(c.component_indices),
-            f"{c.mean_importance:.3f}",
-        ])
+        table_data.append(
+            [
+                f"Cluster {c.cluster_idx}",
+                c.function_mapping or "Unknown",
+                len(c.component_indices),
+                f"{c.mean_importance:.3f}",
+            ]
+        )
 
     table = ax.table(
         cellText=table_data,
         colLabels=["Cluster", "Function", "Components", "Mean Imp."],
-        loc='center',
-        cellLoc='center',
+        loc="center",
+        cellLoc="center",
     )
     table.auto_set_font_size(False)
     table.set_fontsize(10)
@@ -1358,7 +1409,7 @@ def visualize_summary(
 
     # 4. Overall statistics text
     ax = axes[1, 1]
-    ax.axis('off')
+    ax.axis("off")
     stats_text = f"""
     SPD Analysis Summary
 
@@ -1377,14 +1428,21 @@ def visualize_summary(
       Clusters: {analysis_result.n_clusters}
 
     Modules:
-    {', '.join(set(l.split(':')[0] for l in analysis_result.component_labels))}
+    {", ".join(set(l.split(":")[0] for l in analysis_result.component_labels))}
     """
-    ax.text(0.05, 0.5, stats_text, fontsize=10, family='monospace',
-            verticalalignment='center', transform=ax.transAxes)
+    ax.text(
+        0.05,
+        0.5,
+        stats_text,
+        fontsize=10,
+        family="monospace",
+        verticalalignment="center",
+        transform=ax.transAxes,
+    )
 
     plt.suptitle("SPD Decomposition Analysis Summary", fontsize=14)
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     return output_path
@@ -1393,6 +1451,7 @@ def visualize_summary(
 # ============================================================================
 # Cluster Robustness and Faithfulness Analysis
 # ============================================================================
+
 
 def analyze_cluster_robustness(
     decomposed_model: "DecomposedMLP",
@@ -1443,13 +1502,14 @@ def analyze_cluster_robustness(
 
     # Generate all noisy inputs at once (batched)
     total_samples = len(noise_levels) * n_samples
-    all_base_inputs = torch.randint(0, 2, (total_samples, n_inputs), dtype=torch.float, device=device)
+    all_base_inputs = torch.randint(
+        0, 2, (total_samples, n_inputs), dtype=torch.float, device=device
+    )
     all_noise = torch.randn_like(all_base_inputs)
 
     # Scale noise by level
     noise_scales = torch.tensor(
-        [level for level in noise_levels for _ in range(n_samples)],
-        device=device
+        [level for level in noise_levels for _ in range(n_samples)], device=device
     ).unsqueeze(1)
     all_noisy_inputs = all_base_inputs + all_noise * noise_scales
 
@@ -1471,7 +1531,9 @@ def analyze_cluster_robustness(
                 all_imp.append(ci_tensor.detach().cpu().numpy())
 
             if all_imp:
-                full_imp = np.concatenate(all_imp, axis=1)  # [total_samples, n_components]
+                full_imp = np.concatenate(
+                    all_imp, axis=1
+                )  # [total_samples, n_components]
                 cluster_imp = full_imp[:, comp_indices].mean(axis=1)  # [total_samples]
 
                 # Compute stability and sensitivity for each sample
@@ -1480,14 +1542,20 @@ def analyze_cluster_robustness(
                 ):
                     stability = 1.0 - abs(imp - baseline_imp)
                     stability_scores.append(max(0, stability))
-                    importance_changes.append(abs(imp - baseline_imp) / max(noise_level, 0.01))
+                    importance_changes.append(
+                        abs(imp - baseline_imp) / max(noise_level, 0.01)
+                    )
 
     except Exception:
         pass
 
     return {
-        "mean_importance_stability": float(np.mean(stability_scores)) if stability_scores else 0.0,
-        "noise_sensitivity": float(np.mean(importance_changes)) if importance_changes else 0.0,
+        "mean_importance_stability": float(np.mean(stability_scores))
+        if stability_scores
+        else 0.0,
+        "noise_sensitivity": float(np.mean(importance_changes))
+        if importance_changes
+        else 0.0,
         "n_samples_tested": len(stability_scores),
     }
 
@@ -1540,7 +1608,9 @@ def analyze_cluster_faithfulness(
 
     # Mean importance when "active" (above threshold)
     active_mask = cluster_importance > 0.5
-    mean_when_active = float(np.mean(cluster_importance[active_mask])) if active_mask.any() else 0.0
+    mean_when_active = (
+        float(np.mean(cluster_importance[active_mask])) if active_mask.any() else 0.0
+    )
 
     return {
         "mean_ablation_effect": importance_variance,
@@ -1587,11 +1657,13 @@ def analyze_all_clusters(
         cluster_info.robustness_score = robustness.get("mean_importance_stability", 0.0)
         cluster_info.faithfulness_score = faithfulness.get("sufficiency_score", 0.0)
 
-        results.append({
-            "cluster_idx": cluster_info.cluster_idx,
-            "robustness": robustness,
-            "faithfulness": faithfulness,
-        })
+        results.append(
+            {
+                "cluster_idx": cluster_info.cluster_idx,
+                "robustness": robustness,
+                "faithfulness": faithfulness,
+            }
+        )
 
     return results
 
@@ -1599,6 +1671,7 @@ def analyze_all_clusters(
 # ============================================================================
 # Main Entry Point
 # ============================================================================
+
 
 def analyze_and_visualize_spd(
     decomposed_model: "DecomposedMLP",
@@ -1655,9 +1728,15 @@ def analyze_and_visualize_spd(
 
     # Save clustering data
     if result.importance_matrix is not None:
-        np.save(output_dir / "clustering" / "importance_matrix.npy", result.importance_matrix)
+        np.save(
+            output_dir / "clustering" / "importance_matrix.npy",
+            result.importance_matrix,
+        )
     if result.coactivation_matrix is not None:
-        np.save(output_dir / "clustering" / "coactivation_matrix.npy", result.coactivation_matrix)
+        np.save(
+            output_dir / "clustering" / "coactivation_matrix.npy",
+            result.coactivation_matrix,
+        )
 
     # Save cluster assignments
     assignments_data = {

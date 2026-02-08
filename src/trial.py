@@ -17,7 +17,7 @@ from .common.batched_eval import (
 from .common.circuit import enumerate_all_valid_circuit
 from .common.helpers import calculate_match_rate, train_model, update_status_fx
 from .common.logic_gates import ALL_LOGIC_GATES
-from .common.parallelization import ParallelTasks
+from .common.parallelization import ParallelTasks, get_eval_device
 from .common.profiler import profile, profile_fn
 from .common.schemas import (
     GateMetrics,
@@ -28,20 +28,10 @@ from .common.schemas import (
     TrialSetup,
 )
 from .common.utils import set_seeds
-from .parameter_decomposition import decompose_mlp
+from .spd_internal.decomposition import decompose_mlp
 from .spd_internal.subcircuits import estimate_spd_subcircuits
 
 
-def _get_eval_device(parallel_config: ParallelConfig, default_device: str) -> str:
-    """Determine the device to use for batched circuit evaluation."""
-    if parallel_config.use_mps_if_available and parallel_config.eval_device == "mps":
-        if torch.backends.mps.is_available():
-            return "mps"
-    return (
-        parallel_config.eval_device
-        if parallel_config.eval_device != "mps"
-        else default_device
-    )
 
 
 @profile_fn("Train Model")
