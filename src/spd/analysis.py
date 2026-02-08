@@ -1,11 +1,33 @@
 """SPD analysis: importance, clustering, and function mapping.
 
-This module provides the core analysis logic for SPD decomposition:
-- Importance matrix computation (causal importance values per input)
-- Coactivation matrix (which components fire together)
-- Hierarchical clustering of components
-- Function mapping (matching clusters to boolean gates)
-- Per-cluster robustness and faithfulness metrics
+After SPD decomposes weights into components, we need to understand what each
+component does. This module answers: "Which components implement the same
+function, and what function is that?"
+
+The analysis pipeline:
+    1. Compute importance matrix
+       - For each possible input (00, 01, 10, 11), measure how much each
+         component contributes to the output (causal importance, CI)
+       - Result: [n_inputs, n_components] matrix of CI values in [0, 1]
+
+    2. Compute coactivation matrix
+       - Components that fire together (both have high CI on same inputs)
+         are likely implementing the same function
+       - Result: [n_components, n_components] matrix of co-firing counts
+
+    3. Cluster components
+       - Use hierarchical clustering on coactivation patterns
+       - Components with similar activation patterns get grouped together
+       - Result: cluster_assignments list (component_idx → cluster_idx)
+
+    4. Map clusters to functions
+       - Compare each cluster's activation pattern to known boolean gates
+         (XOR activates on 01 and 10, AND activates only on 11, etc.)
+       - Use Jaccard similarity to find best match
+       - Result: cluster_functions dict (cluster_idx → "XOR (0.95)")
+
+Key insight: A cluster that activates on exactly the inputs where XOR=1
+is likely implementing XOR. This lets us identify functional subcircuits.
 """
 
 from typing import TYPE_CHECKING
@@ -40,16 +62,25 @@ def compute_importance_matrix(
     n_inputs: int = 2,
     device: str = "cpu",
 ) -> tuple[np.ndarray, list[str]]:
-    """Compute causal importance values for all binary input combinations.
+    """Compute causal importance (CI) for each component on each input.
+
+    Causal importance measures how much a component contributes to the output.
+    CI values are in [0, 1] where:
+    - 0 = component is completely masked (doesn't contribute)
+    - 1 = component is fully active (contributes its full weight)
+
+    For boolean gates with 2 inputs, we test all 4 input combinations:
+    - (0, 0), (0, 1), (1, 0), (1, 1)
 
     Args:
         decomposed_model: Trained SPD decomposition
-        n_inputs: Number of input dimensions (default 2 for boolean gates)
+        n_inputs: Number of input bits (2 for boolean gates)
         device: Compute device
 
     Returns:
-        importance_matrix: Shape [2^n_inputs, total_components]
-        component_labels: List of component labels like "layers.0.0:3"
+        importance_matrix: Shape [4, n_components] for 2 inputs
+            Each row is an input pattern, each column is a component
+        component_labels: Labels like "layers.0.0:3" (layer 0, component 3)
     """
     if decomposed_model is None or decomposed_model.component_model is None:
         return np.array([]), []
@@ -100,11 +131,23 @@ def compute_coactivation_matrix(
     importance_matrix: np.ndarray,
     threshold: float = 0.5,
 ) -> np.ndarray:
-    """Compute coactivation matrix showing which components fire together.
+    """Compute how often component pairs activate together.
+
+    If components A and B both have high CI on the same inputs, they're likely
+    part of the same functional subcircuit. This matrix captures that pattern.
+
+    Algorithm:
+        1. Binarize: component is "active" if CI > threshold
+        2. Coactivation[i,j] = count of inputs where both i and j are active
+        3. Diagonal[i] = count of inputs where i is active
+
+    Example: If components 0 and 1 both activate on inputs (0,1) and (1,0),
+    their coactivation count is 2. If they both activate on all 4 inputs,
+    coactivation is 4.
 
     Args:
-        importance_matrix: Shape [n_samples, n_components]
-        threshold: Component is "active" if importance > threshold
+        importance_matrix: Shape [n_inputs, n_components]
+        threshold: CI threshold for "active" (default 0.5)
 
     Returns:
         coactivation_matrix: Shape [n_components, n_components], symmetric
@@ -168,15 +211,25 @@ def cluster_components_hierarchical(
     n_clusters: int = None,
     merge_threshold: float = 0.7,
 ) -> list[int]:
-    """Cluster components based on coactivation using hierarchical clustering.
+    """Group components that activate together into clusters.
+
+    Components implementing the same function should have similar activation
+    patterns. We use hierarchical clustering to group them.
+
+    Algorithm:
+        1. Convert coactivation counts to Jaccard similarity:
+           sim[i,j] = coact[i,j] / (diag[i] + diag[j] - coact[i,j])
+        2. Convert similarity to distance: dist = 1 - similarity
+        3. Run hierarchical clustering (average linkage)
+        4. Cut tree at threshold or to get n_clusters
 
     Args:
-        coactivation_matrix: Shape [n_components, n_components]
-        n_clusters: Target number of clusters (if None, determined by threshold)
-        merge_threshold: Similarity threshold for merging
+        coactivation_matrix: From compute_coactivation_matrix()
+        n_clusters: If set, force exactly this many clusters
+        merge_threshold: Similarity threshold for merging (higher = more merging)
 
     Returns:
-        cluster_assignments: List where index i gives cluster ID for component i
+        cluster_assignments: List where cluster_assignments[i] = cluster for component i
     """
     if coactivation_matrix.size == 0:
         return []
@@ -247,13 +300,30 @@ def map_clusters_to_functions(
     n_inputs: int = 2,
     gate_names: list[str] = None,
 ) -> dict[int, str]:
-    """Map SPD clusters to boolean functions using activation patterns.
+    """Identify which boolean function each cluster implements.
 
-    Compares each cluster's activation pattern against truth tables of known gates
-    using Jaccard similarity.
+    Each cluster has an activation pattern: the inputs where it's active.
+    We compare this to known boolean gate truth tables using Jaccard similarity.
+
+    Example:
+        XOR truth table: outputs 1 on inputs (0,1) and (1,0)
+        If a cluster activates on exactly (0,1) and (1,0), Jaccard = 1.0 (perfect match)
+        If it activates on (0,1), (1,0), and (0,0), Jaccard = 2/3 = 0.67
+
+    Algorithm:
+        1. For each cluster, find inputs where mean importance > 0.5
+        2. For each known gate, find inputs where gate output = 1
+        3. Compute Jaccard = |intersection| / |union|
+        4. Assign best match if Jaccard > 0.5, else "UNKNOWN"
+
+    Args:
+        importance_matrix: Shape [n_inputs, n_components]
+        cluster_assignments: Which cluster each component belongs to
+        n_inputs: Number of input bits
+        gate_names: Which gates to check (default: all known gates)
 
     Returns:
-        Dict mapping cluster_idx -> "GATE_NAME (similarity)" or "UNKNOWN"/"INACTIVE"
+        Dict mapping cluster_idx → "GATE_NAME (similarity)" or "UNKNOWN"/"INACTIVE"
     """
     if importance_matrix.size == 0 or not cluster_assignments:
         return {}
