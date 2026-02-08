@@ -11,7 +11,7 @@ These tests verify correctness by comparing:
 import numpy as np
 import pytest
 import torch
-from src.common.metrics import logits_to_binary
+from src.common.metrics import calculate_best_match_rate, logits_to_binary
 
 from src.common.batched_eval import (
     batch_compute_metrics,
@@ -93,11 +93,8 @@ def sequential_compute_metrics(model, circuits, x, y_target, y_pred, gate_idx=0)
             bit_sim = same.float().mean().item()
             bit_similarities.append(bit_sim)
 
-            # Best similarity (clamped to [0,1])
-            best_circuit = bit_circuit
-            best_pred = bit_pred
-            same_best = best_circuit.eq(best_pred)
-            best_sim = same_best.float().mean().item()
+            # Best similarity - uses calculate_best_match_rate for modularity
+            best_sim = calculate_best_match_rate(y_pred, y_circuit).item()
             best_similarities.append(best_sim)
 
             # Logit similarity (R²-like: 1 - mse/var)

@@ -12,6 +12,7 @@ import torch
 
 from ..common.causal import Intervention, InterventionEffect, PatchShape
 from ..common.metrics import (
+    calculate_best_match_rate,
     calculate_logit_similarity,
     calculate_match_rate,
     calculate_mse,
@@ -35,7 +36,7 @@ def calculate_intervention_effect(
     bit_proxy = logits_to_binary(y_proxy)  # [n_samples, n_gates]
     logit_similarity = calculate_logit_similarity(y_target, y_proxy).item()  # [] scalar
     bit_similarity = calculate_match_rate(bit_target, bit_proxy).item()  # [] scalar
-    best_similarity = bit_similarity
+    best_similarity = calculate_best_match_rate(y_target, y_proxy).item()  # [] scalar
 
     return InterventionEffect(
         intervention=intervention,

@@ -175,10 +175,21 @@ class MLP(nn.Module):
             )
         )
 
+        # Initialize weights with Kaiming (better for ReLU/LeakyReLU activations)
+        self._init_weights()
+
         self.num_layers = len(self.layers)
         self.device = device
         self.debug = debug
         self.to(device)
+
+    def _init_weights(self):
+        """Initialize weights with Kaiming normal for better convergence."""
+        for layer in self.layers:
+            linear = layer[0]  # First module is Linear
+            if isinstance(linear, nn.Linear):
+                nn.init.kaiming_normal_(linear.weight, nonlinearity="leaky_relu")
+                nn.init.zeros_(linear.bias)
 
     def save_to_file(self, filepath: str):
         """Save the model's configuration and state_dict to a file."""
@@ -551,7 +562,7 @@ class MLP(nn.Module):
         epochs,
         loss_target: float = 0.001,
         val_frequency: int = 1,
-        early_stopping_steps: int = 10,
+        early_stopping_steps: int = 100,  # Increased to allow breaking through plateaus
         l1_lambda: float = 0.0,
         logger=None,
     ):

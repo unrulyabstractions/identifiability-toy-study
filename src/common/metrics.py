@@ -69,8 +69,19 @@ def calculate_logit_similarity_batched(
 
 @torch.no_grad()
 def calculate_best_match_rate(
-    y_target: torch.Tensor,  # [*] - any shape
-    y_proxy: torch.Tensor,  # [*] - same shape as y_target
+    y_target: torch.Tensor,  # [*] - any shape (logits)
+    y_proxy: torch.Tensor,  # [*] - same shape as y_target (logits)
 ) -> torch.Tensor:  # [] scalar
-    """Calculate match rate from raw logits."""
+    """Calculate match rate from raw logits. Uses logits_to_binary internally."""
     return calculate_match_rate(logits_to_binary(y_target), logits_to_binary(y_proxy))
+
+
+@torch.no_grad()
+def calculate_best_match_rate_batched(
+    y_target: torch.Tensor,  # [n_samples, n_gates] - logits
+    y_proxies: torch.Tensor,  # [batch, n_samples, n_gates] - logits
+) -> np.ndarray:  # [batch]
+    """Batched best match rate: y_proxies has leading batch dim, y_target does not."""
+    bit_target = logits_to_binary(y_target)  # [n_samples, n_gates]
+    bit_proxies = logits_to_binary(y_proxies)  # [batch, n_samples, n_gates]
+    return calculate_match_rate_batched(bit_proxies, bit_target)

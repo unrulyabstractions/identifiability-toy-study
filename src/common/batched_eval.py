@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from .neural_model import MLP
 
 from .metrics import (
+    calculate_best_match_rate_batched,
     calculate_logit_similarity_batched,
     calculate_match_rate_batched,
     logits_to_binary,
@@ -386,16 +387,15 @@ def precompute_circuit_masks(
 
 
 def _compute_chunk_metrics(
-    y_chunk: torch.Tensor,  # [n_circuits, n_samples, 1]
-    bit_target: torch.Tensor,  # [n_samples, 1]
-    bit_pred: torch.Tensor,  # [n_samples, 1]
-    best_pred: torch.Tensor,  # [n_samples, 1]
-    y_pred: torch.Tensor,  # [n_samples, 1]
+    y_chunk: torch.Tensor,  # [n_circuits, n_samples, 1] - logits
+    bit_target: torch.Tensor,  # [n_samples, 1] - binary ground truth
+    bit_pred: torch.Tensor,  # [n_samples, 1] - binary model prediction
+    y_pred: torch.Tensor,  # [n_samples, 1] - model logits
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:  # each [n_circuits]
     bit_chunk = logits_to_binary(y_chunk)  # [n_circuits, n_samples, 1]
     accuracies = calculate_match_rate_batched(bit_chunk, bit_target)  # [n_circuits]
     bit_sims = calculate_match_rate_batched(bit_chunk, bit_pred)  # [n_circuits]
-    best_sims = bit_sims  # [n_circuits]
+    best_sims = calculate_best_match_rate_batched(y_pred, y_chunk)  # [n_circuits]
     logit_sims = calculate_logit_similarity_batched(y_pred, y_chunk)  # [n_circuits]
     return accuracies, logit_sims, bit_sims, best_sims
 
@@ -448,7 +448,6 @@ def batch_compute_metrics(
     # y_target is already binary 0/1 (ground truth labels), y_pred is logits
     bit_target = y_target.float()  # [n_samples, 1] - already 0/1
     bit_pred = logits_to_binary(y_pred)  # [n_samples, 1] - threshold logits at 0
-    best_pred = bit_pred  # [n_samples, 1]
 
     # If small enough and precomputed masks available, use fast path
     if n_circuits <= max_batch_size:
@@ -461,9 +460,7 @@ def batch_compute_metrics(
             eval_device=device,
             max_batch_size=max_batch_size,
         )
-        return _compute_chunk_metrics(
-            y_circuits, bit_target, bit_pred, best_pred, y_pred
-        )
+        return _compute_chunk_metrics(y_circuits, bit_target, bit_pred, y_pred)
 
     # Large circuit list - compute metrics incrementally per chunk
     # This avoids storing all outputs at once
@@ -488,7 +485,7 @@ def batch_compute_metrics(
 
             # Compute metrics for chunk
             accs, logit_sims, bit_sims, best_sims = _compute_chunk_metrics(
-                y_chunk, bit_target, bit_pred, best_pred, y_pred
+                y_chunk, bit_target, bit_pred, y_pred
             )
 
             all_accs.append(accs)
