@@ -68,7 +68,7 @@ def visualize_spd_experiment(
     """
     Visualize complete SPD results for an experiment.
 
-    Creates visualizations in run_dir/{trial_id}/spd/{config_id}/visualizations/
+    Creates visualizations in run_dir/{trial_id}/spd/visualizations/
 
     Args:
         spd_results: SpdResults from run_spd()
@@ -79,37 +79,35 @@ def visualize_spd_experiment(
     """
     run_dir = Path(run_dir)
     viz_paths = {}
+    config_id = spd_results.config.get_config_id()
 
     for trial_id, trial_result in spd_results.per_trial.items():
+        spd_dir = run_dir / trial_id / "spd"
+        viz_dir = spd_dir / "visualizations"
+        viz_dir.mkdir(parents=True, exist_ok=True)
+
         viz_paths[trial_id] = {}
 
-        for config_id, decomposed in trial_result.decomposed_models_sweep.items():
-            config_dir = run_dir / trial_id / "spd" / config_id
-            viz_dir = config_dir / "visualizations"
-            viz_dir.mkdir(parents=True, exist_ok=True)
-
-            viz_paths[trial_id][config_id] = {}
-
-            # Component importance bar chart
+        # Component importance bar chart
+        if trial_result.decomposed_model is not None:
             comp_path = visualize_spd_components(
-                decomposed,
+                trial_result.decomposed_model,
                 str(viz_dir),
                 filename="component_importance.png",
                 gate_name=f"Trial {trial_id[:8]} - {config_id}",
             )
             if comp_path:
-                viz_paths[trial_id][config_id]["component_importance"] = comp_path
+                viz_paths[trial_id]["component_importance"] = comp_path
 
-            # Cluster visualization if estimate available
-            estimate = trial_result.spd_subcircuit_estimates_sweep.get(config_id)
-            if estimate and estimate.n_clusters > 0:
-                cluster_path = _visualize_cluster_summary(
-                    estimate,
-                    str(viz_dir),
-                    config_id,
-                )
-                if cluster_path:
-                    viz_paths[trial_id][config_id]["cluster_summary"] = cluster_path
+        # Cluster visualization if estimate available
+        if trial_result.spd_subcircuit_estimate and trial_result.spd_subcircuit_estimate.n_clusters > 0:
+            cluster_path = _visualize_cluster_summary(
+                trial_result.spd_subcircuit_estimate,
+                str(viz_dir),
+                config_id,
+            )
+            if cluster_path:
+                viz_paths[trial_id]["cluster_summary"] = cluster_path
 
     return viz_paths
 

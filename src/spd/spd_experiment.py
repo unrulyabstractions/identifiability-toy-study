@@ -22,7 +22,6 @@ def run_spd(
     run_dir: str | Path,
     device: str = "cpu",
     spd_config: SPDConfig | None = None,
-    spd_sweep_configs: list[SPDConfig] | None = None,
 ) -> SpdResults:
     """
     Run SPD analysis on all trials in an experiment.
@@ -34,7 +33,6 @@ def run_spd(
         run_dir: Directory where experiment results are saved
         device: Device for SPD computation (cpu recommended for small models)
         spd_config: SPD configuration (uses default if None)
-        spd_sweep_configs: Optional list of additional configs to sweep
 
     Returns:
         SpdResults containing per-trial SPD analysis
@@ -45,10 +43,7 @@ def run_spd(
     if spd_config is None:
         spd_config = SPDConfig()
 
-    spd_results = SpdResults(
-        config=spd_config,
-        sweep_configs=spd_sweep_configs or [],
-    )
+    spd_results = SpdResults(config=spd_config)
 
     n_trials = len(experiment_result.trials)
     for trial_idx, (trial_id, trial_result) in enumerate(
@@ -59,7 +54,6 @@ def run_spd(
         spd_trial_result = run_spd_trial(
             trial_result=trial_result,
             spd_config=spd_config,
-            spd_sweep_configs=spd_sweep_configs,
             device=device,
         )
 

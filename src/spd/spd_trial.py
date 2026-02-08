@@ -14,16 +14,12 @@ from .spd_types import SPDConfig, SpdTrialResult
 from .subcircuits import estimate_spd_subcircuits
 
 if TYPE_CHECKING:
-    from src.model import MLP
     from src.schemas import TrialResult
-
-import torch
 
 
 def run_spd_trial(
     trial_result: "TrialResult",
     spd_config: SPDConfig,
-    spd_sweep_configs: list[SPDConfig] | None = None,
     device: str = "cpu",
 ) -> SpdTrialResult:
     """
@@ -31,12 +27,11 @@ def run_spd_trial(
 
     Args:
         trial_result: The completed trial result containing model and test data
-        spd_config: Primary SPD configuration
-        spd_sweep_configs: Optional list of additional configs to sweep
+        spd_config: SPD configuration
         device: Device for SPD computation
 
     Returns:
-        SpdTrialResult with decomposed models and subcircuit estimates
+        SpdTrialResult with decomposed model and subcircuit estimate
     """
     model = trial_result.model
     x = trial_result.test_x
@@ -49,41 +44,25 @@ def run_spd_trial(
     if model is None or x is None or y_pred is None:
         return spd_trial_result
 
-    # Collect all configs to run
-    spd_configs_to_run = [spd_config]
-    if spd_sweep_configs:
-        spd_configs_to_run.extend(spd_sweep_configs)
+    config_id = spd_config.get_config_id()
+    print(f"    SPD config: {config_id}")
 
-    # Run decomposition for each config
-    for config_idx, config in enumerate(spd_configs_to_run):
-        config_id = config.get_config_id()
-        print(f"    SPD config {config_idx + 1}/{len(spd_configs_to_run)}: {config_id}")
+    # Run decomposition
+    with profile(f"spd_mlp_{config_id}"):
+        decomposed = decompose_mlp(x, y_pred, model, device, spd_config)
 
-        with profile(f"spd_mlp_{config_id}"):
-            decomposed = decompose_mlp(x, y_pred, model, device, config)
+    spd_trial_result.decomposed_model = decomposed
 
-        if config_idx == 0:
-            spd_trial_result.decomposed_model = decomposed
-        spd_trial_result.decomposed_models_sweep[config_id] = decomposed
-
-    # SPD Subcircuit estimation for each config
-    for config_idx, config in enumerate(spd_configs_to_run):
-        config_id = config.get_config_id()
-        decomposed = spd_trial_result.decomposed_models_sweep[config_id]
-        print(
-            f"    SPD subcircuit {config_idx + 1}/{len(spd_configs_to_run)}: {config_id}"
+    # SPD Subcircuit estimation
+    print(f"    SPD subcircuit: {config_id}")
+    with profile(f"spd_mlp_sc_{config_id}"):
+        estimate = estimate_spd_subcircuits(
+            decomposed_model=decomposed,
+            n_inputs=input_size,
+            gate_names=gate_names,
+            device=device,
         )
 
-        with profile(f"spd_mlp_sc_{config_id}"):
-            estimate = estimate_spd_subcircuits(
-                decomposed_model=decomposed,
-                n_inputs=input_size,
-                gate_names=gate_names,
-                device=device,
-            )
-
-        if config_idx == 0:
-            spd_trial_result.spd_subcircuit_estimate = estimate
-        spd_trial_result.spd_subcircuit_estimates_sweep[config_id] = estimate
+    spd_trial_result.spd_subcircuit_estimate = estimate
 
     return spd_trial_result

@@ -80,20 +80,8 @@ class SpdTrialResult(SchemaClass):
     """SPD analysis for a single trial."""
 
     trial_id: str = ""
-
-    # Primary decomposition (first config)
     decomposed_model: Optional["DecomposedMLP"] = None
     spd_subcircuit_estimate: Optional[Any] = None
-
-    # Multi-config SPD sweep results: maps config_id -> DecomposedMLP/estimate
-    decomposed_models_sweep: dict[str, "DecomposedMLP"] = field(default_factory=dict)
-    spd_subcircuit_estimates_sweep: dict[str, Any] = field(default_factory=dict)
-
-    # Per-gate decompositions (optional)
-    decomposed_gate_models: dict[str, "DecomposedMLP"] = field(default_factory=dict)
-    decomposed_subcircuits: dict[str, dict[int, "DecomposedMLP"]] = field(
-        default_factory=lambda: {}
-    )
 
 
 @dataclass
@@ -101,14 +89,12 @@ class SpdResults(SchemaClass):
     """Complete SPD analysis results for an experiment."""
 
     config: SPDConfig = field(default_factory=SPDConfig)
-    sweep_configs: list[SPDConfig] = field(default_factory=list)
     per_trial: dict[str, SpdTrialResult] = field(default_factory=dict)
 
     def print_summary(self) -> str:
         """Print summary of SPD results."""
         lines = ["SPD Results Summary", "=" * 40]
         lines.append(f"Config: {self.config.get_config_id()}")
-        lines.append(f"Sweep configs: {len(self.sweep_configs)}")
         lines.append(f"Trials: {len(self.per_trial)}")
 
         for trial_id, trial_result in self.per_trial.items():
@@ -119,6 +105,5 @@ class SpdResults(SchemaClass):
             if trial_result.spd_subcircuit_estimate is not None:
                 n_clusters = trial_result.spd_subcircuit_estimate.n_clusters
                 lines.append(f"    Clusters: {n_clusters}")
-            lines.append(f"    Sweep results: {len(trial_result.decomposed_models_sweep)}")
 
         return "\n".join(lines)
