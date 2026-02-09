@@ -105,9 +105,9 @@ class ExperimentResult(SchemaClass):
                 viz = viz_paths.get(trial_id, {}).get(gate, {})
                 best_list = []
                 for key in bests:
-                    # Handle both legacy int keys and new (node_idx, edge_var_idx) tuple keys
-                    if isinstance(key, tuple):
-                        node_idx, edge_var_idx = key
+                    # Handle legacy int keys and new (node_idx, edge_var_idx) tuple/list keys
+                    if isinstance(key, (tuple, list)):
+                        node_idx, edge_var_idx = key[0], key[1]
                         if node_idx in by_idx:
                             sm = by_idx[node_idx]
                             entry = {

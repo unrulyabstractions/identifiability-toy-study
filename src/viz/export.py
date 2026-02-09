@@ -558,9 +558,9 @@ def save_gate_summary(
         faith = bests_faith[i] if i < len(bests_faith) else None
         scores = _compute_subcircuit_scores(faith)
 
-        # Get node_idx (handle both tuple and int keys)
-        if isinstance(key, tuple):
-            node_idx, edge_var_idx = key
+        # Get node_idx (handle tuple, list, and int keys)
+        if isinstance(key, (tuple, list)):
+            node_idx, edge_var_idx = key[0], key[1]
         else:
             node_idx = key
             edge_var_idx = 0
@@ -667,7 +667,7 @@ def save_summary(
         return ""
 
     # Format the key for JSON
-    if isinstance(subcircuit_key, tuple):
+    if isinstance(subcircuit_key, (tuple, list)):
         key_info = {"node_pattern": subcircuit_key[0], "edge_variation": subcircuit_key[1]}
     else:
         key_info = {"index": subcircuit_key}
@@ -713,7 +713,7 @@ def save_all_samples(
         return ""
 
     # Format the key for JSON
-    if isinstance(subcircuit_key, tuple):
+    if isinstance(subcircuit_key, (tuple, list)):
         key_info = {"node_pattern": subcircuit_key[0], "edge_variation": subcircuit_key[1]}
     else:
         key_info = {"index": subcircuit_key}

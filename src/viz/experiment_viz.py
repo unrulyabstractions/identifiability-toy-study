@@ -203,16 +203,16 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
             node_pattern_edges: dict[int, list[tuple[int, int, "FaithfulnessMetrics"]]] = {}
             for i, sc_key in enumerate(best_keys):
                 faith = bests_faith[i] if i < len(bests_faith) else None
-                if isinstance(sc_key, tuple):
-                    node_idx, edge_var_idx = sc_key
+                if isinstance(sc_key, (tuple, list)):
+                    node_idx, edge_var_idx = sc_key[0], sc_key[1]
                 else:
                     node_idx, edge_var_idx = sc_key, 0
                 node_pattern_edges.setdefault(node_idx, []).append((edge_var_idx, i, faith))
 
             for i, sc_key in enumerate(best_keys):
-                # Handle both legacy int keys and new (node_idx, edge_var_idx) tuple keys
-                if isinstance(sc_key, tuple):
-                    node_idx, edge_var_idx = sc_key
+                # Handle both legacy int keys and new (node_idx, edge_var_idx) tuple/list keys
+                if isinstance(sc_key, (tuple, list)):
+                    node_idx, edge_var_idx = sc_key[0], sc_key[1]
                     circuit = subcircuits[node_idx]  # Use node pattern's circuit structure
                     folder = os.path.join(trial_dir, gname, str(node_idx), str(edge_var_idx))
                     sc_label = f"{gname} (Node#{node_idx}/Edge#{edge_var_idx})"

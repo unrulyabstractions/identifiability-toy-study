@@ -94,8 +94,8 @@ def log_edge_variant_summary(
 
 def _format_subcircuit_key(key) -> str:
     """Format a subcircuit key for display."""
-    if isinstance(key, tuple):
-        node_idx, edge_var_idx = key
+    if isinstance(key, (tuple, list)):
+        node_idx, edge_var_idx = key[0], key[1]
         return f"Node#{node_idx}/Edge#{edge_var_idx}"
     return f"SC#{key}"
 
