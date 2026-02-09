@@ -223,14 +223,27 @@ def draw_intervened_circuit(
             arrowsize=8, connectionstyle="arc3,rad=0.1", ax=ax
         )
 
-    # Draw edge labels - small font, subtle appearance
+    # Draw edge labels - small font, subtle appearance, distributed to avoid overlap
     if show_edge_labels and edge_labels:
-        nx.draw_networkx_edge_labels(
-            G, pos, edge_labels=edge_labels, font_size=3.5,
-            font_color="#888888", alpha=0.6, label_pos=0.3,
-            bbox=dict(boxstyle="round,pad=0.05", facecolor="white",
-                      alpha=0.5, edgecolor="none"), ax=ax
-        )
+        from collections import defaultdict
+        edges_by_dest = defaultdict(list)
+        for edge in edge_labels.keys():
+            edges_by_dest[edge[1]].append(edge)
+
+        for dest, edges in edges_by_dest.items():
+            for i, edge in enumerate(edges):
+                n_edges = len(edges)
+                if n_edges == 1:
+                    label_pos = 0.35
+                else:
+                    label_pos = 0.2 + (i / max(1, n_edges - 1)) * 0.3
+
+                nx.draw_networkx_edge_labels(
+                    G, pos, edge_labels={edge: edge_labels[edge]}, font_size=3,
+                    font_color="#888888", label_pos=label_pos,
+                    bbox=dict(boxstyle="round,pad=0.02", facecolor="white",
+                              alpha=0.6, edgecolor="none"), ax=ax
+                )
 
     # Draw node labels - smaller text, tighter spacing
     for node, (x, y) in pos.items():
@@ -246,19 +259,19 @@ def draw_intervened_circuit(
                 ax.text(
                     x, y, f"{current_val:.2f}",
                     ha="center", va="bottom",
-                    fontsize=5, fontweight="bold", color=text_color
+                    fontsize=4, fontweight="bold", color=text_color
                 )
                 ax.text(
                     x, y, f"({original_val:.2f})",
                     ha="center", va="top",
-                    fontsize=4, color=text_color, alpha=0.5
+                    fontsize=3, color=text_color, alpha=0.5
                 )
             else:
                 # Just current value centered
                 ax.text(
                     x, y, f"{current_val:.2f}",
                     ha="center", va="center",
-                    fontsize=5, fontweight="bold", color=text_color
+                    fontsize=4, fontweight="bold", color=text_color
                 )
 
     if title:
@@ -463,7 +476,7 @@ def _draw_graph(
             ax=ax,
         )
 
-    # Draw labels
+    # Draw labels - smaller font for cleaner look
     for node, (x, y) in pos.items():
         ax.text(
             x,
@@ -471,29 +484,42 @@ def _draw_graph(
             labels.get(node, ""),
             ha="center",
             va="center",
-            fontsize=9,
+            fontsize=6,
             fontweight="bold",
             color=text_colors.get(node, "black"),
         )
 
     if edge_labels:
         # Draw edge labels with varying positions to avoid overlap
-        # Group edges by source node and vary positions within each group
-        for i, (edge, label) in enumerate(edge_labels.items()):
-            # Vary position between 0.3 and 0.7 based on edge index
-            label_pos = 0.35 + (i % 3) * 0.15  # 0.35, 0.50, 0.65
-            nx.draw_networkx_edge_labels(
-                G,
-                pos,
-                edge_labels={edge: label},
-                font_size=6,
-                font_color="#333333",
-                label_pos=label_pos,
-                bbox=dict(
-                    boxstyle="round,pad=0.08", facecolor="white", alpha=0.9, edgecolor="none"
-                ),
-                ax=ax,
-            )
+        # Group edges by layer and output node for better distribution
+        from collections import defaultdict
+        edges_by_dest = defaultdict(list)
+        for edge in edge_labels.keys():
+            dest = edge[1]  # Group by destination node
+            edges_by_dest[dest].append(edge)
+
+        for dest, edges in edges_by_dest.items():
+            for i, edge in enumerate(edges):
+                # Vary position more based on number of edges to same dest
+                n_edges = len(edges)
+                if n_edges == 1:
+                    label_pos = 0.4
+                else:
+                    # Spread positions from 0.25 to 0.55 based on edge index
+                    label_pos = 0.25 + (i / max(1, n_edges - 1)) * 0.3
+
+                nx.draw_networkx_edge_labels(
+                    G,
+                    pos,
+                    edge_labels={edge: edge_labels[edge]},
+                    font_size=5,
+                    font_color="#555555",
+                    label_pos=label_pos,
+                    bbox=dict(
+                        boxstyle="round,pad=0.03", facecolor="white", alpha=0.85, edgecolor="none"
+                    ),
+                    ax=ax,
+                )
     ax.axis("off")
 
 
@@ -581,7 +607,7 @@ def _draw_graph_with_output_highlight(
             ax=ax,
         )
 
-    # Draw labels
+    # Draw labels - smaller font for cleaner look
     for node, (x, y) in pos.items():
         ax.text(
             x,
@@ -589,7 +615,7 @@ def _draw_graph_with_output_highlight(
             labels.get(node, ""),
             ha="center",
             va="center",
-            fontsize=9,
+            fontsize=6,
             fontweight="bold",
             color=text_colors.get(node, "black"),
         )

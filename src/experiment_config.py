@@ -22,10 +22,10 @@ from src.schema_class import SchemaClass
 
 @dataclass
 class DataParams(SchemaClass):
-    n_samples_train: int = 2**14
-    n_samples_val: int = 2**10
-    n_samples_test: int = 2**10
-    noise_std: float = 0.1
+    n_samples_train: int = 2**14 // 64
+    n_samples_val: int = 2**10 // 64
+    n_samples_test: int = 2**10 // 64
+    noise_std: float = 0.001
     skewed_distribution: bool = False
 
 
@@ -38,8 +38,8 @@ class ModelParams(SchemaClass):
 
 @dataclass
 class TrainParams(SchemaClass):
-    learning_rate: float = 0.005  # Higher LR needed for fast convergence
-    batch_size: int = DataParams().n_samples_train // 4
+    learning_rate: float = 0.0125
+    batch_size: int = DataParams().n_samples_train // 16
     epochs: int = 4000
     val_frequency: int = 5
 
