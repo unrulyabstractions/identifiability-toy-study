@@ -112,3 +112,85 @@ def run_parallel(*tasks: Callable[[], T]) -> list[T]:
     with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
         futures = [executor.submit(task) for task in tasks]
         return [f.result() for f in futures]
+
+
+R = TypeVar("R")
+
+
+def parallel_map(
+    items: list[T],
+    fn: Callable[[T], R],
+    max_workers: int = 4,
+    desc: str = "items",
+    single_item_fn: Callable[[T], R] | None = None,
+) -> list[tuple[int, R | None, Exception | None]]:
+    """Apply fn to items in parallel, yielding (index, result, error) tuples.
+
+    Optimizes single-item case by running directly without thread overhead.
+    For single items, uses single_item_fn if provided (e.g., to enable logging).
+
+    Args:
+        items: List of items to process
+        fn: Function to apply to each item (used for parallel execution)
+        max_workers: Maximum parallel workers
+        desc: Description for progress messages
+        single_item_fn: Optional function for single-item case (e.g., with logging)
+
+    Returns:
+        List of (index, result, error) tuples. result is None if error occurred,
+        error is None if successful.
+
+    Usage:
+        results = parallel_map(
+            configs,
+            lambda c: process(c, logger=None),  # Parallel: no logging
+            single_item_fn=lambda c: process(c, logger=logger),  # Single: with logging
+            desc="trials",
+        )
+        for idx, result, error in results:
+            if error:
+                print(f"Item {idx} failed: {error}")
+            else:
+                handle_result(result)
+    """
+    from concurrent.futures import as_completed
+
+    if len(items) == 0:
+        return []
+
+    # Use single_item_fn for sequential execution (single item or max_workers=1)
+    use_sequential = len(items) == 1 or max_workers == 1
+    item_fn = single_item_fn if (single_item_fn and use_sequential) else fn
+
+    if use_sequential:
+        # Run sequentially without threading overhead
+        results: list[tuple[int, R | None, Exception | None]] = []
+        for idx, item in enumerate(items):
+            try:
+                result = item_fn(item)
+                results.append((idx, result, None))
+            except Exception as e:
+                results.append((idx, None, e))
+                print(f"  {desc.capitalize()} {idx + 1}/{len(items)} failed: {e}")
+        return results
+
+    # Multiple items - run in parallel
+    n_workers = min(len(items), max_workers)
+    print(f"Running {len(items)} {desc} with {n_workers} parallel workers")
+
+    results = []
+
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(fn, item): i for i, item in enumerate(items)}
+
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                result = future.result()
+                results.append((idx, result, None))
+                print(f"  {desc.capitalize()} {idx + 1}/{len(items)} completed")
+            except Exception as e:
+                results.append((idx, None, e))
+                print(f"  {desc.capitalize()} {idx + 1}/{len(items)} failed: {e}")
+
+    return results

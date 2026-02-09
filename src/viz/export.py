@@ -17,10 +17,19 @@ import os
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
+from src.infra import parse_subcircuit_key
+
 if TYPE_CHECKING:
     from src.schemas import FaithfulnessMetrics, Metrics, ObservationalMetrics
 
 from src.schemas import FaithfulnessCategoryScore, FaithfulnessSummary
+
+
+def _format_key_for_json(subcircuit_key) -> dict:
+    """Format a subcircuit key for JSON output."""
+    if isinstance(subcircuit_key, (tuple, list)):
+        return {"node_pattern": subcircuit_key[0], "edge_variation": subcircuit_key[1]}
+    return {"index": subcircuit_key}
 
 
 def rank_subcircuits(
@@ -559,11 +568,7 @@ def save_gate_summary(
         scores = _compute_subcircuit_scores(faith)
 
         # Get node_idx (handle tuple, list, and int keys)
-        if isinstance(key, (tuple, list)):
-            node_idx, edge_var_idx = key[0], key[1]
-        else:
-            node_idx = key
-            edge_var_idx = 0
+        node_idx, edge_var_idx = parse_subcircuit_key(key)
 
         # Keep only the best edge variation per node pattern
         if node_idx not in node_pattern_best:
@@ -666,11 +671,7 @@ def save_summary(
     if faithfulness is None:
         return ""
 
-    # Format the key for JSON
-    if isinstance(subcircuit_key, (tuple, list)):
-        key_info = {"node_pattern": subcircuit_key[0], "edge_variation": subcircuit_key[1]}
-    else:
-        key_info = {"index": subcircuit_key}
+    key_info = _format_key_for_json(subcircuit_key)
 
     # Compute all scores
     scores = _compute_subcircuit_scores(faithfulness)
@@ -712,11 +713,7 @@ def save_all_samples(
     if faithfulness is None:
         return ""
 
-    # Format the key for JSON
-    if isinstance(subcircuit_key, (tuple, list)):
-        key_info = {"node_pattern": subcircuit_key[0], "edge_variation": subcircuit_key[1]}
-    else:
-        key_info = {"index": subcircuit_key}
+    key_info = _format_key_for_json(subcircuit_key)
 
     def sample_to_dict(sample) -> dict:
         """Convert a sample dataclass to dict, handling nested fields."""

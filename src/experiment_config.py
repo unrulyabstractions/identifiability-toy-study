@@ -22,38 +22,35 @@ from src.schema_class import SchemaClass
 
 @dataclass
 class DataParams(SchemaClass):
-    n_samples_train: int = 2**14 // 64
-    n_samples_val: int = 2**10 // 64
-    n_samples_test: int = 2**10 // 64
-    noise_std: float = 0.001
+    n_samples_train: int = 2**14
+    n_samples_val: int = 2**10
+    n_samples_test: int = 2**10
+    noise_std: float = 0.1
     skewed_distribution: bool = False
 
 
-DEFAULT_GATES = ["XOR", "AND", "OR", "IMP"]
+ALL_GATES = ["XOR", "AND", "OR", "IMP"]
 TEST_GATES = ["XOR"]
 
 
 @dataclass
 class ModelParams(SchemaClass):
-    logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
-    logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
+    logic_gates: list[str] = field(default_factory=lambda: ALL_GATES)
     width: int = 3
     depth: int = 2
 
 
 @dataclass
 class TrainParams(SchemaClass):
-    learning_rate: float = 0.0125
-    batch_size: int = DataParams().n_samples_train // 16
+    learning_rate: float = 1e-2
+    batch_size: int = DataParams().n_samples_train // 8
     epochs: int = 4000
-    val_frequency: int = 5
+    val_frequency: int = 10
 
 
 @dataclass
 class IdentifiabilityConstraints(SchemaClass):
-    # Max deviation from bit_similarity=1.0 to be considered "best"
-    # 0.01 = only 99%+ similar, 0.1 = 90%+ similar, 0.2 = 80%+ similar
-    epsilon: float = 0.1
+    epsilon: float = 0.2
 
 
 @dataclass
@@ -106,9 +103,10 @@ class ExperimentConfig(SchemaClass):
     target_logic_gates: list[str] = field(
         default_factory=lambda: [*ModelParams().logic_gates]
     )
-    num_gates_per_run: list[int] | None = (
-        None  # None = use all gates from target_logic_gates
-    )
+
+    # None = use all gates from target_logic_gates
+    num_gates_per_run: int | None = 2
+
     num_runs: int = 1
 
     def __str__(self) -> str:

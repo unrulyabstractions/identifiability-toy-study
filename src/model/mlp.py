@@ -34,7 +34,7 @@ class MLP(nn.Module):
         hidden_sizes: list,
         input_size: int = 2,
         output_size: int = 1,
-        activation: str = "relu",
+        activation: str = "leaky_relu",
         device: str = "cpu",
         debug: bool = False,
         logger=None,

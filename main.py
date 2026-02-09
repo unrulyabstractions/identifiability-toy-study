@@ -53,6 +53,18 @@ def get_args() -> Any:
         action="store_true",
         help="Enable SPD decomposition analysis (disabled by default)",
     )
+    parser.add_argument(
+        "--run",
+        type=str,
+        default=None,
+        help="Specific run directory to process (for --analysis-only or --spd-only)",
+    )
+    parser.add_argument(
+        "--trial",
+        type=str,
+        default=None,
+        help="Specific trial ID to process across runs (for --analysis-only or --spd-only)",
+    )
     args = parser.parse_args()
 
     # args.spd_only should turn on args.spd
@@ -61,24 +73,76 @@ def get_args() -> Any:
     return args
 
 
+def get_target_runs(output_dir: Path, run_filter: str | None) -> list[Path]:
+    """Get run directories, optionally filtered to a specific run."""
+    all_runs = get_all_runs(output_dir)
+    if run_filter is None:
+        return all_runs
+    # Match by exact name or by suffix (e.g., "run_20260208-141100" or just the directory name)
+    for run_dir in all_runs:
+        if run_dir.name == run_filter or run_dir.name == f"run_{run_filter}":
+            return [run_dir]
+    # Also check if it's a full path
+    run_path = Path(run_filter)
+    if run_path.exists() and run_path.is_dir():
+        return [run_path]
+    run_path = output_dir / run_filter
+    if run_path.exists() and run_path.is_dir():
+        return [run_path]
+    print(f"Run directory not found: {run_filter}")
+    return []
+
+
+def filter_result_trials(
+    result: ExperimentResult, trial_filter: str | None
+) -> ExperimentResult:
+    """Filter trials in a result to only include matching trial IDs."""
+    if trial_filter is None:
+        return result
+    # Filter to only matching trials
+    filtered_trials = {
+        tid: trial for tid, trial in result.trials.items() if tid == trial_filter
+    }
+    result.trials = filtered_trials
+    return result
+
+
 @profile_fn("rerun_all")
-def rerun_all(output_dir: Path, process_fn: Any, process_name: str = "") -> None:
-    """Re-run processing on all runs."""
-    runs = get_all_runs(output_dir)
+def rerun_all(
+    output_dir: Path,
+    process_fn: Any,
+    process_name: str = "",
+    run_filter: str | None = None,
+    trial_filter: str | None = None,
+) -> None:
+    """Re-run processing on runs, optionally filtered by run and/or trial."""
+    runs = get_target_runs(output_dir, run_filter)
     if not runs:
         print("No runs found")
         sys.exit(1)
-    print(f"Found {len(runs)} runs to re-run {process_name}")
+
+    filter_desc = ""
+    if run_filter:
+        filter_desc += f" (run: {run_filter})"
+    if trial_filter:
+        filter_desc += f" (trial: {trial_filter})"
+
+    print(f"Found {len(runs)} run(s) to re-run {process_name}{filter_desc}")
+
+    total_trials_processed = 0
     for run_dir in runs:
         print(f"Re-analyzing {run_dir.name}...")
         result = load_results(str(run_dir))
+        result = filter_result_trials(result, trial_filter)
         if not result.trials:
-            print("  No trials found, skipping")
+            print("  No matching trials found, skipping")
             continue
-        print(f"  Loaded {len(result.trials)} trials")
+        print(f"  Processing {len(result.trials)} trial(s)")
         process_fn(result, run_dir)
+        total_trials_processed += len(result.trials)
         print("  Processing complete")
-    print(f"Finished analyzing {len(runs)} runs")
+
+    print(f"Finished analyzing {total_trials_processed} trial(s) across {len(runs)} run(s)")
 
 
 @profile_fn("do_viz")
@@ -105,11 +169,11 @@ def rerun_pipeline(output_dir: Path, args: Any) -> bool:
     did_rerun_pipeline = False
     if args.spd_only:
         do_fx = lambda *a: do_spd(*a, viz=not args.no_viz, spd_device=args.spd_device)
-        rerun_all(output_dir, do_fx, "spd")
+        rerun_all(output_dir, do_fx, "spd", run_filter=args.run, trial_filter=args.trial)
         did_rerun_pipeline = True
     if args.analysis_only:
         do_fx = lambda *a: do_viz(*a, spd=args.spd)
-        rerun_all(output_dir, do_fx, "analysis")
+        rerun_all(output_dir, do_fx, "analysis", run_filter=args.run, trial_filter=args.trial)
         did_rerun_pipeline = True
     return did_rerun_pipeline
 

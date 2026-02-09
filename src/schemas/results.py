@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import torch
 
 from src.experiment_config import ExperimentConfig, TrialSetup
+from src.infra import parse_subcircuit_key
 from src.schema_class import SchemaClass
 from .evaluation import Metrics, ProfilingData
 
@@ -105,31 +106,29 @@ class ExperimentResult(SchemaClass):
                 viz = viz_paths.get(trial_id, {}).get(gate, {})
                 best_list = []
                 for key in bests:
-                    # Handle legacy int keys and new (node_idx, edge_var_idx) tuple/list keys
+                    node_idx, edge_var_idx = parse_subcircuit_key(key)
+                    if node_idx not in by_idx:
+                        continue
+                    sm = by_idx[node_idx]
+
+                    # Build entry with appropriate key format
                     if isinstance(key, (tuple, list)):
-                        node_idx, edge_var_idx = key[0], key[1]
-                        if node_idx in by_idx:
-                            sm = by_idx[node_idx]
-                            entry = {
-                                "node_idx": node_idx,
-                                "edge_var_idx": edge_var_idx,
-                                "acc": sm.accuracy,
-                                "sim": sm.bit_similarity,
-                            }
-                            if key in viz:
-                                entry["viz"] = viz[key]
-                            best_list.append(entry)
+                        entry = {
+                            "node_idx": node_idx,
+                            "edge_var_idx": edge_var_idx,
+                            "acc": sm.accuracy,
+                            "sim": sm.bit_similarity,
+                        }
                     else:
-                        if key in by_idx:
-                            sm = by_idx[key]
-                            entry = {
-                                "idx": key,
-                                "acc": sm.accuracy,
-                                "sim": sm.bit_similarity,
-                            }
-                            if key in viz:
-                                entry["viz"] = viz[key]
-                            best_list.append(entry)
+                        entry = {
+                            "idx": key,
+                            "acc": sm.accuracy,
+                            "sim": sm.bit_similarity,
+                        }
+
+                    if key in viz:
+                        entry["viz"] = viz[key]
+                    best_list.append(entry)
                 gates[gate] = {
                     "test_acc": gm.test_acc,
                     "best": best_list,

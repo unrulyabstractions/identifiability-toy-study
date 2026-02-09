@@ -14,7 +14,7 @@ def calculate_loss(
     model: nn.Module,
     logits: torch.Tensor,
     target: torch.Tensor,
-    l1_lambda: float = 1e-8,
+    l1_lambda: float = -1,
 ):
     loss = F.binary_cross_entropy_with_logits(logits, target)
     if l1_lambda > 0:

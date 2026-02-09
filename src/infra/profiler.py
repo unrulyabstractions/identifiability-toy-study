@@ -216,3 +216,36 @@ def print_memory_summary():
     # Sort by checkpoint name for readability
     for name, mem_mb in sorted(_memory_snapshots.items()):
         print(f"  {name}: {mem_mb:.1f} MB")
+
+
+@contextmanager
+def timed_phase(phase_name: str, show_header: bool = True):
+    """Context manager for timing a phase with memory tracking.
+
+    Usage:
+        with timed_phase("Activation Visualizations"):
+            do_work()
+
+    Prints a header with memory before, profiles the block,
+    and prints completion with elapsed time and memory delta.
+    """
+    profile_name = phase_name.lower().replace(" ", "_")
+    mem_before = get_memory_mb()
+
+    if show_header:
+        print(f"\n{'=' * 60}")
+        print(f"  [VIZ] {phase_name}")
+        print(f"  Memory before: {mem_before:.1f} MB")
+        print("=" * 60)
+
+    t0 = time.time()
+    try:
+        with profile(profile_name):
+            yield
+    finally:
+        elapsed_ms = (time.time() - t0) * 1000
+        mem_after = log_memory(f"after_viz_{profile_name}")
+        mem_delta = mem_after - mem_before
+
+        print(f"  -> Completed in {elapsed_ms:.0f}ms")
+        print(f"  -> Memory after: {mem_after:.1f} MB (delta: {mem_delta:+.1f} MB)")

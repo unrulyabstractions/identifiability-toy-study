@@ -1,12 +1,12 @@
 """Main trial runner - orchestrates the full trial pipeline."""
 
-from typing import Any, Optional
+from typing import Any
 
 from src.domain import ALL_LOGIC_GATES
-from src.infra import get_eval_device, ParallelConfig, set_seeds, update_status_fx
 from src.experiment_config import TrialSetup
-from src.schemas import TrialData, TrialResult
+from src.infra import ParallelConfig, get_eval_device, set_seeds, update_status_fx
 from src.math import calculate_match_rate, logits_to_binary
+from src.schemas import TrialData, TrialResult
 from src.training import train_model
 
 from .gate_analysis import analyze_gate
@@ -23,7 +23,6 @@ def run_trial(
     device: str,
     logger: Any = None,
     debug: bool = False,
-    parallel_config: Optional[ParallelConfig] = None,
 ) -> TrialResult:
     """Run a complete training and analysis trial.
 
@@ -46,10 +45,9 @@ def run_trial(
     Returns:
         TrialResult containing model, metrics, and analysis results
     """
-    if parallel_config is None:
-        parallel_config = ParallelConfig()
     # This also sets deterministic behavior
-    set_seeds(setup.seed)
+    set_seeds(setup.seed)  # TODO: We should use RandomState
+    parallel_config = ParallelConfig()
 
     trial_result = TrialResult(
         setup=setup,
@@ -161,3 +159,21 @@ def run_trial(
     update_status("FINISHED_GATE_ANALYSIS")
     update_status("SUCCESSFUL_TRIAL")
     return trial_result
+
+
+def run_trial_in_parallel(ctx):
+    trial_setup, trial_data, cfg, logger = ctx
+    return run_trial(
+        trial_setup,
+        trial_data,
+        device=cfg.device,
+        logger=None,  # Disable logging in parallel to avoid interleaving
+        debug=cfg.debug,
+    )
+
+
+def run_trial_in_series(ctx):
+    trial_setup, trial_data, cfg, logger = ctx
+    return run_trial(
+        trial_setup, trial_data, device=cfg.device, logger=logger, debug=cfg.debug
+    )

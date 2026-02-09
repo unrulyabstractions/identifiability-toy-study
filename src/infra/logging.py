@@ -92,12 +92,27 @@ def log_edge_variant_summary(
     )
 
 
-def _format_subcircuit_key(key) -> str:
-    """Format a subcircuit key for display."""
+def parse_subcircuit_key(key) -> tuple[int, int]:
+    """Parse a subcircuit key into (node_idx, edge_var_idx).
+
+    Handles both legacy int keys and new (node_idx, edge_var_idx) tuple/list keys.
+    For legacy int keys, returns (key, 0).
+    """
     if isinstance(key, (tuple, list)):
-        node_idx, edge_var_idx = key[0], key[1]
-        return f"Node#{node_idx}/Edge#{edge_var_idx}"
-    return f"SC#{key}"
+        return key[0], key[1]
+    return key, 0
+
+
+def format_subcircuit_key(key) -> str:
+    """Format a subcircuit key for display."""
+    node_idx, edge_var_idx = parse_subcircuit_key(key)
+    if edge_var_idx == 0 and not isinstance(key, (tuple, list)):
+        return f"SC#{key}"
+    return f"Node#{node_idx}/Edge#{edge_var_idx}"
+
+
+# Alias for backwards compatibility
+_format_subcircuit_key = format_subcircuit_key
 
 
 def log_faithfulness_metrics(

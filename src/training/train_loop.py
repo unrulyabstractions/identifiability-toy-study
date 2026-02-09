@@ -19,7 +19,7 @@ def train_mlp(
     batch_size: int,
     learning_rate: float,
     epochs: int,
-    loss_target: float = 0.001,
+    loss_target: float = 0.032,  # default for bse (eq to 1e-3 mse target)
     val_frequency: int = 1,
     early_stopping_steps: int = 10,
     logger=None,
@@ -52,7 +52,7 @@ def train_mlp(
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     # Optimizer
-    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.0)
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 
     best_loss = float("inf")
     bad_epochs = 0
