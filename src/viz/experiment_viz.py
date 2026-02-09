@@ -20,10 +20,11 @@ from .faithfulness_viz import (
     visualize_faithfulness_intervention_effects,
 )
 from .export import (
+    save_all_samples,
     save_faithfulness_json,
-    save_full_results,
     save_gate_summary,
     save_node_pattern_summary,
+    save_summary,
 )
 from .observational_viz import (
     visualize_observational_circuits,
@@ -343,10 +344,12 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                 )
                 viz_paths[trial_id][gname][sc_key]["faithfulness"]["json"] = json_paths
 
-                # Save full_results.json in this leaf folder (complete data)
+                # Save summary.json and samples.json in this leaf folder
                 if has_faith:
-                    full_results_path = save_full_results(folder, faithfulness_data, sc_key)
-                    viz_paths[trial_id][gname][sc_key]["full_results"] = full_results_path
+                    summary_path = save_summary(folder, faithfulness_data, sc_key)
+                    samples_path = save_all_samples(folder, faithfulness_data, sc_key)
+                    viz_paths[trial_id][gname][sc_key]["summary"] = summary_path
+                    viz_paths[trial_id][gname][sc_key]["samples"] = samples_path
 
             # After processing all edge variations, save node pattern summaries
             for node_idx, edge_list in node_pattern_edges.items():

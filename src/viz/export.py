@@ -8,7 +8,8 @@ Contains functions for computing and exporting metrics:
 - save_faithfulness_json: Save result.json files and summary.json
 - save_gate_summary: Save summary.json for a specific gate (best per node pattern)
 - save_node_pattern_summary: Save summary.json ranking edge variations within a node pattern
-- save_full_results: Save full_results.json in leaf folders
+- save_summary: Save summary.json in leaf folders (aggregated stats)
+- save_all_samples: Save samples.json in leaf folders (all raw sample data)
 """
 
 import json
@@ -645,14 +646,14 @@ def save_node_pattern_summary(
     return path
 
 
-def save_full_results(
+def save_summary(
     output_dir: str,
     faithfulness: "FaithfulnessMetrics | None",
     subcircuit_key: int | tuple[int, int],
 ) -> str:
-    """Save full_results.json with complete faithfulness data.
+    """Save summary.json with aggregated faithfulness metrics.
 
-    This file contains all detailed metrics and is saved in leaf folders only.
+    This file contains aggregated stats and is saved in leaf folders only.
 
     Args:
         output_dir: Directory to save to (e.g., XOR/46/0/)
@@ -660,7 +661,7 @@ def save_full_results(
         subcircuit_key: The subcircuit key (int or tuple)
 
     Returns:
-        Path to the saved full_results.json
+        Path to the saved summary.json
     """
     if faithfulness is None:
         return ""
@@ -674,8 +675,8 @@ def save_full_results(
     # Compute all scores
     scores = _compute_subcircuit_scores(faithfulness)
 
-    # Build full results with detailed breakdowns
-    full_results = {
+    # Build summary with aggregated breakdowns
+    summary = {
         "subcircuit": key_info,
         "scores": scores,
         "observational": compute_observational_metrics(faithfulness.observational) if faithfulness.observational else None,
@@ -683,8 +684,104 @@ def save_full_results(
         "counterfactual": compute_counterfactual_metrics(faithfulness) if faithfulness.counterfactual else None,
     }
 
-    path = os.path.join(output_dir, "full_results.json")
+    path = os.path.join(output_dir, "summary.json")
     with open(path, "w") as f:
-        json.dump(full_results, f, indent=2)
+        json.dump(summary, f, indent=2)
 
     return path
+
+
+def save_all_samples(
+    output_dir: str,
+    faithfulness: "FaithfulnessMetrics | None",
+    subcircuit_key: int | tuple[int, int],
+) -> str:
+    """Save samples.json with all raw sample data.
+
+    This file contains every individual sample from all tests.
+    Useful for detailed analysis and visualization.
+
+    Args:
+        output_dir: Directory to save to (e.g., XOR/46/0/)
+        faithfulness: Full faithfulness metrics
+        subcircuit_key: The subcircuit key (int or tuple)
+
+    Returns:
+        Path to the saved samples.json
+    """
+    if faithfulness is None:
+        return ""
+
+    # Format the key for JSON
+    if isinstance(subcircuit_key, tuple):
+        key_info = {"node_pattern": subcircuit_key[0], "edge_variation": subcircuit_key[1]}
+    else:
+        key_info = {"index": subcircuit_key}
+
+    def sample_to_dict(sample) -> dict:
+        """Convert a sample dataclass to dict, handling nested fields."""
+        return asdict(sample)
+
+    # Collect all observational samples
+    obs_samples = {"noise": [], "ood": []}
+    if faithfulness.observational:
+        if faithfulness.observational.noise and faithfulness.observational.noise.samples:
+            obs_samples["noise"] = [sample_to_dict(s) for s in faithfulness.observational.noise.samples]
+        if faithfulness.observational.ood and faithfulness.observational.ood.samples:
+            obs_samples["ood"] = [sample_to_dict(s) for s in faithfulness.observational.ood.samples]
+
+    # Collect all interventional samples
+    int_samples = {
+        "in_circuit": {},
+        "out_circuit": {},
+        "in_circuit_ood": {},
+        "out_circuit_ood": {},
+    }
+    if faithfulness.interventional:
+        for patch_key, stats in faithfulness.interventional.in_circuit_stats.items():
+            if stats.samples:
+                int_samples["in_circuit"][patch_key] = [sample_to_dict(s) for s in stats.samples]
+        for patch_key, stats in faithfulness.interventional.out_circuit_stats.items():
+            if stats.samples:
+                int_samples["out_circuit"][patch_key] = [sample_to_dict(s) for s in stats.samples]
+        for patch_key, stats in faithfulness.interventional.in_circuit_stats_ood.items():
+            if stats.samples:
+                int_samples["in_circuit_ood"][patch_key] = [sample_to_dict(s) for s in stats.samples]
+        for patch_key, stats in faithfulness.interventional.out_circuit_stats_ood.items():
+            if stats.samples:
+                int_samples["out_circuit_ood"][patch_key] = [sample_to_dict(s) for s in stats.samples]
+
+    # Collect all counterfactual samples
+    cf_samples = {
+        "sufficiency": [],
+        "completeness": [],
+        "necessity": [],
+        "independence": [],
+    }
+    if faithfulness.counterfactual:
+        if faithfulness.counterfactual.sufficiency_effects:
+            cf_samples["sufficiency"] = [sample_to_dict(s) for s in faithfulness.counterfactual.sufficiency_effects]
+        if faithfulness.counterfactual.completeness_effects:
+            cf_samples["completeness"] = [sample_to_dict(s) for s in faithfulness.counterfactual.completeness_effects]
+        if faithfulness.counterfactual.necessity_effects:
+            cf_samples["necessity"] = [sample_to_dict(s) for s in faithfulness.counterfactual.necessity_effects]
+        if faithfulness.counterfactual.independence_effects:
+            cf_samples["independence"] = [sample_to_dict(s) for s in faithfulness.counterfactual.independence_effects]
+
+    # Build complete samples file
+    all_samples = {
+        "subcircuit": key_info,
+        "observational": obs_samples,
+        "interventional": int_samples,
+        "counterfactual": cf_samples,
+    }
+
+    path = os.path.join(output_dir, "samples.json")
+    with open(path, "w") as f:
+        json.dump(all_samples, f, indent=2)
+
+    return path
+
+
+# Keep old name for backwards compatibility
+save_full_results = save_summary
