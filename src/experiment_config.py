@@ -31,8 +31,7 @@ class DataParams(SchemaClass):
 
 @dataclass
 class ModelParams(SchemaClass):
-    # logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
-    logic_gates: list[str] = field(default_factory=lambda: ["XOR"])
+    logic_gates: list[str] = field(default_factory=lambda: ["XOR", "AND", "OR", "IMP"])
     width: int = 3
     depth: int = 2
 
@@ -41,8 +40,8 @@ class ModelParams(SchemaClass):
 class TrainParams(SchemaClass):
     learning_rate: float = 0.005  # Higher LR needed for fast convergence
     batch_size: int = DataParams().n_samples_train // 4
-    epochs: int = 2000
-    val_frequency: int = 10
+    epochs: int = 4000
+    val_frequency: int = 5
 
 
 @dataclass
@@ -57,9 +56,9 @@ class FaithfulnessConfig(SchemaClass):
     """Configuration for faithfulness analysis."""
 
     max_subcircuits_per_gate: int = 5
-    max_edge_variations_per_subcircuits: int = 5
-    n_interventions_per_patch: int = 100
-    n_counterfactual_pairs: int = 100
+    max_edge_variations_per_subcircuits: int = 3
+    n_interventions_per_patch: int = 200
+    n_counterfactual_pairs: int = 200
 
 
 @dataclass

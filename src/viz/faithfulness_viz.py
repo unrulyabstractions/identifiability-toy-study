@@ -107,8 +107,8 @@ def visualize_faithfulness_intervention_effects(
 
         colors = ["#4CAF50" if c else "#E53935" for c in sorted_correct]
         ax.scatter(sorted_x, sorted_out, s=25, c=colors, alpha=0.7, edgecolors="none")
-        ax.axhline(y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
-        ax.set_ylim(-0.2, 1.2)
+        ax.axhline(y=0, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+        ax.set_ylim(-3, 3)  # Logit range
         ax.set_title(title, fontsize=10, fontweight="bold")
         if show_xlabel:
             ax.set_xlabel("Intervention Value (mode: add)", fontsize=9)

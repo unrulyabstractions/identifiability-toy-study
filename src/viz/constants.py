@@ -133,47 +133,45 @@ _layout_cache = GraphLayoutCache()
 
 def _activation_to_color(val: float, vmin: float = -2, vmax: float = 2) -> tuple:
     """
-    Pastel color gradient for activation values:
-    - 0.5 = beige/cream
-    - 1.0 = light mint green
-    - >1.0 = green -> teal (more saturated)
-    - 0.0 = light peach/orange
-    - -1.0 = coral/salmon
-    - <-1.0 = deeper coral -> rose
+    Pastel color gradient for logit values (decision boundary at 0):
+    - 0.0 = neutral cream/beige (decision boundary)
+    - Positive (class 1) → cooler colors (mint, teal)
+    - Negative (class 0) → warmer colors (peach, coral, rose)
     """
     # Pastel colors (RGB tuples, 0-1 range)
     colors = {
-        "deep_rose": (0.85, 0.45, 0.55),      # < -1.0
+        "deep_rose": (0.85, 0.45, 0.55),      # < -2.0
         "coral": (0.95, 0.65, 0.60),           # -1.0
-        "peach": (0.98, 0.82, 0.70),           # 0.0
-        "cream": (0.98, 0.95, 0.80),           # 0.5
+        "cream": (0.98, 0.95, 0.80),           # 0.0 (decision boundary)
         "mint": (0.75, 0.92, 0.78),            # 1.0
-        "teal": (0.55, 0.82, 0.78),            # > 1.0
+        "teal": (0.55, 0.82, 0.78),            # > 2.0
     }
 
     def lerp(c1, c2, t):
         return tuple(c1[i] + (c2[i] - c1[i]) * t for i in range(3))
 
-    if val <= -1.0:
+    if val <= -2.0:
+        # Deep rose (saturated negative)
+        rgb = colors["deep_rose"]
+    elif val <= -1.0:
         # Deep rose to coral
-        t = min(1.0, (-1.0 - val) / 1.0)  # How far below -1
-        rgb = lerp(colors["coral"], colors["deep_rose"], t)
+        t = (val + 2.0) / 1.0  # -2 -> -1 maps to 0 -> 1
+        rgb = lerp(colors["deep_rose"], colors["coral"], t)
     elif val <= 0.0:
-        # Coral to peach
+        # Coral to cream (approaching decision boundary)
         t = (val + 1.0) / 1.0  # -1 -> 0 maps to 0 -> 1
-        rgb = lerp(colors["coral"], colors["peach"], t)
-    elif val <= 0.5:
-        # Peach to cream
-        t = val / 0.5  # 0 -> 0.5 maps to 0 -> 1
-        rgb = lerp(colors["peach"], colors["cream"], t)
+        rgb = lerp(colors["coral"], colors["cream"], t)
     elif val <= 1.0:
-        # Cream to mint
-        t = (val - 0.5) / 0.5  # 0.5 -> 1 maps to 0 -> 1
+        # Cream to mint (crossing into positive)
+        t = val / 1.0  # 0 -> 1 maps to 0 -> 1
         rgb = lerp(colors["cream"], colors["mint"], t)
-    else:
+    elif val <= 2.0:
         # Mint to teal
-        t = min(1.0, (val - 1.0) / 1.0)  # How far above 1
+        t = (val - 1.0) / 1.0  # 1 -> 2 maps to 0 -> 1
         rgb = lerp(colors["mint"], colors["teal"], t)
+    else:
+        # Teal (saturated positive)
+        rgb = colors["teal"]
 
     return (*rgb, 1.0)
 

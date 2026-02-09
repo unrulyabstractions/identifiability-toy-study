@@ -392,9 +392,9 @@ def visualize_observational_curves(
         ax.scatter(sorted_x, gate_outputs, s=20, c=gate_colors, alpha=0.7, label="Gate", marker="o", edgecolors="none")
         ax.scatter(sorted_x, sc_outputs, s=20, c=sc_colors, alpha=0.7, label="SC", marker="s", edgecolors="none")
 
-        # Add horizontal line at ground truth and 0.5 threshold
+        # Add horizontal line at ground truth and 0 decision boundary
         ax.axhline(y=gt_value, color="#333333", linestyle="--", linewidth=1, alpha=0.5, label=f"GT={gt_value:.0f}")
-        ax.axhline(y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+        ax.axhline(y=0, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
 
         # Add x-axis labels
         ax.set_xlim(min(sorted_x) - 0.1, max(sorted_x) + 0.1)
@@ -418,7 +418,7 @@ def visualize_observational_curves(
         colors = ["#4CAF50" if c else "#E53935" for c in sorted_correct]
         ax.scatter(sorted_x, sorted_outputs, s=25, c=colors, alpha=0.7, edgecolors="none")
         ax.axhline(y=gt_value, color="#333333", linestyle="--", linewidth=1, alpha=0.5)
-        ax.axhline(y=0.5, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+        ax.axhline(y=0, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
 
     def _plot_agreement_binned(ax, samples, x_values, n_bins=6):
         """Plot binned agreement rates (overlapping: bit, best) and |Delta logit|."""
