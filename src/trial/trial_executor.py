@@ -49,7 +49,7 @@ def run_trial(
         TrialResult containing model, metrics, and analysis results
     """
     # This also sets deterministic behavior
-    set_seeds(setup.seed)  # TODO: We should use RandomState
+    set_seeds(setup.seed)
     parallel_config = ParallelConfig()
 
     trial_result = TrialResult(
