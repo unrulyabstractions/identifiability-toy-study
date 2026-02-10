@@ -27,23 +27,23 @@ def _get_layer_widths(
 
 
 def _precompute_circuits_for_architectures(
-    cfg: ExperimentConfig, input_size: int, output_size: int, logger=None
-) -> dict[tuple[int, int], tuple[list, list]]:
-    """Pre-compute circuits for all unique (width, depth) combinations.
+    cfg: ExperimentConfig, input_size: int, output_sizes: list[int], logger=None
+) -> dict[tuple[int, int, int], tuple[list, list]]:
+    """Pre-compute circuits for all unique (width, depth, output_size) combinations.
 
     Returns:
-        Dict mapping (width, depth) -> (subcircuits, subcircuit_structures)
+        Dict mapping (width, depth, output_size) -> (subcircuits, subcircuit_structures)
     """
     circuits_cache = {}
 
-    for width, depth in product(cfg.widths, cfg.depths):
-        key = (width, depth)
+    for width, depth, output_size in product(cfg.widths, cfg.depths, output_sizes):
+        key = (width, depth, output_size)
         if key in circuits_cache:
             continue
 
         layer_widths = _get_layer_widths(input_size, output_size, width, depth)
         logger and logger.info(
-            f"Pre-computing circuits for width={width}, depth={depth}"
+            f"Pre-computing circuits for width={width}, depth={depth}, outputs={output_size}"
         )
 
         with profile("enumerate_circuits"):
@@ -103,12 +103,14 @@ def run_experiment(
     # Determine input/output sizes from gates
     first_gate = gates_combinations[0][0]
     input_size = ALL_LOGIC_GATES[first_gate].n_inputs
-    output_size = cfg.num_gates_per_run or len(cfg.target_logic_gates)
+
+    # Compute all unique output sizes (each gate combo may have different length)
+    output_sizes = sorted(set(len(combo) for combo in gates_combinations))
 
     # Pre-compute circuits for all architectures
     logger and logger.info("\nPre-computing circuits for all architectures...")
     circuits_cache = _precompute_circuits_for_architectures(
-        cfg, input_size, output_size, logger
+        cfg, input_size, output_sizes, logger
     )
 
     # Collect all trial configurations
@@ -144,7 +146,8 @@ def run_experiment(
                 )
 
                 # Get pre-computed circuits for this architecture
-                subcircuits, subcircuit_structures = circuits_cache[(width, depth)]
+                output_size = len(logic_gates)
+                subcircuits, subcircuit_structures = circuits_cache[(width, depth, output_size)]
 
                 trial_settings.append(
                     (
