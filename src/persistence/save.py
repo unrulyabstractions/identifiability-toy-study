@@ -101,6 +101,9 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
     # Save profiling at run level (aggregate from all trials)
     _save_run_level_profiling(result, run_dir)
 
+    # Save subcircuits folder with rankings
+    _save_subcircuits_folder(result, run_dir)
+
     # Create trials directory
     trials_dir = run_dir / "trials"
     trials_dir.mkdir(parents=True, exist_ok=True)
@@ -395,6 +398,147 @@ def _save_explanation(path: Path, content: str):
     """Save explanation markdown file."""
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
+
+
+def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
+    """Save subcircuits/ folder with score rankings and mappings.
+
+    Creates:
+        subcircuits/
+            subcircuit_score_ranking.json      - Rankings by gate (averaged across trials)
+            subcircuit_score_ranking_per_trial.json - Per-trial rankings
+            mask_idx_map.json                  - Mapping node/edge indices to subcircuit idx
+            explanation.md                     - How to read these files
+    """
+    subcircuits_dir = run_dir / "subcircuits"
+    subcircuits_dir.mkdir(parents=True, exist_ok=True)
+
+    # Get epsilon from config
+    epsilon = 0.2
+    if hasattr(result.config, "base_trial") and hasattr(result.config.base_trial, "constraints"):
+        epsilon = getattr(result.config.base_trial.constraints, "epsilon", 0.2)
+
+    # Aggregate scores by (gate, subcircuit_idx) across all trials
+    gate_subcircuit_scores = {}  # gate -> subcircuit_idx -> list of accuracies
+
+    per_trial_rankings = {}  # trial_id -> gate -> rankings
+
+    for trial_id, trial in result.trials.items():
+        per_trial_rankings[trial_id] = {}
+
+        for gate, gate_metrics in trial.metrics.per_gate_metrics.items():
+            if gate not in gate_subcircuit_scores:
+                gate_subcircuit_scores[gate] = {}
+
+            sc_metrics = getattr(gate_metrics, "subcircuit_metrics", [])
+            trial_ranking = []
+
+            for sm in sc_metrics:
+                idx = sm.idx
+                acc = sm.accuracy or 0
+
+                if idx not in gate_subcircuit_scores[gate]:
+                    gate_subcircuit_scores[gate][idx] = []
+                gate_subcircuit_scores[gate][idx].append(acc)
+
+                trial_ranking.append({
+                    "subcircuit_idx": idx,
+                    "accuracy": acc,
+                    "bit_similarity": sm.bit_similarity,
+                })
+
+            trial_ranking.sort(key=lambda x: x.get("accuracy", 0), reverse=True)
+            per_trial_rankings[trial_id][gate] = trial_ranking
+
+    # Compute averaged rankings per gate
+    averaged_rankings = {}
+    for gate, subcircuit_accs in gate_subcircuit_scores.items():
+        gate_rankings = []
+        for idx, accs in subcircuit_accs.items():
+            avg_acc = sum(accs) / len(accs) if accs else 0
+            gate_rankings.append({
+                "subcircuit_idx": idx,
+                "avg_accuracy": avg_acc,
+                "n_trials": len(accs),
+                "min_accuracy": min(accs) if accs else 0,
+                "max_accuracy": max(accs) if accs else 0,
+                "passes_epsilon": avg_acc >= (1 - epsilon),
+            })
+        gate_rankings.sort(key=lambda x: x.get("avg_accuracy", 0), reverse=True)
+        averaged_rankings[gate] = gate_rankings
+
+    # Save averaged rankings
+    _save_json({
+        "epsilon": epsilon,
+        "n_trials": len(result.trials),
+        "rankings_by_gate": averaged_rankings,
+    }, subcircuits_dir / "subcircuit_score_ranking.json")
+
+    # Save per-trial rankings
+    _save_json({
+        "epsilon": epsilon,
+        "per_trial": per_trial_rankings,
+    }, subcircuits_dir / "subcircuit_score_ranking_per_trial.json")
+
+    # Create mask_idx_map from circuits data
+    first_trial = next(iter(result.trials.values()), None)
+    if first_trial and first_trial.subcircuits:
+        mask_idx_map = []
+        for sc in first_trial.subcircuits:
+            idx = sc.get("idx", len(mask_idx_map))
+            # Compute structural metrics
+            node_masks = sc.get("node_masks", [])
+            edge_masks = sc.get("edge_masks", [])
+
+            # Node sparsity: fraction of active hidden nodes
+            hidden_nodes = node_masks[1:-1] if len(node_masks) > 2 else node_masks
+            total_hidden = sum(len(m) for m in hidden_nodes)
+            active_hidden = sum(sum(m) for m in hidden_nodes)
+            node_sparsity = active_hidden / total_hidden if total_hidden > 0 else 0
+
+            # Edge sparsity: fraction of active edges
+            total_edges = sum(len(e) * len(e[0]) for e in edge_masks if e and e[0])
+            active_edges = sum(sum(sum(row) for row in e) for e in edge_masks if e)
+            edge_sparsity = active_edges / total_edges if total_edges > 0 else 0
+
+            mask_idx_map.append({
+                "subcircuit_idx": idx,
+                "node_sparsity": round(node_sparsity, 4),
+                "edge_sparsity": round(edge_sparsity, 4),
+                "n_hidden_layers": len(hidden_nodes),
+            })
+
+        _save_json({
+            "description": "Mapping of subcircuit indices to structural properties",
+            "subcircuits": mask_idx_map,
+        }, subcircuits_dir / "mask_idx_map.json")
+
+    # Save explanation
+    _save_explanation(subcircuits_dir / "explanation.md", SUBCIRCUITS_EXPLANATION)
+
+
+SUBCIRCUITS_EXPLANATION = """# Subcircuits Analysis
+
+## Structure
+
+- `subcircuit_score_ranking.json`: Rankings averaged across all trials
+- `subcircuit_score_ranking_per_trial.json`: Per-trial rankings
+- `mask_idx_map.json`: Structural properties of each subcircuit
+
+## Key Metrics
+
+For subcircuit S with index i:
+
+- **avg_accuracy**: mean(Pr[S(x) = G(x)]) across trials
+- **node_sparsity**: fraction of active hidden nodes
+- **edge_sparsity**: fraction of active edges
+- **passes_epsilon**: avg_accuracy >= 1 - ε
+
+## Reading subcircuit_score_ranking.json
+
+`rankings_by_gate[gate]` lists subcircuits sorted by avg_accuracy.
+Higher accuracy = better match to gate behavior.
+"""
 
 
 def _save_gate_summaries(trial, trial_dir: Path):
