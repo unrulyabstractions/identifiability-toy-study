@@ -60,6 +60,113 @@ from src.schemas import ExperimentResult
 from src.serialization import filter_non_serializable
 
 
+# =============================================================================
+# Configurable Subcircuit Metrics
+# =============================================================================
+
+DEFAULT_SUBCIRCUIT_METRICS = [
+    "accuracy",
+    "bit_similarity",
+    "logit_similarity",
+    "edge_sparsity",
+    "node_sparsity",
+    "sufficiency",
+    "completeness",
+    "necessity",
+    "independence",
+    "overall_counterfactual",
+    "overall_interventional",
+    "overall_observational",
+    "noise_perturbations_agreement_bit",
+    "out_distribution_transformations_agreement",
+]
+
+
+def filter_and_rank_subcircuit_metrics(
+    subcircuit_metrics,
+    faithfulness_data=None,
+    structure_data=None,
+    metric_names: list[str] | None = None,
+) -> dict:
+    """Extract and filter subcircuit metrics into ranked_metrics format.
+
+    Args:
+        subcircuit_metrics: SubcircuitMetrics object with basic metrics
+        faithfulness_data: Optional FaithfulnessMetrics with detailed scores
+        structure_data: Optional dict with sparsity metrics from mask_idx_map
+        metric_names: List of metric names to include (defaults to DEFAULT_SUBCIRCUIT_METRICS)
+
+    Returns:
+        dict with:
+            - metric_name: list of metric names (filtered)
+            - metric_value: list of corresponding values
+    """
+    if metric_names is None:
+        metric_names = DEFAULT_SUBCIRCUIT_METRICS
+
+    # Collect all available metrics
+    all_metrics = {}
+
+    # From SubcircuitMetrics
+    if subcircuit_metrics:
+        all_metrics["accuracy"] = getattr(subcircuit_metrics, "accuracy", None)
+        all_metrics["bit_similarity"] = getattr(subcircuit_metrics, "bit_similarity", None)
+        all_metrics["logit_similarity"] = getattr(subcircuit_metrics, "logit_similarity", None)
+        all_metrics["best_similarity"] = getattr(subcircuit_metrics, "best_similarity", None)
+
+    # From structure data (sparsity metrics)
+    if structure_data:
+        all_metrics["edge_sparsity"] = structure_data.get("edge_sparsity")
+        all_metrics["node_sparsity"] = structure_data.get("node_sparsity")
+        all_metrics["connectivity_density"] = structure_data.get("connectivity_density")
+
+    # From FaithfulnessMetrics
+    if faithfulness_data:
+        # Observational
+        if hasattr(faithfulness_data, "observational") and faithfulness_data.observational:
+            obs = faithfulness_data.observational
+            all_metrics["overall_observational"] = getattr(obs, "overall_observational", None)
+            if hasattr(obs, "noise") and obs.noise:
+                all_metrics["noise_perturbations_agreement_bit"] = getattr(obs.noise, "agreement_bit", None)
+                all_metrics["noise_perturbations_agreement_logit"] = getattr(obs.noise, "agreement_logit", None)
+            if hasattr(obs, "ood") and obs.ood:
+                all_metrics["out_distribution_transformations_agreement"] = getattr(obs.ood, "overall_agreement", None)
+                all_metrics["out_distribution_multiply_agreement"] = getattr(obs.ood, "multiply_agreement", None)
+                all_metrics["out_distribution_bimodal_agreement"] = getattr(obs.ood, "bimodal_agreement", None)
+
+        # Interventional
+        if hasattr(faithfulness_data, "interventional") and faithfulness_data.interventional:
+            intv = faithfulness_data.interventional
+            all_metrics["overall_interventional"] = getattr(intv, "overall_interventional", None)
+            all_metrics["mean_in_circuit_effect"] = getattr(intv, "mean_in_circuit_effect", None)
+            all_metrics["mean_out_circuit_effect"] = getattr(intv, "mean_out_circuit_effect", None)
+
+        # Counterfactual
+        if hasattr(faithfulness_data, "counterfactual") and faithfulness_data.counterfactual:
+            cf = faithfulness_data.counterfactual
+            all_metrics["overall_counterfactual"] = getattr(cf, "overall_counterfactual", None)
+            all_metrics["sufficiency"] = getattr(cf, "mean_sufficiency", None)
+            all_metrics["completeness"] = getattr(cf, "mean_completeness", None)
+            all_metrics["necessity"] = getattr(cf, "mean_necessity", None)
+            all_metrics["independence"] = getattr(cf, "mean_independence", None)
+
+        # Overall faithfulness
+        all_metrics["overall_faithfulness"] = getattr(faithfulness_data, "overall_faithfulness", None)
+
+    # Filter and order by requested metrics
+    filtered_names = []
+    filtered_values = []
+    for name in metric_names:
+        if name in all_metrics and all_metrics[name] is not None:
+            filtered_names.append(name)
+            filtered_values.append(all_metrics[name])
+
+    return {
+        "metric_name": filtered_names,
+        "metric_value": filtered_values,
+    }
+
+
 def _save_json(data: dict, path: Path):
     """Save dict as formatted JSON."""
     with open(path, "w", encoding="utf-8") as f:
@@ -309,7 +416,7 @@ def _generate_run_summary(result: ExperimentResult) -> dict:
     }
 
     # Aggregate results by gate across all trials
-    gate_results = {}
+    gate_results = {}  # gate -> list of subcircuit result dicts
     for trial_id, trial in result.trials.items():
         trial_summary = {
             "trial_id": trial_id,
@@ -318,9 +425,22 @@ def _generate_run_summary(result: ExperimentResult) -> dict:
             "gates": {},
         }
 
+        # Get faithfulness data for this trial
+        bests_keys = trial.metrics.per_gate_bests or {}
+        bests_faith = trial.metrics.per_gate_bests_faith or {}
+
         for gate, gate_metrics in trial.metrics.per_gate_metrics.items():
             if gate not in gate_results:
                 gate_results[gate] = []
+
+            # Build idx -> faithfulness mapping
+            gate_best_keys = bests_keys.get(gate, [])
+            gate_faith_list = bests_faith.get(gate, [])
+            idx_to_faith = {}
+            for k, faith in zip(gate_best_keys, gate_faith_list):
+                idx = k[0] if isinstance(k, (tuple, list)) else k
+                if idx not in idx_to_faith:
+                    idx_to_faith[idx] = faith
 
             # Get subcircuit metrics and find best ones
             sc_metrics = getattr(gate_metrics, "subcircuit_metrics", [])
@@ -328,12 +448,13 @@ def _generate_run_summary(result: ExperimentResult) -> dict:
 
             for sm in sorted_by_acc[:5]:  # Top 5 per gate
                 acc = sm.accuracy or 0
+                faith_data = idx_to_faith.get(sm.idx)
+                ranked = filter_and_rank_subcircuit_metrics(sm, faithfulness_data=faith_data)
                 gate_results[gate].append({
                     "trial_id": trial_id,
                     "subcircuit_idx": sm.idx,
-                    "accuracy": acc,
-                    "bit_similarity": sm.bit_similarity,
                     "passes_epsilon": acc >= (1 - epsilon),
+                    "ranked_metrics": ranked,
                 })
 
             trial_summary["gates"][gate] = {
@@ -343,9 +464,12 @@ def _generate_run_summary(result: ExperimentResult) -> dict:
 
         summary["trial_results"].append(trial_summary)
 
-    # Rank and store best subcircuits per gate
+    # Rank and store best subcircuits per gate (by first metric value, typically accuracy)
     for gate, results in gate_results.items():
-        sorted_results = sorted(results, key=lambda x: x.get("accuracy", 0) or 0, reverse=True)
+        def get_first_metric(r):
+            vals = r.get("ranked_metrics", {}).get("metric_value", [])
+            return vals[0] if vals else 0
+        sorted_results = sorted(results, key=get_first_metric, reverse=True)
         summary["best_subcircuits_by_gate"][gate] = sorted_results[:10]
 
     return summary
@@ -845,11 +969,18 @@ def _save_gate_summaries(trial, trial_dir: Path):
         # Save samples for each subcircuit (T1.i)
         gate_keys = bests_keys.get(gate_name, [])
         gate_faith = bests_faith.get(gate_name, [])
-        _save_subcircuit_samples(gate_dir, gate_keys, gate_faith)
+        sc_metrics = getattr(gate_metrics, "subcircuit_metrics", [])
+        _save_subcircuit_samples(gate_dir, gate_keys, gate_faith, sc_metrics)
 
 
-def _save_subcircuit_samples(gate_dir: Path, keys: list, faith_results: list):
+def _save_subcircuit_samples(gate_dir: Path, keys: list, faith_results: list, sc_metrics_list: list = None):
     """Save samples in folder structure per T1.i.
+
+    Args:
+        gate_dir: Path to gate directory
+        keys: List of (node_mask_idx, edge_mask_idx) keys
+        faith_results: List of FaithfulnessMetrics objects
+        sc_metrics_list: List of SubcircuitMetrics objects for ranking
 
     Creates:
         {node_mask_idx}/{edge_mask_idx}/
@@ -869,6 +1000,12 @@ def _save_subcircuit_samples(gate_dir: Path, keys: list, faith_results: list):
     """
     from dataclasses import asdict
 
+    # Build index from sc_metrics_list by idx
+    sc_metrics_by_idx = {}
+    if sc_metrics_list:
+        for sm in sc_metrics_list:
+            sc_metrics_by_idx[sm.idx] = sm
+
     for key, faith in zip(keys, faith_results):
         if faith is None:
             continue
@@ -879,82 +1016,159 @@ def _save_subcircuit_samples(gate_dir: Path, keys: list, faith_results: list):
         else:
             node_mask_idx, edge_mask_idx = key, 0
 
+        # Get corresponding SubcircuitMetrics
+        sc_metrics = sc_metrics_by_idx.get(node_mask_idx)
+
+        # Get ranked metrics for this subcircuit
+        ranked = filter_and_rank_subcircuit_metrics(sc_metrics, faithfulness_data=faith)
+
         sc_dir = gate_dir / str(node_mask_idx) / str(edge_mask_idx)
+
+        # Save subcircuit-level summary with ranked metrics
+        sc_summary = {
+            "node_mask_idx": node_mask_idx,
+            "edge_mask_idx": edge_mask_idx,
+            "ranked_metrics": ranked,
+            "subfolders": ["observational", "interventional", "counterfactual"],
+        }
+        sc_dir.mkdir(parents=True, exist_ok=True)
+        _save_json(sc_summary, sc_dir / "summary.json")
 
         # Observational samples
         if hasattr(faith, 'observational') and faith.observational:
             obs = faith.observational
+            obs_dir = sc_dir / "observational"
+            obs_dir.mkdir(parents=True, exist_ok=True)
+
+            # Observational summary
+            obs_summary = {
+                "overall_observational": getattr(obs, "overall_observational", None),
+                "ranked_metrics": ranked,  # Include ranked metrics
+                "subfolders": ["noise_perturbations", "out_distribution_transformations"],
+            }
 
             # Noise perturbations
-            if hasattr(obs, 'noise') and obs.noise and hasattr(obs.noise, 'samples'):
-                noise_dir = sc_dir / "observational" / "noise_perturbations"
+            if hasattr(obs, 'noise') and obs.noise:
+                noise_dir = obs_dir / "noise_perturbations"
                 noise_dir.mkdir(parents=True, exist_ok=True)
-                samples = [asdict(s) for s in obs.noise.samples]
-                _save_json({"samples": samples, "n": len(samples)}, noise_dir / "samples.json")
+                obs_summary["noise_agreement_bit"] = getattr(obs.noise, "agreement_bit", None)
+                obs_summary["noise_agreement_logit"] = getattr(obs.noise, "agreement_logit", None)
+                if hasattr(obs.noise, 'samples') and obs.noise.samples:
+                    samples = [asdict(s) for s in obs.noise.samples]
+                    _save_json({"samples": samples, "n": len(samples)}, noise_dir / "samples.json")
 
             # OOD transformations
-            if hasattr(obs, 'ood') and obs.ood and hasattr(obs.ood, 'samples'):
-                ood_dir = sc_dir / "observational" / "out_distribution_transformations"
+            if hasattr(obs, 'ood') and obs.ood:
+                ood_dir = obs_dir / "out_distribution_transformations"
                 ood_dir.mkdir(parents=True, exist_ok=True)
-                samples = [asdict(s) for s in obs.ood.samples]
-                _save_json({"samples": samples, "n": len(samples)}, ood_dir / "samples.json")
+                obs_summary["ood_overall"] = getattr(obs.ood, "overall_agreement", None)
+                if hasattr(obs.ood, 'samples') and obs.ood.samples:
+                    samples = [asdict(s) for s in obs.ood.samples]
+                    _save_json({"samples": samples, "n": len(samples)}, ood_dir / "samples.json")
+
+            _save_json(obs_summary, obs_dir / "summary.json")
 
         # Interventional samples
         if hasattr(faith, 'interventional') and faith.interventional:
             intv = faith.interventional
+            intv_dir = sc_dir / "interventional"
+            intv_dir.mkdir(parents=True, exist_ok=True)
 
-            # In-circuit in-distribution
+            # Interventional summary
+            intv_summary = {
+                "overall_interventional": getattr(intv, "overall_interventional", None),
+                "mean_in_circuit_effect": getattr(intv, "mean_in_circuit_effect", None),
+                "mean_out_circuit_effect": getattr(intv, "mean_out_circuit_effect", None),
+                "ranked_metrics": ranked,  # Include ranked metrics
+                "subfolders": ["in_circuit", "out_circuit"],
+            }
+
+            # In-circuit folder
+            in_circuit_dir = intv_dir / "in_circuit"
+            in_circuit_dir.mkdir(parents=True, exist_ok=True)
+            in_circuit_summary = {"ranked_metrics": ranked, "subfolders": ["in_distribution", "out_distribution"]}
+
             if hasattr(intv, 'in_circuit_stats') and intv.in_circuit_stats:
-                in_in_dir = sc_dir / "interventional" / "in_circuit" / "in_distribution"
+                in_in_dir = in_circuit_dir / "in_distribution"
                 in_in_dir.mkdir(parents=True, exist_ok=True)
                 _save_json({"stats": intv.in_circuit_stats}, in_in_dir / "samples.json")
+                in_circuit_summary["in_distribution_n_patches"] = len(intv.in_circuit_stats)
 
-            # In-circuit out-distribution
             if hasattr(intv, 'in_circuit_stats_ood') and intv.in_circuit_stats_ood:
-                in_out_dir = sc_dir / "interventional" / "in_circuit" / "out_distribution"
+                in_out_dir = in_circuit_dir / "out_distribution"
                 in_out_dir.mkdir(parents=True, exist_ok=True)
                 _save_json({"stats": intv.in_circuit_stats_ood}, in_out_dir / "samples.json")
+                in_circuit_summary["out_distribution_n_patches"] = len(intv.in_circuit_stats_ood)
 
-            # Out-circuit in-distribution
+            _save_json(in_circuit_summary, in_circuit_dir / "summary.json")
+
+            # Out-circuit folder
+            out_circuit_dir = intv_dir / "out_circuit"
+            out_circuit_dir.mkdir(parents=True, exist_ok=True)
+            out_circuit_summary = {"ranked_metrics": ranked, "subfolders": ["in_distribution", "out_distribution"]}
+
             if hasattr(intv, 'out_circuit_stats') and intv.out_circuit_stats:
-                out_in_dir = sc_dir / "interventional" / "out_circuit" / "in_distribution"
+                out_in_dir = out_circuit_dir / "in_distribution"
                 out_in_dir.mkdir(parents=True, exist_ok=True)
                 _save_json({"stats": intv.out_circuit_stats}, out_in_dir / "samples.json")
+                out_circuit_summary["in_distribution_n_patches"] = len(intv.out_circuit_stats)
 
-            # Out-circuit out-distribution
             if hasattr(intv, 'out_circuit_stats_ood') and intv.out_circuit_stats_ood:
-                out_out_dir = sc_dir / "interventional" / "out_circuit" / "out_distribution"
+                out_out_dir = out_circuit_dir / "out_distribution"
                 out_out_dir.mkdir(parents=True, exist_ok=True)
                 _save_json({"stats": intv.out_circuit_stats_ood}, out_out_dir / "samples.json")
+                out_circuit_summary["out_distribution_n_patches"] = len(intv.out_circuit_stats_ood)
+
+            _save_json(out_circuit_summary, out_circuit_dir / "summary.json")
+            _save_json(intv_summary, intv_dir / "summary.json")
 
         # Counterfactual samples
         if hasattr(faith, 'counterfactual') and faith.counterfactual:
             cf = faith.counterfactual
+            cf_dir = sc_dir / "counterfactual"
+            cf_dir.mkdir(parents=True, exist_ok=True)
+
+            # Counterfactual summary (2x2 matrix)
+            cf_summary = {
+                "overall_counterfactual": getattr(cf, "overall_counterfactual", None),
+                "mean_sufficiency": getattr(cf, "mean_sufficiency", None),
+                "mean_completeness": getattr(cf, "mean_completeness", None),
+                "mean_necessity": getattr(cf, "mean_necessity", None),
+                "mean_independence": getattr(cf, "mean_independence", None),
+                "ranked_metrics": ranked,  # Include ranked metrics
+                "subfolders": ["sufficiency", "completeness", "necessity", "independence"],
+            }
 
             # Sufficiency
             if hasattr(cf, 'sufficiency_effects') and cf.sufficiency_effects:
-                suff_dir = sc_dir / "counterfactual" / "sufficiency"
+                suff_dir = cf_dir / "sufficiency"
                 suff_dir.mkdir(parents=True, exist_ok=True)
                 samples = [asdict(e) for e in cf.sufficiency_effects]
                 _save_json({"samples": samples, "n": len(samples)}, suff_dir / "samples.json")
+                cf_summary["sufficiency_n_samples"] = len(samples)
 
             # Completeness
             if hasattr(cf, 'completeness_effects') and cf.completeness_effects:
-                comp_dir = sc_dir / "counterfactual" / "completeness"
+                comp_dir = cf_dir / "completeness"
                 comp_dir.mkdir(parents=True, exist_ok=True)
                 samples = [asdict(e) for e in cf.completeness_effects]
                 _save_json({"samples": samples, "n": len(samples)}, comp_dir / "samples.json")
+                cf_summary["completeness_n_samples"] = len(samples)
 
             # Necessity
             if hasattr(cf, 'necessity_effects') and cf.necessity_effects:
-                nec_dir = sc_dir / "counterfactual" / "necessity"
+                nec_dir = cf_dir / "necessity"
                 nec_dir.mkdir(parents=True, exist_ok=True)
                 samples = [asdict(e) for e in cf.necessity_effects]
                 _save_json({"samples": samples, "n": len(samples)}, nec_dir / "samples.json")
+                cf_summary["necessity_n_samples"] = len(samples)
 
             # Independence
             if hasattr(cf, 'independence_effects') and cf.independence_effects:
-                ind_dir = sc_dir / "counterfactual" / "independence"
+                ind_dir = cf_dir / "independence"
                 ind_dir.mkdir(parents=True, exist_ok=True)
                 samples = [asdict(e) for e in cf.independence_effects]
                 _save_json({"samples": samples, "n": len(samples)}, ind_dir / "samples.json")
+                cf_summary["independence_n_samples"] = len(samples)
+
+            _save_json(cf_summary, cf_dir / "summary.json")
