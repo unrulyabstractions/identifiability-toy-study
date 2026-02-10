@@ -146,6 +146,93 @@ def plot_decision_boundary_logits(
     return output_path
 
 
+def plot_decision_boundary_accuracy(
+    model: "MLP",
+    output_path: str,
+    gate_name: str = "XOR",
+    x_range: tuple[float, float] = (-2, 2),
+    y_range: tuple[float, float] = (-2, 2),
+    n_samples: int = 10000,
+    marker_size: float = 50,
+    alpha: float = 0.3,
+    gate_idx: int = 0,
+    device: str = "cpu",
+) -> str:
+    """Plot where model predictions match ground truth.
+
+    Shows pred==gt where:
+    - pred = logits_to_binary(model(sample))[gate_idx]
+    - gt = target_gate(round(clamp(sample, 0, 1)))
+
+    Green = correct (pred==gt), Red = incorrect (pred!=gt)
+
+    Args:
+        model: The MLP model to visualize
+        output_path: Path to save the figure
+        gate_name: Name of the logic gate (XOR, AND, OR, etc.)
+        x_range: Range for x-axis sampling
+        y_range: Range for y-axis sampling
+        n_samples: Number of samples to draw
+        marker_size: Size of scatter plot markers
+        alpha: Transparency of markers
+        gate_idx: Which output gate to visualize
+        device: Device to run inference on
+
+    Returns:
+        Path to the saved figure
+    """
+    from src.domain import ALL_LOGIC_GATES
+    from src.math import logits_to_binary
+
+    # Get gate function
+    if gate_name not in ALL_LOGIC_GATES:
+        raise ValueError(f"Unknown gate: {gate_name}. Available: {list(ALL_LOGIC_GATES.keys())}")
+    gate = ALL_LOGIC_GATES[gate_name]
+
+    # Sample uniformly
+    x = np.random.uniform(x_range[0], x_range[1], n_samples)
+    y = np.random.uniform(y_range[0], y_range[1], n_samples)
+    samples = torch.tensor(np.stack([x, y], axis=1), dtype=torch.float32, device=device)
+
+    # Get model predictions
+    model = model.to(device)
+    with torch.inference_mode():
+        logits = model(samples)
+        preds = logits_to_binary(logits)[:, gate_idx].cpu().numpy()
+
+    # Compute ground truth: gt = gate(round(clamp(sample, 0, 1)))
+    # clamp to [0,1], then round (>= 0.5 -> 1, < 0.5 -> 0)
+    samples_np = samples.cpu().numpy()
+    clamped = np.clip(samples_np, 0, 1)
+    rounded = (clamped >= 0.5).astype(np.float32)
+    gt = gate.gate_fn(rounded)
+
+    # Compare: green=correct, red=incorrect
+    correct = (preds == gt)
+    accuracy = correct.mean()
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(8, 8))
+    colors = ['green' if c else 'red' for c in correct]
+    ax.scatter(x, y, c=colors, s=marker_size, alpha=alpha)
+    ax.set_xlim(x_range)
+    ax.set_ylim(y_range)
+    ax.set_xlabel('Input 1')
+    ax.set_ylabel('Input 2')
+    ax.set_title(f'Prediction Accuracy ({gate_name}): {accuracy:.1%} correct')
+
+    # Add unit square to show "valid" input region
+    rect = plt.Rectangle((0, 0), 1, 1, fill=False, edgecolor='black', linewidth=2, linestyle='--')
+    ax.add_patch(rect)
+
+    plt.tight_layout()
+
+    os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
+    plt.savefig(output_path, dpi=150)
+    plt.close(fig)
+    return output_path
+
+
 def plot_decision_boundary_comparison(
     model: "MLP",
     output_path: str,

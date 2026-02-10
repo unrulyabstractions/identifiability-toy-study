@@ -27,6 +27,7 @@ from src.attribution.viz.decision_boundary import (
     plot_decision_boundary_predictions,
     plot_decision_boundary_logits,
     plot_decision_boundary_comparison,
+    plot_decision_boundary_accuracy,
 )
 from src.attribution.viz.heatmaps import (
     plot_layer_attribution_heatmap,
@@ -115,6 +116,17 @@ def run_attribution_analysis(
             )
             print(f"   Saved: {path}")
             gate_results["decision_boundary_comparison"] = path
+
+            # Accuracy plot (pred == gt where gt = target_gate(round(clamp(sample, 0, 1))))
+            path = plot_decision_boundary_accuracy(
+                model,
+                os.path.join(output_dir, f"decision_boundary_accuracy_{gate_name}.png"),
+                gate_name=gate_name,
+                gate_idx=gate_idx,
+                device=device,
+            )
+            print(f"   Saved: {path}")
+            gate_results["decision_boundary_accuracy"] = path
         except Exception as e:
             print(f"   Error in decision boundary: {e}")
 
