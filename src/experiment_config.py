@@ -19,23 +19,79 @@ from typing import Any, Optional
 
 from src.schema_class import SchemaClass
 
+###############
+# TEST HELPER
+###############
+
+_FAST_TEST_MODE = False
+
+
+def set_test_mode_global(val: bool):
+    global _FAST_TEST_MODE
+    _FAST_TEST_MODE = val
+
+
+def get_default_train_n_samples():
+    if _FAST_TEST_MODE:
+        return 2**8
+    return 2**14
+
+
+def get_default_train_noise():
+    if _FAST_TEST_MODE:
+        return 0.00001
+    return 0.1
+
+
+def get_default_logic_gates():
+    ALL_GATES = ["XOR", "AND", "OR", "IMP"]
+    TEST_GATES = ["XOR"]
+    if _FAST_TEST_MODE:
+        return TEST_GATES
+    return ALL_GATES
+
+
+def get_default_max_subcircuits_per_gate():
+    if _FAST_TEST_MODE:
+        return 1
+    return 10
+
+
+def get_default_max_edge_variations_per_subcircuits():
+    if _FAST_TEST_MODE:
+        return 1
+    return 10
+
+
+def get_default_epsilon():
+    if _FAST_TEST_MODE:
+        return 0.01
+    return 0.2
+
+
+def get_default_faith_n_samples():
+    if _FAST_TEST_MODE:
+        return 5
+    return 200
+
+
+###############
+# CONFIGS
+###############
+
 
 @dataclass
 class DataParams(SchemaClass):
-    n_samples_train: int = 2**14
-    n_samples_val: int = 2**10
-    n_samples_test: int = 2**10
-    noise_std: float = 0.1
+    n_samples_train: int = get_default_train_n_samples()
+    n_samples_val: int = get_default_train_n_samples() // 8
+    n_samples_test: int = get_default_train_n_samples() // 8
+    noise_std: float = get_default_train_noise()
     skewed_distribution: bool = False
-
-
-ALL_GATES = ["XOR", "AND", "OR", "IMP"]
-TEST_GATES = ["XOR"]
 
 
 @dataclass
 class ModelParams(SchemaClass):
-    logic_gates: list[str] = field(default_factory=lambda: ALL_GATES)
+    logic_gates: list[str] = field(default_factory=lambda: get_default_logic_gates())
     width: int = 3
     depth: int = 2
 
@@ -50,17 +106,19 @@ class TrainParams(SchemaClass):
 
 @dataclass
 class IdentifiabilityConstraints(SchemaClass):
-    epsilon: float = 0.2
+    epsilon: float = get_default_epsilon()
 
 
 @dataclass
 class FaithfulnessConfig(SchemaClass):
     """Configuration for faithfulness analysis."""
 
-    max_subcircuits_per_gate: int = 5
-    max_edge_variations_per_subcircuits: int = 3
-    n_interventions_per_patch: int = 200
-    n_counterfactual_pairs: int = 200
+    max_subcircuits_per_gate: int = get_default_max_subcircuits_per_gate()
+    max_edge_variations_per_subcircuits: int = (
+        get_default_max_edge_variations_per_subcircuits()
+    )
+    n_interventions_per_patch: int = get_default_faith_n_samples()
+    n_counterfactual_pairs: int = get_default_faith_n_samples()
 
 
 @dataclass
@@ -105,7 +163,7 @@ class ExperimentConfig(SchemaClass):
     )
 
     # None = use all gates from target_logic_gates
-    num_gates_per_run: int | None = 2
+    num_gates_per_run: int | list[int] | None = 2
 
     num_runs: int = 1
 

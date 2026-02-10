@@ -3,6 +3,7 @@ import random
 from itertools import combinations, product
 
 from src.circuit import enumerate_circuits_for_architecture
+from src.domain import ALL_LOGIC_GATES
 from src.experiment_config import ExperimentConfig, TrialSetup
 from src.infra import parallel_map, profile
 from src.schemas import ExperimentResult
@@ -18,7 +19,9 @@ Look at .common.schemas for full definitions
 """
 
 
-def _get_layer_widths(input_size: int, output_size: int, width: int, depth: int) -> list[int]:
+def _get_layer_widths(
+    input_size: int, output_size: int, width: int, depth: int
+) -> list[int]:
     """Compute layer widths for an MLP architecture."""
     return [input_size] + [width] * depth + [output_size]
 
@@ -39,7 +42,9 @@ def _precompute_circuits_for_architectures(
             continue
 
         layer_widths = _get_layer_widths(input_size, output_size, width, depth)
-        logger and logger.info(f"Pre-computing circuits for width={width}, depth={depth}")
+        logger and logger.info(
+            f"Pre-computing circuits for width={width}, depth={depth}"
+        )
 
         with profile("enumerate_circuits"):
             subcircuits = enumerate_circuits_for_architecture(
@@ -55,6 +60,33 @@ def _precompute_circuits_for_architectures(
     return circuits_cache
 
 
+def build_gate_combinations(
+    target_gates: list[str],
+    num_gates_per_run: int | list[int] | None = None,
+) -> list[tuple[str, ...]]:
+    """Build shuffled list of gate combinations for each requested size."""
+    if num_gates_per_run is None:
+        return [tuple(target_gates)]
+
+    sizes = (
+        num_gates_per_run
+        if isinstance(num_gates_per_run, list)
+        else [num_gates_per_run]
+    )
+    combos = [
+        combo
+        for size in sizes
+        if size <= len(target_gates)
+        for combo in combinations(target_gates, size)
+    ]
+
+    if not combos:
+        return [tuple(target_gates)]
+
+    random.shuffle(combos)
+    return combos
+
+
 def run_experiment(
     cfg: ExperimentConfig,
     logger=None,
@@ -64,19 +96,11 @@ def run_experiment(
 
     experiment_result = ExperimentResult(config=cfg)
 
-    # Build gate combinations for trials
-    # Each element should be a tuple/list of gate names for one trial
-    if cfg.num_gates_per_run and cfg.num_gates_per_run <= len(cfg.target_logic_gates):
-        gates_combinations = list(
-            combinations(cfg.target_logic_gates, cfg.num_gates_per_run)
-        )
-        random.shuffle(gates_combinations)
-    else:
-        # Use all gates as a single combination
-        gates_combinations = [tuple(cfg.target_logic_gates)]
+    gates_combinations = build_gate_combinations(
+        cfg.target_logic_gates, cfg.num_gates_per_run
+    )
 
     # Determine input/output sizes from gates
-    from src.domain import ALL_LOGIC_GATES
     first_gate = gates_combinations[0][0]
     input_size = ALL_LOGIC_GATES[first_gate].n_inputs
     output_size = cfg.num_gates_per_run or len(cfg.target_logic_gates)
@@ -123,7 +147,14 @@ def run_experiment(
                 subcircuits, subcircuit_structures = circuits_cache[(width, depth)]
 
                 trial_settings.append(
-                    (trial_setup, trial_data, cfg, logger, subcircuits, subcircuit_structures)
+                    (
+                        trial_setup,
+                        trial_data,
+                        cfg,
+                        logger,
+                        subcircuits,
+                        subcircuit_structures,
+                    )
                 )
 
     results = parallel_map(
