@@ -292,3 +292,36 @@ def enumerate_subcircuits_with_constraint(
 ):
     """Enumerate subcircuits with full edge configs."""
     return enumerate_circuits(layer_widths, min_sparsity, full_edges_only=True)
+
+
+def calculate_subcircuit_idx(width: int, depth: int, node_mask_idx: int, edge_mask_idx: int) -> int:
+    """Calculate flat subcircuit index from node mask and edge mask indices.
+
+    Args:
+        width: Width of hidden layers
+        depth: Number of hidden layers
+        node_mask_idx: Index of the node mask pattern
+        edge_mask_idx: Index of the edge mask configuration
+
+    Returns:
+        Flat subcircuit index combining node and edge mask indices
+    """
+    max_edge_configs = 2 ** (width * width * (depth - 1))
+    return node_mask_idx * max_edge_configs + edge_mask_idx
+
+
+def get_node_and_edge_from_subcircuit_idx(width: int, depth: int, subcircuit_idx: int) -> tuple[int, int]:
+    """Inverse of calculate_subcircuit_idx.
+
+    Args:
+        width: Width of hidden layers
+        depth: Number of hidden layers
+        subcircuit_idx: Flat subcircuit index
+
+    Returns:
+        Tuple of (node_mask_idx, edge_mask_idx)
+    """
+    max_edge_configs = 2 ** (width * width * (depth - 1))
+    node_mask_idx = subcircuit_idx // max_edge_configs
+    edge_mask_idx = subcircuit_idx % max_edge_configs
+    return node_mask_idx, edge_mask_idx

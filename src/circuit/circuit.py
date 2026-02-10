@@ -12,12 +12,11 @@ from matplotlib.cm import ScalarMappable
 from torch import nn
 from tqdm import tqdm
 
-from src.model import Intervention, PatchShape
-from src.math import calculate_logit_similarity, logits_to_binary
 from src.domain import name_gate
 from src.infra import get_node_size
+from src.math import calculate_logit_similarity, logits_to_binary
+from src.model import Intervention, PatchShape
 
-from .grounding import Grounding, compute_local_tts, enumerate_tts
 from .enumeration import (
     NodePattern,
     count_node_patterns,
@@ -25,6 +24,7 @@ from .enumeration import (
     enumerate_node_patterns,
     full_edge_config,
 )
+from .grounding import Grounding, compute_local_tts, enumerate_tts
 
 
 @dataclass
@@ -865,6 +865,40 @@ def _enumerate_edge_mask_per_layer(in_mask, out_mask):
     return all_masks
 
 
+def enumerate_circuits_for_architecture(
+    layer_widths: list[int], min_sparsity: float = 0.0, use_tqdm: bool = True
+) -> list[Circuit]:
+    """
+    Enumerate valid node patterns as circuits with full edge connectivity.
+
+    Formula: (2^w - 1)^d valid patterns for d hidden layers of width w.
+    Each pattern has at least 1 active node per hidden layer.
+
+    Args:
+        layer_widths: List of layer sizes [input_size, hidden1, ..., output_size]
+        min_sparsity: Minimum node sparsity (fraction of hidden nodes OFF).
+            Default 0.0 includes all valid patterns.
+        use_tqdm: Whether to use tqdm to show progress
+
+    Returns:
+        List of circuits, one per valid node pattern, with full edges.
+    """
+    all_circuits = []
+    patterns = enumerate_node_patterns(layer_widths, min_sparsity)
+
+    if use_tqdm:
+        total = count_node_patterns(layer_widths)
+        patterns = tqdm(patterns, total=total, desc="Enumerating node patterns")
+
+    for pattern in patterns:
+        node_arrays = pattern.to_arrays()
+        edge_masks = full_edge_config(pattern)
+        circuit = Circuit(node_masks=node_arrays, edge_masks=edge_masks)
+        all_circuits.append(circuit)
+
+    return all_circuits
+
+
 def enumerate_all_valid_circuit(
     model, min_sparsity: float = 0.0, use_tqdm=True
 ) -> list[Circuit]:
@@ -883,22 +917,9 @@ def enumerate_all_valid_circuit(
     Returns:
         List of circuits, one per valid node pattern, with full edges.
     """
-    layer_widths = model.layer_sizes
-
-    all_circuits = []
-    patterns = enumerate_node_patterns(layer_widths, min_sparsity)
-
-    if use_tqdm:
-        total = count_node_patterns(layer_widths)
-        patterns = tqdm(patterns, total=total, desc="Enumerating node patterns")
-
-    for pattern in patterns:
-        node_arrays = pattern.to_arrays()
-        edge_masks = full_edge_config(pattern)
-        circuit = Circuit(node_masks=node_arrays, edge_masks=edge_masks)
-        all_circuits.append(circuit)
-
-    return all_circuits
+    return enumerate_circuits_for_architecture(
+        model.layer_sizes, min_sparsity, use_tqdm
+    )
 
 
 def enumerate_edge_variants(circuit: Circuit) -> list[Circuit]:
@@ -1015,7 +1036,9 @@ def find_circuits(
         it = tqdm(it, total=len(all_sks), desc="Evaluating circuits")
     for i, circuit in it:
         # Make predictions with the current circuit
-        sk_predictions = model(x, intervention=circuit.to_intervention(model.device))  # [n_samples, n_gates]
+        sk_predictions = model(
+            x, intervention=circuit.to_intervention(model.device)
+        )  # [n_samples, n_gates]
         bit_sk_pred = logits_to_binary(sk_predictions)  # [n_samples, n_gates]
 
         # Compute the accuracy with respect to the task
@@ -1024,7 +1047,8 @@ def find_circuits(
 
         # Compute similarity with model prediction based on logits
         logit_similarity = calculate_logit_similarity(
-            model_predictions, sk_predictions  # both [n_samples, n_gates]
+            model_predictions,
+            sk_predictions,  # both [n_samples, n_gates]
         ).item()
 
         # Compute similarity with model prediction

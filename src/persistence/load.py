@@ -43,12 +43,28 @@ def get_all_runs(output_dir: str | Path) -> list[Path]:
 
 
 def get_trial_dirs(run_dir: str | Path) -> list[Path]:
-    """Get all trial directories in a run directory."""
+    """Get all trial directories in a run directory.
+
+    Supports both new structure (trials/) and legacy structure (direct under run).
+    """
     run_dir = Path(run_dir)
+
+    # New structure: trials/ subfolder
+    trials_dir = run_dir / "trials"
+    if trials_dir.exists():
+        return [
+            d
+            for d in trials_dir.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        ]
+
+    # Legacy structure: trial dirs directly under run
+    # Exclude known non-trial directories
+    excluded = {"profiling", "trials"}
     return [
         d
         for d in run_dir.iterdir()
-        if d.is_dir() and not d.name.startswith(".")
+        if d.is_dir() and not d.name.startswith(".") and d.name not in excluded
     ]
 
 
@@ -82,24 +98,67 @@ def load_trial_metrics(trial_dir: str | Path) -> dict:
     return {}
 
 
-def load_trial_circuits(trial_dir: str | Path) -> dict:
-    """Load circuits.json from trial directory."""
-    trial_dir = Path(trial_dir)
-    circuits_path = trial_dir / "circuits.json"
+def load_run_circuits(run_dir: str | Path) -> dict:
+    """Load circuits.json from run directory (new structure)."""
+    run_dir = Path(run_dir)
+    circuits_path = run_dir / "circuits.json"
     if circuits_path.exists():
         with open(circuits_path, encoding="utf-8") as f:
             return json.load(f)
     return {}
 
 
-def load_trial_profiling(trial_dir: str | Path) -> dict:
-    """Load profiling.json from trial's profiling/ folder."""
+def load_trial_circuits(trial_dir: str | Path) -> dict:
+    """Load circuits.json from trial directory (legacy structure).
+
+    Also checks run-level for new structure.
+    """
     trial_dir = Path(trial_dir)
+    circuits_path = trial_dir / "circuits.json"
+    if circuits_path.exists():
+        with open(circuits_path, encoding="utf-8") as f:
+            return json.load(f)
+
+    # Try run-level for new structure
+    # trial_dir is either runs/run_X/trials/trial_id or runs/run_X/trial_id
+    run_dir = trial_dir.parent
+    if run_dir.name == "trials":
+        run_dir = run_dir.parent
+    return load_run_circuits(run_dir)
+
+
+def load_run_profiling(run_dir: str | Path, trial_id: str | None = None) -> dict:
+    """Load profiling.json from run-level profiling/ folder (new structure).
+
+    If trial_id is provided, returns just that trial's profiling data.
+    """
+    run_dir = Path(run_dir)
+    profiling_path = run_dir / "profiling" / "profiling.json"
+    if profiling_path.exists():
+        with open(profiling_path, encoding="utf-8") as f:
+            data = json.load(f)
+            if trial_id and isinstance(data, dict):
+                return data.get(trial_id, {})
+            return data
+    return {}
+
+
+def load_trial_profiling(trial_dir: str | Path) -> dict:
+    """Load profiling.json from trial's profiling/ folder (legacy) or run-level (new)."""
+    trial_dir = Path(trial_dir)
+
+    # Legacy: profiling in trial dir
     profiling_path = trial_dir / "profiling" / "profiling.json"
     if profiling_path.exists():
         with open(profiling_path, encoding="utf-8") as f:
             return json.load(f)
-    return {}
+
+    # New structure: profiling at run level
+    trial_id = trial_dir.name
+    run_dir = trial_dir.parent
+    if run_dir.name == "trials":
+        run_dir = run_dir.parent
+    return load_run_profiling(run_dir, trial_id)
 
 
 def load_model(trial_dir: str | Path, device: str = "cpu") -> Optional[MLP]:

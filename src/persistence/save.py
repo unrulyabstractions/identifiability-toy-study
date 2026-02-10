@@ -6,39 +6,41 @@ Changes to this module should be reflected in README.md.
 Structure:
     runs/run_{timestamp}/
         config.json           - ExperimentConfig only
-        {trial_id}/
-            setup.json        - TrialSetup
-            metrics.json      - Metrics (training, per-gate, robustness, faithfulness)
-            circuits.json     - Subcircuit masks and structure analysis
-            tensors.pt        - Test data, activations, weights
-            profiling/
-                profiling.json - Timing data (events, phase durations)
-            all_gates/
-                model.pt
-            spd/                    - SPD decomposition outputs
-                config.json         - SPD configuration used
-                decomposed_model.pt - Trained decomposed model
-                estimate.json       - Subcircuit clustering results
-                component_importance.npy - Per-component importance scores
-                coactivation_matrix.npy  - Component coactivation matrix
-                clustering/
-                    assignments.json    - Full clustering data
-                    importance_matrix.npy
-                    coactivation_matrix.npy
-                visualizations/
-                    importance_heatmap.png
-                    coactivation_matrix.png
-                    components_as_circuits.png
-                    uv_matrices.png
-                    summary.png
-                clusters/
-                    {cluster_idx}/
-                        analysis.json
-            {gate_name}/
-                full/
-                    decomposed_model.pt
-                {subcircuit_idx}/
-                    decomposed_model.pt
+        circuits.json         - Subcircuit masks and structure analysis (run-level)
+        profiling/
+            profiling.json    - Timing data (events, phase durations)
+        trials/
+            {trial_id}/
+                setup.json        - TrialSetup
+                metrics.json      - Metrics (training, per-gate, robustness, faithfulness)
+                tensors.pt        - Test data, activations, weights
+                all_gates/
+                    model.pt
+                gates/
+                    {gate_name}/
+                        full/
+                            decomposed_model.pt
+                        {subcircuit_idx}/
+                            decomposed_model.pt
+                spd/                    - SPD decomposition outputs
+                    config.json         - SPD configuration used
+                    decomposed_model.pt - Trained decomposed model
+                    estimate.json       - Subcircuit clustering results
+                    component_importance.npy - Per-component importance scores
+                    coactivation_matrix.npy  - Component coactivation matrix
+                    clustering/
+                        assignments.json    - Full clustering data
+                        importance_matrix.npy
+                        coactivation_matrix.npy
+                    visualizations/
+                        importance_heatmap.png
+                        coactivation_matrix.png
+                        components_as_circuits.png
+                        uv_matrices.png
+                        summary.png
+                    clusters/
+                        {cluster_idx}/
+                            analysis.json
 """
 
 import json
@@ -64,14 +66,16 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
 
     Creates:
         config.json           - Experiment configuration
-        {trial_id}/
-            setup.json        - Trial setup parameters
-            metrics.json      - All metrics and analysis results
-            circuits.json     - Circuit masks and structures
-            tensors.pt        - Tensor data (test samples, activations, weights)
-            all_gates/model.pt, decomposed_model.pt
-            {gate}/full/decomposed_model.pt
-            {gate}/{sc_idx}/decomposed_model.pt
+        circuits.json         - Circuit masks and structures (run-level)
+        profiling/profiling.json - Profiling data (run-level)
+        trials/
+            {trial_id}/
+                setup.json        - Trial setup parameters
+                metrics.json      - All metrics and analysis results
+                tensors.pt        - Tensor data (test samples, activations, weights)
+                all_gates/model.pt
+                gates/{gate}/full/decomposed_model.pt
+                gates/{gate}/{sc_idx}/decomposed_model.pt
     """
     os.makedirs(run_dir, exist_ok=True)
     run_dir = Path(run_dir)
@@ -80,9 +84,19 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
     config_data = filter_non_serializable(asdict(result.config))
     _save_json(config_data, run_dir / "config.json")
 
+    # Save circuits at run level (from first trial - all trials share same circuit enumeration)
+    _save_run_level_circuits(result, run_dir)
+
+    # Save profiling at run level (aggregate from all trials)
+    _save_run_level_profiling(result, run_dir)
+
+    # Create trials directory
+    trials_dir = run_dir / "trials"
+    trials_dir.mkdir(parents=True, exist_ok=True)
+
     # Save each trial
     for trial_id, trial in result.trials.items():
-        trial_dir = run_dir / trial_id
+        trial_dir = trials_dir / trial_id
         trial_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Setup JSON - trial parameters
@@ -95,26 +109,41 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
         metrics_data["trial_id"] = trial.trial_id
         _save_json(metrics_data, trial_dir / "metrics.json")
 
-        # 3. Circuits JSON - subcircuit masks and structure
-        circuits_data = {
-            "subcircuits": trial.subcircuits,  # Already list of dicts
-            "subcircuit_structure_analysis": trial.subcircuit_structure_analysis,
-        }
-        _save_json(circuits_data, trial_dir / "circuits.json")
-
-        # 4. Profiling JSON - timing data (in profiling/ folder)
-        profiling_dir = trial_dir / "profiling"
-        profiling_dir.mkdir(parents=True, exist_ok=True)
-        profiling_data = filter_non_serializable(asdict(trial.profiling))
-        _save_json(profiling_data, profiling_dir / "profiling.json")
-
-        # 5. Tensors PT - all tensor data
+        # 3. Tensors PT - all tensor data
         _save_tensors(trial, trial_dir, logger)
 
-        # 6. Models
+        # 4. Models
         _save_models(trial, trial_dir, logger)
 
     logger and logger.info(f"Saved results to {run_dir}")
+
+
+def _save_run_level_circuits(result: ExperimentResult, run_dir: Path):
+    """Save circuits.json at run level from first trial."""
+    # Get circuits from first trial (all trials share the same circuit enumeration)
+    first_trial = next(iter(result.trials.values()), None)
+    if first_trial is None:
+        return
+
+    circuits_data = {
+        "subcircuits": first_trial.subcircuits,
+        "subcircuit_structure_analysis": first_trial.subcircuit_structure_analysis,
+    }
+    _save_json(circuits_data, run_dir / "circuits.json")
+
+
+def _save_run_level_profiling(result: ExperimentResult, run_dir: Path):
+    """Save profiling data at run level (aggregated from all trials)."""
+    profiling_dir = run_dir / "profiling"
+    profiling_dir.mkdir(parents=True, exist_ok=True)
+
+    # Aggregate profiling from all trials
+    all_profiling = {}
+    for trial_id, trial in result.trials.items():
+        profiling_data = filter_non_serializable(asdict(trial.profiling))
+        all_profiling[trial_id] = profiling_data
+
+    _save_json(all_profiling, profiling_dir / "profiling.json")
 
 
 def _save_tensors(trial, trial_dir: Path, logger=None):
@@ -159,5 +188,3 @@ def _save_models(trial, trial_dir: Path, logger=None):
     if trial.model is not None:
         model_path = all_gates_dir / "model.pt"
         trial.model.save_to_file(str(model_path))
-
-

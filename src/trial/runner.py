@@ -23,13 +23,14 @@ def run_trial(
     device: str,
     logger: Any = None,
     debug: bool = False,
+    precomputed_circuits: tuple = None,
 ) -> TrialResult:
     """Run a complete training and analysis trial.
 
     This is the main entry point for running a single trial. It:
     1. Trains an MLP model on the provided data
     2. Computes activations and metrics
-    3. Enumerates and evaluates all subcircuits
+    3. Uses pre-computed subcircuits (or enumerates if not provided)
     4. Runs robustness and faithfulness analysis on best subcircuits
 
     Note: SPD decomposition is now run separately via src.spd.run_spd()
@@ -40,7 +41,8 @@ def run_trial(
         device: Main compute device (e.g., "cpu", "cuda", "mps")
         logger: Optional logger for status updates
         debug: Enable debug output
-        parallel_config: Optional parallelization config (defaults to ParallelConfig())
+        precomputed_circuits: Optional tuple of (subcircuits, subcircuit_structures)
+            pre-computed at experiment level
 
     Returns:
         TrialResult containing model, metrics, and analysis results
@@ -105,9 +107,14 @@ def run_trial(
 
     # ===== Circuit Finding =====
     update_status("STARTED_CIRCUITS")
-    subcircuits, subcircuit_structures = enumerate_circuits_phase(
-        model, parallel_config
-    )
+    if precomputed_circuits is not None:
+        # Use pre-computed circuits from experiment level
+        subcircuits, subcircuit_structures = precomputed_circuits
+    else:
+        # Fall back to computing circuits (for standalone trial runs)
+        subcircuits, subcircuit_structures = enumerate_circuits_phase(
+            model, parallel_config
+        )
     update_status("FINISHED_CIRCUITS")
 
     trial_result.subcircuits = [
@@ -162,18 +169,24 @@ def run_trial(
 
 
 def run_trial_in_parallel(ctx):
-    trial_setup, trial_data, cfg, logger = ctx
+    trial_setup, trial_data, cfg, logger, subcircuits, subcircuit_structures = ctx
     return run_trial(
         trial_setup,
         trial_data,
         device=cfg.device,
         logger=None,  # Disable logging in parallel to avoid interleaving
         debug=cfg.debug,
+        precomputed_circuits=(subcircuits, subcircuit_structures),
     )
 
 
 def run_trial_in_series(ctx):
-    trial_setup, trial_data, cfg, logger = ctx
+    trial_setup, trial_data, cfg, logger, subcircuits, subcircuit_structures = ctx
     return run_trial(
-        trial_setup, trial_data, device=cfg.device, logger=logger, debug=cfg.debug
+        trial_setup,
+        trial_data,
+        device=cfg.device,
+        logger=logger,
+        debug=cfg.debug,
+        precomputed_circuits=(subcircuits, subcircuit_structures),
     )
