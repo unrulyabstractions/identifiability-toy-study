@@ -38,6 +38,7 @@ class MLP(nn.Module):
         device: str = "cpu",
         debug: bool = False,
         logger=None,
+        gate_names: list[str] | None = None,
     ):
         """
         Initialize the MLP model.
@@ -56,6 +57,7 @@ class MLP(nn.Module):
         self.output_size = output_size
         self.layer_sizes = [input_size] + hidden_sizes + [output_size]
         self.activation = activation
+        self.gate_names = gate_names
 
         # Activation on all layers EXCEPT the last linear (final head outputs logits)
         self.layers = nn.ModuleList(
@@ -94,6 +96,7 @@ class MLP(nn.Module):
                 "input_size": self.input_size,
                 "output_size": self.output_size,
                 "activation": self.activation,
+                "gate_names": self.gate_names,
                 "state_dict": self.state_dict(),
             },
             filepath,
@@ -102,13 +105,14 @@ class MLP(nn.Module):
     @classmethod
     def load_from_file(cls, filepath, device: str = "cpu"):
         """Load a model from a file and return it."""
-        model_data = torch.load(filepath, map_location=device)
+        model_data = torch.load(filepath, map_location=device, weights_only=False)
         model = cls(
             model_data["hidden_sizes"],
             input_size=model_data["input_size"],
             output_size=model_data["output_size"],
             activation=model_data["activation"],
             device=device,
+            gate_names=model_data.get("gate_names"),
         )
         model.load_state_dict(model_data["state_dict"])
         return model

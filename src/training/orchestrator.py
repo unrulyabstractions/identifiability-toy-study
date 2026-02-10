@@ -47,6 +47,7 @@ def train_model(
         device=device,
         debug=debug,
         logger=logger,
+        gate_names=list(model_params.logic_gates) if model_params.logic_gates else None,
     )
 
     avg_loss = train_mlp(
