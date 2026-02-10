@@ -79,6 +79,14 @@ def draw_intervened_circuit(
     if intervened_nodes is None:
         intervened_nodes = set()
 
+    # Filter intervened_nodes to only include valid nodes based on layer_sizes
+    valid_nodes = {
+        f"({layer_idx},{node_idx})"
+        for layer_idx, n_nodes in enumerate(layer_sizes)
+        for node_idx in range(n_nodes)
+    }
+    intervened_nodes = intervened_nodes & valid_nodes
+
     if circuit is None:
         circuit = Circuit.full(layer_sizes)
 
@@ -154,7 +162,12 @@ def draw_intervened_circuit(
         for out_idx, row in enumerate(mask):
             for in_idx, active in enumerate(row):
                 if active:
-                    e = (f"({layer_idx},{in_idx})", f"({layer_idx + 1},{out_idx})")
+                    # Skip edges to non-existent nodes
+                    src_node = f"({layer_idx},{in_idx})"
+                    dst_node = f"({layer_idx + 1},{out_idx})"
+                    if src_node not in valid_nodes or dst_node not in valid_nodes:
+                        continue
+                    e = (src_node, dst_node)
                     edges.append(e)
                     G.add_edge(e[0], e[1])
 
