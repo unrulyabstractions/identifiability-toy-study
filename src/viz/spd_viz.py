@@ -68,7 +68,7 @@ def visualize_spd_experiment(
     """
     Visualize complete SPD results for an experiment.
 
-    Creates visualizations in run_dir/{trial_id}/spd/visualizations/
+    Creates visualizations in run_dir/trials/{trial_id}/spd/visualizations/
 
     Args:
         spd_results: SpdResults from run_spd()
@@ -82,7 +82,7 @@ def visualize_spd_experiment(
     config_id = spd_results.config.get_config_id()
 
     for trial_id, trial_result in spd_results.per_trial.items():
-        spd_dir = run_dir / trial_id / "spd"
+        spd_dir = run_dir / "trials" / trial_id / "spd"
         viz_dir = spd_dir / "visualizations"
         viz_dir.mkdir(parents=True, exist_ok=True)
 
