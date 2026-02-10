@@ -89,7 +89,7 @@ def save_spd_results(results: "SpdResults", run_dir: str | Path) -> None:
     run_dir = Path(run_dir)
 
     for trial_id, trial_result in results.per_trial.items():
-        trial_spd_dir = run_dir / trial_id / "spd"
+        trial_spd_dir = run_dir / "trials" / trial_id / "spd"
         trial_spd_dir.mkdir(parents=True, exist_ok=True)
 
         # Save config
@@ -137,12 +137,14 @@ def load_spd_results(run_dir: str | Path, device: str = "cpu") -> "SpdResults | 
     from .types import SPDConfig, SpdResults, SpdTrialResult
 
     run_dir = Path(run_dir)
+    trials_dir = run_dir / "trials"
 
     # Find trial directories with spd/ subfolders
     trial_dirs_with_spd = []
-    for trial_dir in run_dir.iterdir():
-        if trial_dir.is_dir() and (trial_dir / "spd").exists():
-            trial_dirs_with_spd.append(trial_dir)
+    if trials_dir.exists():
+        for trial_dir in trials_dir.iterdir():
+            if trial_dir.is_dir() and (trial_dir / "spd").exists():
+                trial_dirs_with_spd.append(trial_dir)
 
     if not trial_dirs_with_spd:
         return None

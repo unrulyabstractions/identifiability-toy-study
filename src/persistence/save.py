@@ -140,15 +140,59 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
     logger and logger.info(f"Saved results to {run_dir}")
 
 
+def _simplify_circuit_masks(subcircuit: dict) -> dict:
+    """Simplify circuit masks for storage per T1.d.2.
+
+    Per spec:
+    - node_masks: Only include middle layers (input is never masked,
+      output is always 1 for single gate)
+    - edge_masks: Organize as if we have 1 output (since we always
+      do separate_into_k_mlps)
+
+    Args:
+        subcircuit: Dict with 'node_masks' and 'edge_masks' keys
+
+    Returns:
+        Simplified subcircuit dict with only middle layer masks
+    """
+    node_masks = subcircuit.get("node_masks", [])
+    edge_masks = subcircuit.get("edge_masks", [])
+
+    # node_masks: exclude input (index 0) and output (last index)
+    # Middle layers are indices 1 to n-2 inclusive
+    simplified_node_masks = node_masks[1:-1] if len(node_masks) > 2 else []
+
+    # edge_masks: keep as-is since each gate will use adapted version
+    # but we could simplify to single output if needed
+    # For now, keep edge_masks but note they apply to full architecture
+    simplified_edge_masks = edge_masks
+
+    return {
+        "idx": subcircuit.get("idx"),
+        "node_masks": simplified_node_masks,
+        "edge_masks": simplified_edge_masks,
+    }
+
+
 def _save_run_level_circuits(result: ExperimentResult, run_dir: Path):
-    """Save circuits.json at run level from first trial."""
+    """Save circuits.json at run level from first trial.
+
+    Saves simplified circuit masks per T1.d.2:
+    - node_masks: Only middle layers (not input/output)
+    - edge_masks: Full connections (used with adapt_masks_for_gate)
+    """
     # Get circuits from first trial (all trials share the same circuit enumeration)
     first_trial = next(iter(result.trials.values()), None)
     if first_trial is None:
         return
 
+    # Simplify each subcircuit's masks
+    simplified_subcircuits = [
+        _simplify_circuit_masks(sc) for sc in first_trial.subcircuits
+    ]
+
     circuits_data = {
-        "subcircuits": first_trial.subcircuits,
+        "subcircuits": simplified_subcircuits,
         "subcircuit_structure_analysis": first_trial.subcircuit_structure_analysis,
     }
     _save_json(circuits_data, run_dir / "circuits.json")
@@ -512,6 +556,24 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
             "description": "Mapping of subcircuit indices to structural properties",
             "subcircuits": mask_idx_map,
         }, subcircuits_dir / "mask_idx_map.json")
+
+    # Save summary.json with key statistics
+    n_subcircuits = len(first_trial.subcircuits) if first_trial and first_trial.subcircuits else 0
+    summary = {
+        "n_subcircuits": n_subcircuits,
+        "n_trials": len(result.trials),
+        "epsilon": epsilon,
+        "gates": list(gate_subcircuit_scores.keys()),
+        "best_by_gate": {
+            gate: rankings[0] if rankings else None
+            for gate, rankings in averaged_rankings.items()
+        },
+        "n_passing_by_gate": {
+            gate: sum(1 for r in rankings if r.get("passes_epsilon", False))
+            for gate, rankings in averaged_rankings.items()
+        },
+    }
+    _save_json(summary, subcircuits_dir / "summary.json")
 
     # Save explanation
     _save_explanation(subcircuits_dir / "explanation.md", SUBCIRCUITS_EXPLANATION)

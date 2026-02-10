@@ -42,6 +42,37 @@ from .profiling_viz import (
 )
 
 
+def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) -> None:
+    """Generate circuit diagrams for all subcircuits at run level.
+
+    Creates:
+        subcircuits/circuit_diagrams/
+            subcircuits/
+                {idx}.png - Diagram for each subcircuit
+    """
+    # Get circuits from first trial
+    first_trial = next(iter(result.trials.values()), None)
+    if not first_trial or not first_trial.subcircuits:
+        return
+
+    diagrams_dir = Path(run_dir) / "subcircuits" / "circuit_diagrams"
+    subcircuits_dir = diagrams_dir / "subcircuits"
+    subcircuits_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate diagram for each subcircuit (limit to first 20 to avoid too many files)
+    max_diagrams = min(20, len(first_trial.subcircuits))
+    print(f"[VIZ] Generating {max_diagrams} circuit diagrams...")
+
+    for sc_data in first_trial.subcircuits[:max_diagrams]:
+        idx = sc_data.get("idx", 0)
+        circuit = Circuit.from_dict(sc_data)
+        path = subcircuits_dir / f"{idx}.png"
+        try:
+            circuit.visualize(file_path=str(path), node_size="small")
+        except Exception as e:
+            print(f"  Warning: Failed to generate diagram for subcircuit {idx}: {e}")
+
+
 def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
     """
     Generate all visualizations for experiment using pre-computed data.
@@ -65,12 +96,16 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
 
     os.makedirs(run_dir, exist_ok=True)
 
+    # Generate circuit diagrams at run level
+    with timed_phase("Circuit Diagrams"):
+        _generate_circuit_diagrams(result, run_dir)
+
     viz_paths = {}
 
     for trial_id, trial in result.trials.items():
         subcircuits = [Circuit.from_dict(s) for s in trial.subcircuits]
         viz_paths[trial_id] = {}
-        trial_dir = os.path.join(run_dir, trial_id)
+        trial_dir = os.path.join(run_dir, "trials", trial_id)
 
         # --- profiling/ (timing visualizations) - run in parallel ---
         if trial.profiling and trial.profiling.events:
@@ -289,6 +324,11 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                 # Save result.json files in each subfolder and summary.json in faithfulness/
                 interventional_dir = os.path.join(faithfulness_dir, "interventional") if has_faith else None
                 counterfactual_dir = os.path.join(faithfulness_dir, "counterfactual") if has_faith else None
+                # Create directories if they don't exist
+                if interventional_dir:
+                    os.makedirs(interventional_dir, exist_ok=True)
+                if counterfactual_dir:
+                    os.makedirs(counterfactual_dir, exist_ok=True)
                 json_paths = save_faithfulness_json(
                     observational_dir=observational_dir,
                     interventional_dir=interventional_dir,
