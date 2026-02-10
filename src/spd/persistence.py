@@ -84,7 +84,7 @@ def save_spd_results(results: "SpdResults", run_dir: str | Path) -> None:
                 component_importance.npy
                 coactivation_matrix.npy
     """
-    from .runner import analyze_and_visualize_spd
+    from .spd_executor import analyze_and_visualize_spd
 
     run_dir = Path(run_dir)
 

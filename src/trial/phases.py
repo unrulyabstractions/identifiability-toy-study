@@ -27,7 +27,7 @@ from src.infra import ParallelTasks, profile, profile_fn
 from src.training import train_model
 
 # Re-export functions that have @profile_fn directly on them
-# These are called from gate_analysis.py and runner.py
+# These are called from gate_analysis.py and trial_executor.py
 __all__ = [
     "batch_compute_metrics",
     "batch_evaluate_edge_variants",

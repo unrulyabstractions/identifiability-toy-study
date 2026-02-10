@@ -226,7 +226,7 @@ Examples:
     if not args.no_viz:
         print(f"\nGenerating visualizations...")
         try:
-            from src.spd.runner import analyze_and_visualize_spd
+            from src.spd.spd_executor import analyze_and_visualize_spd
 
             viz_result = analyze_and_visualize_spd(
                 decomposed_model=decomposed,
