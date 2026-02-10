@@ -180,16 +180,48 @@ def _save_run_level_circuits(result: ExperimentResult, run_dir: Path):
     Saves simplified circuit masks per T1.d.2:
     - node_masks: Only middle layers (not input/output)
     - edge_masks: Full connections (used with adapt_masks_for_gate)
+    - subcircuit_idx, node_mask_idx, edge_mask_idx: Index mappings
     """
     # Get circuits from first trial (all trials share the same circuit enumeration)
     first_trial = next(iter(result.trials.values()), None)
     if first_trial is None:
         return
 
-    # Simplify each subcircuit's masks
-    simplified_subcircuits = [
-        _simplify_circuit_masks(sc) for sc in first_trial.subcircuits
-    ]
+    # Track unique node patterns to assign node_mask_idx
+    seen_node_patterns = {}  # tuple(hidden_masks) -> node_mask_idx
+    node_mask_counter = 0
+    edge_mask_counts = {}  # node_mask_idx -> count (for edge_mask_idx)
+
+    simplified_subcircuits = []
+    for sc in first_trial.subcircuits:
+        subcircuit_idx = sc.get("idx", len(simplified_subcircuits))
+        node_masks = sc.get("node_masks", [])
+        edge_masks = sc.get("edge_masks", [])
+
+        # Simplify node_masks: exclude input (index 0) and output (last index)
+        simplified_node_masks = node_masks[1:-1] if len(node_masks) > 2 else []
+
+        # Extract hidden layer pattern for node_mask_idx assignment
+        hidden_pattern = tuple(tuple(m) for m in simplified_node_masks)
+
+        # Assign node_mask_idx
+        if hidden_pattern not in seen_node_patterns:
+            seen_node_patterns[hidden_pattern] = node_mask_counter
+            edge_mask_counts[node_mask_counter] = 0
+            node_mask_counter += 1
+        node_mask_idx = seen_node_patterns[hidden_pattern]
+
+        # Assign edge_mask_idx (increments for each subcircuit with same node pattern)
+        edge_mask_idx = edge_mask_counts[node_mask_idx]
+        edge_mask_counts[node_mask_idx] += 1
+
+        simplified_subcircuits.append({
+            "subcircuit_idx": subcircuit_idx,
+            "node_mask_idx": node_mask_idx,
+            "edge_mask_idx": edge_mask_idx,
+            "node_masks": simplified_node_masks,
+            "edge_masks": edge_masks,
+        })
 
     circuits_data = {
         "subcircuits": simplified_subcircuits,
