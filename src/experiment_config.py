@@ -75,6 +75,12 @@ def get_default_faith_n_samples():
     return 200
 
 
+def get_default_num_gates_per_run():
+    if _FAST_TEST_MODE:
+        return [2]
+    return [1, 2, 3]
+
+
 ###############
 # CONFIGS
 ###############
@@ -163,7 +169,9 @@ class ExperimentConfig(SchemaClass):
     )
 
     # None = use all gates from target_logic_gates
-    num_gates_per_run: int | list[int] | None = 2
+    num_gates_per_run: int | list[int] | None = field(
+        default_factory=lambda: get_default_num_gates_per_run()
+    )
 
     num_runs: int = 1
 

@@ -7,8 +7,8 @@ Two-phase approach:
 """
 
 import itertools
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
 
 import numpy as np
 
@@ -16,6 +16,7 @@ import numpy as np
 @dataclass
 class NodePattern:
     """A node mask pattern for each layer (as integer bitmasks)."""
+
     layer_masks: tuple[int, ...]  # Bitmask for each layer (1 = active)
     layer_widths: tuple[int, ...]  # Width of each layer
 
@@ -28,7 +29,7 @@ class NodePattern:
 
     def active_counts(self) -> list[int]:
         """Number of active nodes per layer."""
-        return [bin(m).count('1') for m in self.layer_masks]
+        return [bin(m).count("1") for m in self.layer_masks]
 
     def sparsity(self) -> float:
         """Fraction of hidden nodes that are OFF (0 = all active, 1 = none active)."""
@@ -94,7 +95,7 @@ def enumerate_node_patterns(
 
         # Optional sparsity filter
         if min_sparsity > 0:
-            active = sum(bin(m).count('1') for m in hidden_masks)
+            active = sum(bin(m).count("1") for m in hidden_masks)
             sparsity = (total_hidden - active) / total_hidden
             if sparsity < min_sparsity:
                 continue
@@ -196,7 +197,9 @@ def _enumerate_layer_edges(
     # Enumerate all 2^(n_edges) combinations
     for bits in range(1, 1 << n_edges):  # Skip all-zeros
         # Decode bits to edge pattern
-        edge_pattern = np.array([(bits >> i) & 1 for i in range(n_edges)], dtype=np.int8)
+        edge_pattern = np.array(
+            [(bits >> i) & 1 for i in range(n_edges)], dtype=np.int8
+        )
         edge_pattern = edge_pattern.reshape(n_out, n_in)
 
         if require_connectivity:
@@ -294,7 +297,9 @@ def enumerate_subcircuits_with_constraint(
     return enumerate_circuits(layer_widths, min_sparsity, full_edges_only=True)
 
 
-def calculate_subcircuit_idx(width: int, depth: int, node_mask_idx: int, edge_mask_idx: int) -> int:
+def calculate_subcircuit_idx(
+    width: int, depth: int, node_mask_idx: int, edge_mask_idx: int
+) -> int:
     """Calculate flat subcircuit index from node mask and edge mask indices.
 
     Args:
@@ -310,7 +315,9 @@ def calculate_subcircuit_idx(width: int, depth: int, node_mask_idx: int, edge_ma
     return node_mask_idx * max_edge_configs + edge_mask_idx
 
 
-def get_node_and_edge_from_subcircuit_idx(width: int, depth: int, subcircuit_idx: int) -> tuple[int, int]:
+def get_node_and_edge_from_subcircuit_idx(
+    width: int, depth: int, subcircuit_idx: int
+) -> tuple[int, int]:
     """Inverse of calculate_subcircuit_idx.
 
     Args:

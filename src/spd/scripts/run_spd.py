@@ -1,44 +1,34 @@
 """Run SPD analysis on a saved MLP model.
 
-This script provides a command-line interface for running SPD (Stochastic
-Parameter Decomposition) analysis on a trained MLP model. It decomposes
-the model weights into interpretable components and identifies functional
-subcircuits.
-
 Usage:
     python -m src.spd.scripts.run_spd MODEL_PATH [OPTIONS]
 
 Examples:
-    # Basic usage
-    python -m src.spd.scripts.run_spd tmp/test_xor_and.pt
-
-    # Skip visualizations
-    python -m src.spd.scripts.run_spd tmp/test_xor_and.pt --no-viz
-
-    # Custom configuration
+    python -m src.spd.scripts.run_spd tmp/model.pt
+    python -m src.spd.scripts.run_spd tmp/model.pt --no-viz
     python -m src.spd.scripts.run_spd tmp/model.pt --n-components 30 --steps 1000
-
-    # Save results to specific directory
-    python -m src.spd.scripts.run_spd tmp/model.pt --output-dir results/spd_analysis
 """
 
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 import torch
 
+from src.infra import print_profile, profile_fn
+from src.model import MLP
+from src.spd.analysis import run_spd_analysis
+from src.spd.decomposition import decompose_mlp
+from src.spd.spd_executor import analyze_and_visualize_spd
+from src.spd.types import SPDConfig, SPDAnalysisResult
 
-def main():
+
+def get_args() -> Any:
+    """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description="Run SPD analysis on a saved MLP model",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python -m src.spd.scripts.run_spd tmp/test_xor_and.pt
-  python -m src.spd.scripts.run_spd tmp/model.pt --no-viz
-  python -m src.spd.scripts.run_spd tmp/model.pt --n-components 30 --steps 1000
-        """,
     )
     parser.add_argument(
         "model_path",
@@ -48,7 +38,7 @@ Examples:
     parser.add_argument(
         "--no-viz",
         action="store_true",
-        help="Skip visualization (useful for headless servers)",
+        help="Skip visualization generation",
     )
     parser.add_argument(
         "--output-dir",
@@ -86,167 +76,202 @@ Examples:
         default=4096,
         help="Batch size for SPD training (default: 4096)",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    # Check model path exists
-    model_path = Path(args.model_path)
-    if not model_path.exists():
-        print(f"Error: Model file not found: {model_path}")
+
+def validate_model_path(model_path: str) -> Path:
+    """Validate that model path exists."""
+    path = Path(model_path)
+    if not path.exists():
+        print(f"Error: Model file not found: {path}")
         sys.exit(1)
+    return path
 
-    # Create output directory
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load model
-    print(f"\n{'='*60}")
-    print("SPD Analysis")
-    print(f"{'='*60}")
-    print(f"\nLoading model from: {model_path}")
-
-    from src.model import MLP
-
+@profile_fn("load_model")
+def load_model(model_path: Path, device: str) -> MLP:
+    """Load MLP model from file."""
     try:
-        model = MLP.load_from_file(model_path, device=args.device)
+        return MLP.load_from_file(model_path, device=device)
     except Exception as e:
         print(f"Error loading model: {e}")
         sys.exit(1)
 
+
+def generate_training_data(model: MLP, batch_size: int, device: str) -> tuple[torch.Tensor, torch.Tensor]:
+    """Generate training data from all canonical boolean inputs."""
+    n_inputs = model.input_size
+    n_total_inputs = 2**n_inputs
+
+    # Create all binary input combinations
+    all_inputs = torch.zeros(n_total_inputs, n_inputs, device=device)
+    for i in range(n_total_inputs):
+        for j in range(n_inputs):
+            all_inputs[i, j] = (i >> j) & 1
+
+    # Repeat for batch diversity
+    n_repeats = max(1, batch_size // n_total_inputs)
+    x = all_inputs.repeat(n_repeats, 1)
+
+    with torch.no_grad():
+        y = model(x)
+
+    return x, y
+
+
+@profile_fn("spd_decomposition")
+def run_decomposition(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    model: MLP,
+    device: str,
+    config: SPDConfig,
+) -> Any:
+    """Run SPD decomposition on model."""
+    return decompose_mlp(x, y, model, device, config)
+
+
+@profile_fn("spd_analysis")
+def run_analysis(
+    decomposed: Any,
+    model: MLP,
+    device: str,
+) -> SPDAnalysisResult:
+    """Analyze decomposed model."""
+    return run_spd_analysis(
+        decomposed_model=decomposed,
+        target_model=model,
+        n_inputs=model.input_size,
+        gate_names=model.gate_names,
+        device=device,
+    )
+
+
+@profile_fn("spd_visualization")
+def run_visualization(
+    decomposed: Any,
+    model: MLP,
+    output_dir: Path,
+    device: str,
+) -> dict[str, str]:
+    """Generate visualizations."""
+    try:
+        viz_result = analyze_and_visualize_spd(
+            decomposed_model=decomposed,
+            target_model=model,
+            output_dir=output_dir,
+            gate_names=model.gate_names,
+            n_inputs=model.input_size,
+            device=device,
+        )
+        return viz_result.visualization_paths
+    except Exception as e:
+        print(f"  Warning: Visualization failed: {e}")
+        return {}
+
+
+def print_model_info(model: MLP) -> None:
+    """Print model architecture information."""
     print(f"  Architecture: {model.input_size} -> {model.hidden_sizes} -> {model.output_size}")
     print(f"  Activation: {model.activation}")
     if model.gate_names:
         print(f"  Gates: {model.gate_names}")
 
-    # Generate training data using all 4 canonical boolean inputs
-    print("\nGenerating training data...")
-    n_inputs = model.input_size
-    n_total_inputs = 2**n_inputs
 
-    # Create all binary input combinations
-    all_inputs = torch.zeros(n_total_inputs, n_inputs, device=args.device)
-    for i in range(n_total_inputs):
-        for j in range(n_inputs):
-            all_inputs[i, j] = (i >> j) & 1
+def print_config(config: SPDConfig) -> None:
+    """Print SPD configuration."""
+    print(f"  Components/layer: {config.n_components}")
+    print(f"  Training steps: {config.steps}")
+    print(f"  Batch size: {config.batch_size}")
+    print(f"  Importance coeff: {config.importance_coeff}")
 
-    # Repeat inputs for batch diversity during SPD training
-    n_repeats = max(1, args.batch_size // n_total_inputs)
-    x = all_inputs.repeat(n_repeats, 1)
 
-    # Get model outputs
-    with torch.no_grad():
-        y = model(x)
+def print_analysis_results(analysis: SPDAnalysisResult) -> None:
+    """Print analysis results."""
+    print(f"\n  Validation Metrics:")
+    print(f"    MMCS (directional): {analysis.mmcs:.4f}")
+    print(f"    ML2R (magnitude): {analysis.ml2r:.4f}")
+    print(f"    Faithfulness loss: {analysis.faithfulness_loss:.6f}")
 
-    print(f"  Input shape: {x.shape}")
-    print(f"  Output shape: {y.shape}")
+    print(f"\n  Component Health:")
+    print(f"    Alive: {analysis.n_alive_components}")
+    print(f"    Dead: {analysis.n_dead_components}")
+
+    print(f"\n  Clustering:")
+    print(f"    Clusters: {analysis.n_clusters}")
+
+    if analysis.clusters:
+        for cluster in analysis.clusters[:5]:
+            n_comp = len(cluster.component_indices)
+            func = cluster.function_mapping or "UNKNOWN"
+            print(f"    Cluster {cluster.cluster_idx}: {n_comp} components -> {func}")
+
+    if analysis.importance_matrix is not None:
+        imp = analysis.importance_matrix
+        print(f"\n  Importance Matrix [{imp.shape[0]}x{imp.shape[1]}]:")
+        print(f"    Mean: {imp.mean():.3f}, Std: {imp.std():.3f}")
+
+
+def main() -> None:
+    args = get_args()
+
+    # Validate inputs
+    model_path = validate_model_path(args.model_path)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Header
+    print(f"\n{'='*60}")
+    print("  SPD Analysis")
+    print(f"{'='*60}")
+
+    # Load model
+    print(f"\nLoading model: {model_path}")
+    model = load_model(model_path, args.device)
+    print_model_info(model)
+
+    # Generate data
+    print(f"\nGenerating training data...")
+    x, y = generate_training_data(model, args.batch_size, args.device)
+    print(f"  Shape: {x.shape} -> {y.shape}")
 
     # Configure SPD
-    from src.spd.types import SPDConfig
-
-    spd_config = SPDConfig(
+    config = SPDConfig(
         n_components=args.n_components,
         steps=args.steps,
         batch_size=args.batch_size,
         importance_coeff=args.importance_coeff,
     )
+    print(f"\nSPD Config:")
+    print_config(config)
 
-    print(f"\nSPD Configuration:")
-    print(f"  Components per layer: {spd_config.n_components}")
-    print(f"  Training steps: {spd_config.steps}")
-    print(f"  Batch size: {spd_config.batch_size}")
-    print(f"  Importance coefficient: {spd_config.importance_coeff}")
-
-    # Run SPD decomposition
-    print(f"\nRunning SPD decomposition...")
-    from src.spd.decomposition import decompose_mlp
-
-    decomposed = decompose_mlp(x, y, model, args.device, spd_config)
-
-    n_components = decomposed.get_n_components()
-    print(f"  Total components: {n_components}")
+    # Run decomposition
+    print(f"\nRunning decomposition...")
+    decomposed = run_decomposition(x, y, model, args.device, config)
+    print(f"  Components: {decomposed.get_n_components()}")
 
     # Run analysis
-    print(f"\nAnalyzing decomposition...")
-    from src.spd.analysis import run_spd_analysis
-
-    analysis = run_spd_analysis(
-        decomposed_model=decomposed,
-        target_model=model,
-        n_inputs=n_inputs,
-        gate_names=model.gate_names,
-        device=args.device,
-    )
-
-    # Print results
-    print(f"\n{'='*60}")
-    print("Results")
-    print(f"{'='*60}")
-
-    print(f"\nValidation Metrics:")
-    print(f"  MMCS (directional alignment): {analysis.mmcs:.4f}")
-    print(f"  ML2R (magnitude ratio): {analysis.ml2r:.4f}")
-    print(f"  Faithfulness loss: {analysis.faithfulness_loss:.6f}")
-
-    print(f"\nComponent Health:")
-    print(f"  Alive components: {analysis.n_alive_components}")
-    print(f"  Dead components: {analysis.n_dead_components}")
-    if analysis.dead_component_labels:
-        print(f"  Dead: {', '.join(analysis.dead_component_labels[:5])}")
-        if len(analysis.dead_component_labels) > 5:
-            print(f"         ... and {len(analysis.dead_component_labels) - 5} more")
-
-    print(f"\nClustering:")
-    print(f"  Number of clusters: {analysis.n_clusters}")
-
-    if analysis.clusters:
-        print(f"\nCluster Details:")
-        for cluster in analysis.clusters:
-            n_components = len(cluster.component_indices)
-            func = cluster.function_mapping or "UNKNOWN"
-            print(f"  Cluster {cluster.cluster_idx}: {n_components} components -> {func}")
-            if cluster.component_labels:
-                labels = cluster.component_labels[:3]
-                suffix = f" ... +{n_components - 3} more" if n_components > 3 else ""
-                print(f"    Components: {', '.join(labels)}{suffix}")
-
-    # Show importance matrix summary
-    if analysis.importance_matrix is not None:
-        imp = analysis.importance_matrix
-        print(f"\nImportance Matrix [{imp.shape[0]} inputs x {imp.shape[1]} components]:")
-        print(f"  Mean: {imp.mean():.3f}, Std: {imp.std():.3f}")
-        print(f"  Min: {imp.min():.3f}, Max: {imp.max():.3f}")
-
-        # Show per-input activation patterns
-        input_labels = [f"({(i>>0)&1},{(i>>1)&1})" for i in range(min(4, imp.shape[0]))]
-        print(f"\n  Per-input mean CI:")
-        for i, label in enumerate(input_labels):
-            active_count = (imp[i] > 0.5).sum()
-            print(f"    {label}: mean={imp[i].mean():.3f}, active={active_count}/{imp.shape[1]}")
+    print(f"\nAnalyzing...")
+    analysis = run_analysis(decomposed, model, args.device)
+    print_analysis_results(analysis)
 
     # Visualizations
     if not args.no_viz:
         print(f"\nGenerating visualizations...")
-        try:
-            from src.spd.spd_executor import analyze_and_visualize_spd
-
-            viz_result = analyze_and_visualize_spd(
-                decomposed_model=decomposed,
-                target_model=model,
-                output_dir=output_dir,
-                gate_names=model.gate_names,
-                n_inputs=n_inputs,
-                device=args.device,
-            )
-            print(f"  Saved to: {output_dir}/")
-            for name, path in viz_result.visualization_paths.items():
-                print(f"    - {path}")
-        except Exception as e:
-            print(f"  Warning: Visualization failed: {e}")
+        paths = run_visualization(decomposed, model, output_dir, args.device)
+        if paths:
+            print(f"  Output: {output_dir}/")
+            for name, path in list(paths.items())[:5]:
+                print(f"    - {Path(path).name}")
     else:
         print(f"\nSkipping visualizations (--no-viz)")
 
+    # Footer
     print(f"\n{'='*60}")
-    print("Done!")
-    print(f"{'='*60}\n")
+    print("  Done!")
+    print(f"{'='*60}")
+
+    print_profile()
 
 
 if __name__ == "__main__":

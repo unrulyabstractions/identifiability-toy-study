@@ -1,10 +1,11 @@
 """Run probing analysis on a saved MLP.
 
 Usage:
-    python -m src.probing.scripts.run_probing [SAVED_MLP_PATH] [--output-dir OUTPUT_DIR]
+    python -m src.probing.scripts.run_probing [SAVED_MLP_PATH] [--output-dir OUTPUT_DIR] [--no-viz]
 
 Example:
     python -m src.probing.scripts.run_probing tmp/test_xor_and.pt --output-dir tmp/probing_output
+    python -m src.probing.scripts.run_probing tmp/test_xor_and.pt --no-viz
 """
 
 import argparse
@@ -15,9 +16,12 @@ from src.model import MLP
 from src.probing.analysis import (
     probe_for_gate,
     probe_for_input,
+)
+from src.probing.viz.plots import (
     plot_probe_accuracy,
     plot_probe_comparison,
     plot_feature_importance,
+    plot_layer_accuracy_heatmap,
 )
 
 
@@ -27,6 +31,7 @@ def run_probing_analysis(
     device: str = "cpu",
     n_samples: int = 1000,
     n_epochs: int = 100,
+    show_viz: bool = True,
 ) -> dict:
     """Run comprehensive probing analysis on a saved MLP.
 
@@ -36,6 +41,7 @@ def run_probing_analysis(
         device: Device to run on
         n_samples: Number of samples for probing
         n_epochs: Number of training epochs
+        show_viz: Whether to generate visualizations
 
     Returns:
         Dictionary with all probing results
@@ -49,7 +55,7 @@ def run_probing_analysis(
 
     # Setup output directory
     if output_dir is None:
-        output_dir = os.path.dirname(model_path) or "."
+        output_dir = os.path.join("tmp", "probing_output")
     os.makedirs(output_dir, exist_ok=True)
     print(f"Output directory: {output_dir}")
 
@@ -81,23 +87,24 @@ def run_probing_analysis(
         results[f"gate_{gate_name}"] = analysis
 
         # Plot accuracy
-        path = plot_probe_accuracy(
-            analysis,
-            os.path.join(output_dir, f"probe_accuracy_{gate_name}.png"),
-        )
-        print(f"  Saved: {path}")
-
-        # Plot feature importance for best layer
-        if analysis.best_layer in analysis.probe_results:
-            best_result = analysis.probe_results[analysis.best_layer]
-            path = plot_feature_importance(
-                best_result,
-                os.path.join(output_dir, f"feature_importance_{gate_name}_layer{analysis.best_layer}.png"),
+        if show_viz:
+            path = plot_probe_accuracy(
+                analysis,
+                os.path.join(output_dir, f"probe_accuracy_{gate_name}.png"),
             )
             print(f"  Saved: {path}")
 
+            # Plot feature importance for best layer
+            if analysis.best_layer in analysis.probe_results:
+                best_result = analysis.probe_results[analysis.best_layer]
+                path = plot_feature_importance(
+                    best_result,
+                    os.path.join(output_dir, f"feature_importance_{gate_name}_layer{analysis.best_layer}.png"),
+                )
+                print(f"  Saved: {path}")
+
     # Compare gate probes
-    if len(gate_analyses) > 1:
+    if show_viz and len(gate_analyses) > 1:
         path = plot_probe_comparison(
             gate_analyses,
             os.path.join(output_dir, "probe_comparison_gates.png"),
@@ -127,20 +134,32 @@ def run_probing_analysis(
         results[f"input_{input_idx}"] = analysis
 
         # Plot accuracy
-        path = plot_probe_accuracy(
-            analysis,
-            os.path.join(output_dir, f"probe_accuracy_input{input_idx}.png"),
-        )
-        print(f"  Saved: {path}")
+        if show_viz:
+            path = plot_probe_accuracy(
+                analysis,
+                os.path.join(output_dir, f"probe_accuracy_input{input_idx}.png"),
+            )
+            print(f"  Saved: {path}")
 
     # Compare input probes
-    if len(input_analyses) > 1:
+    if show_viz and len(input_analyses) > 1:
         path = plot_probe_comparison(
             input_analyses,
             os.path.join(output_dir, "probe_comparison_inputs.png"),
             title="Probe Accuracy: Input Features",
         )
         print(f"\nSaved comparison: {path}")
+
+    # Combined heatmap
+    if show_viz:
+        all_analyses = gate_analyses + input_analyses
+        if len(all_analyses) > 1:
+            path = plot_layer_accuracy_heatmap(
+                all_analyses,
+                os.path.join(output_dir, "probe_accuracy_heatmap.png"),
+                title="Probe Accuracy by Target and Layer",
+            )
+            print(f"\nSaved heatmap: {path}")
 
     print("\n" + "=" * 50)
     print("Probing analysis complete!")
@@ -167,7 +186,7 @@ def main():
         "--output-dir",
         type=str,
         default=None,
-        help="Output directory for results",
+        help="Output directory for results (default: tmp/probing_output)",
     )
     parser.add_argument(
         "--device",
@@ -187,6 +206,11 @@ def main():
         default=100,
         help="Number of training epochs",
     )
+    parser.add_argument(
+        "--no-viz",
+        action="store_true",
+        help="Skip visualization generation",
+    )
 
     args = parser.parse_args()
 
@@ -200,6 +224,7 @@ def main():
         device=args.device,
         n_samples=args.n_samples,
         n_epochs=args.n_epochs,
+        show_viz=not args.no_viz,
     )
 
 

@@ -40,6 +40,7 @@ def run_attribution_analysis(
     output_dir: str | None = None,
     device: str = "cpu",
     n_samples: int = 100,
+    show_viz: bool = True,
 ) -> dict:
     """Run comprehensive attribution analysis on a saved MLP.
 
@@ -48,6 +49,7 @@ def run_attribution_analysis(
         output_dir: Directory for output files (default: model_path directory)
         device: Device to run on
         n_samples: Number of samples for analysis
+        show_viz: Whether to generate and save visualizations
 
     Returns:
         Dictionary with all attribution results
@@ -88,47 +90,50 @@ def run_attribution_analysis(
         gate_results = {}
 
         # 1. Decision Boundary Visualization
-        print("\n1. Decision Boundary Visualization...")
-        try:
-            path = plot_decision_boundary_predictions(
-                model,
-                os.path.join(output_dir, f"decision_boundary_scatter_{gate_name}.png"),
-                gate_idx=gate_idx,
-                device=device,
-            )
-            print(f"   Saved: {path}")
-            gate_results["decision_boundary_scatter"] = path
+        if show_viz:
+            print("\n1. Decision Boundary Visualization...")
+            try:
+                path = plot_decision_boundary_predictions(
+                    model,
+                    os.path.join(output_dir, f"decision_boundary_scatter_{gate_name}.png"),
+                    gate_idx=gate_idx,
+                    device=device,
+                )
+                print(f"   Saved: {path}")
+                gate_results["decision_boundary_scatter"] = path
 
-            path = plot_decision_boundary_logits(
-                model,
-                os.path.join(output_dir, f"decision_boundary_logits_{gate_name}.png"),
-                gate_idx=gate_idx,
-                device=device,
-            )
-            print(f"   Saved: {path}")
-            gate_results["decision_boundary_logits"] = path
+                path = plot_decision_boundary_logits(
+                    model,
+                    os.path.join(output_dir, f"decision_boundary_logits_{gate_name}.png"),
+                    gate_idx=gate_idx,
+                    device=device,
+                )
+                print(f"   Saved: {path}")
+                gate_results["decision_boundary_logits"] = path
 
-            path = plot_decision_boundary_comparison(
-                model,
-                os.path.join(output_dir, f"decision_boundary_comparison_{gate_name}.png"),
-                gate_idx=gate_idx,
-                device=device,
-            )
-            print(f"   Saved: {path}")
-            gate_results["decision_boundary_comparison"] = path
+                path = plot_decision_boundary_comparison(
+                    model,
+                    os.path.join(output_dir, f"decision_boundary_comparison_{gate_name}.png"),
+                    gate_idx=gate_idx,
+                    device=device,
+                )
+                print(f"   Saved: {path}")
+                gate_results["decision_boundary_comparison"] = path
 
-            # Accuracy plot (pred == gt where gt = target_gate(round(clamp(sample, 0, 1))))
-            path = plot_decision_boundary_accuracy(
-                model,
-                os.path.join(output_dir, f"decision_boundary_accuracy_{gate_name}.png"),
-                gate_name=gate_name,
-                gate_idx=gate_idx,
-                device=device,
-            )
-            print(f"   Saved: {path}")
-            gate_results["decision_boundary_accuracy"] = path
-        except Exception as e:
-            print(f"   Error in decision boundary: {e}")
+                # Accuracy plot (pred == gt where gt = target_gate(round(clamp(sample, 0, 1))))
+                path = plot_decision_boundary_accuracy(
+                    model,
+                    os.path.join(output_dir, f"decision_boundary_accuracy_{gate_name}.png"),
+                    gate_name=gate_name,
+                    gate_idx=gate_idx,
+                    device=device,
+                )
+                print(f"   Saved: {path}")
+                gate_results["decision_boundary_accuracy"] = path
+            except Exception as e:
+                print(f"   Error in decision boundary: {e}")
+        else:
+            print("\n1. Decision Boundary Visualization... (skipped, --no-viz)")
 
         # 2. Input Attribution
         print("\n2. Input Attribution...")
@@ -146,12 +151,13 @@ def run_attribution_analysis(
             gate_results["integrated_gradients"] = ig_result
 
             # Plot input attribution
-            path = plot_input_attribution(
-                ig_result,
-                os.path.join(output_dir, f"input_attribution_{gate_name}.png"),
-                title=f"Input Attribution - {gate_name}",
-            )
-            print(f"   Saved: {path}")
+            if show_viz:
+                path = plot_input_attribution(
+                    ig_result,
+                    os.path.join(output_dir, f"input_attribution_{gate_name}.png"),
+                    title=f"Input Attribution - {gate_name}",
+                )
+                print(f"   Saved: {path}")
         except Exception as e:
             print(f"   Error in input attribution: {e}")
 
@@ -167,7 +173,7 @@ def run_attribution_analysis(
             gate_results["activation_patching"] = patching_result
 
             # Plot
-            if patching_result.layer_attributions:
+            if show_viz and patching_result.layer_attributions:
                 path = plot_layer_attribution_heatmap(
                     patching_result,
                     os.path.join(output_dir, f"patching_heatmap_{gate_name}.png"),
@@ -186,7 +192,7 @@ def run_attribution_analysis(
             gate_results["mean_ablation"] = ablation_result
 
             # Plot
-            if ablation_result.layer_attributions:
+            if show_viz and ablation_result.layer_attributions:
                 path = plot_layer_attribution_heatmap(
                     ablation_result,
                     os.path.join(output_dir, f"ablation_heatmap_{gate_name}.png"),
@@ -207,7 +213,7 @@ def run_attribution_analysis(
             gate_results["eap"] = eap_result
 
             # Plot
-            if eap_result.layer_attributions:
+            if show_viz and eap_result.layer_attributions:
                 path = plot_layer_attribution_heatmap(
                     eap_result,
                     os.path.join(output_dir, f"eap_heatmap_{gate_name}.png"),
@@ -270,6 +276,11 @@ def main():
         default=100,
         help="Number of samples for analysis",
     )
+    parser.add_argument(
+        "--no-viz",
+        action="store_true",
+        help="Skip generating visualizations",
+    )
 
     args = parser.parse_args()
 
@@ -282,6 +293,7 @@ def main():
         output_dir=args.output_dir,
         device=args.device,
         n_samples=args.n_samples,
+        show_viz=not args.no_viz,
     )
 
 
