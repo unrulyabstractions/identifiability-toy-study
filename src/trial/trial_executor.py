@@ -8,6 +8,7 @@ from src.infra import ParallelConfig, get_eval_device, set_seeds, update_status_
 from src.math import calculate_match_rate, logits_to_binary
 from src.schemas import TrialData, TrialResult
 from src.training import train_model
+from src.training_analysis import do_training_analysis
 
 from .gate_analysis import analyze_gate
 from .phases import (
@@ -65,7 +66,7 @@ def run_trial(
     output_size = len(gate_names)
 
     # train_model has @profile_fn("Train Model") directly in helpers.py
-    model, avg_loss, val_acc = train_model(
+    model, avg_loss, val_acc, training_record = train_model(
         train_params=setup.train_params,
         model_params=setup.model_params,
         data=data,
@@ -116,6 +117,18 @@ def run_trial(
             model, parallel_config
         )
     update_status("FINISHED_CIRCUITS")
+
+    # ===== Training Analysis (Epiplexity Estimation) =====
+    update_status("STARTED_TRAINING_ANALYSIS")
+    training_analysis = do_training_analysis(
+        training_record=training_record,
+        model=model,
+        x=data.train.x,
+        y=data.train.y,
+        device=device,
+    )
+    trial_metrics.training_analysis = training_analysis
+    update_status("FINISHED_TRAINING_ANALYSIS")
 
     trial_result.subcircuits = [
         {"idx": idx, **s.to_dict()} for idx, s in enumerate(subcircuits)

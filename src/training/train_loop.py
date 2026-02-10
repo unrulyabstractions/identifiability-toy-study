@@ -1,6 +1,8 @@
 # loop.py
 """Training functions for neural network models."""
 
+import math
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -8,6 +10,10 @@ from torch import optim
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.math import calculate_loss, calculate_match_rate, logits_to_binary
+from src.training_analysis.types import StepRecord, TrainingRecord
+
+# Convert nats (natural log) to bits (log base 2)
+NATS_TO_BITS = 1.0 / math.log(2)
 
 
 def train_mlp(
@@ -23,7 +29,8 @@ def train_mlp(
     val_frequency: int = 1,
     early_stopping_steps: int = 10,
     logger=None,
-) -> float:
+    record_training: bool = True,
+) -> TrainingRecord:
     """
     Train an MLP model using the given data and hyperparameters.
 
@@ -39,17 +46,22 @@ def train_mlp(
         loss_target: Stop training if loss falls below this
         val_frequency: How often to log validation metrics
         early_stopping_steps: Stop if loss doesn't improve for this many epochs
-        l1_lambda: L1 regularization coefficient
         logger: Optional logger for progress output
+        record_training: Whether to record step-by-step losses for epiplexity analysis
 
     Returns:
-        Final average training loss
+        TrainingRecord with training history and losses for epiplexity analysis
     """
     device = model.device
 
-    # DataLoader
-    dataset = TensorDataset(x, y)
+    # Create dataset with indices for tracking
+    n_samples = len(x)
+    indices = torch.arange(n_samples)
+    dataset = TensorDataset(indices, x, y)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    # Loss function with SUM reduction for epiplexity (total bits per batch)
+    epiplexity_loss_fn = nn.BCEWithLogitsLoss(reduction="sum")
 
     # Optimizer
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
@@ -57,23 +69,48 @@ def train_mlp(
     best_loss = float("inf")
     bad_epochs = 0
     val_acc = 0.0
+    avg_loss = 0.0
+
+    # Phase 1: Record losses before each gradient update
+    step_records: list[StepRecord] = []
+    global_step = 0
 
     # Training loop
     for epoch in range(epochs):
         model.train()
         epoch_loss = []
-        for inputs, targets in dataloader:
+
+        for batch_indices, inputs, targets in dataloader:
             inputs = inputs.to(device)
             targets = targets.to(device)
+            batch_indices_list = batch_indices.tolist()
 
+            # Phase 1: Record loss BEFORE gradient update (for epiplexity)
+            if record_training:
+                model.eval()
+                with torch.no_grad():
+                    logits_pre = model(inputs)
+                    loss_pre_nats = epiplexity_loss_fn(logits_pre, targets)
+                    loss_pre_bits = loss_pre_nats.item() * NATS_TO_BITS
+
+                step_records.append(
+                    StepRecord(
+                        step=global_step,
+                        batch_indices=batch_indices_list,
+                        loss_pre_bits=loss_pre_bits,
+                    )
+                )
+                model.train()
+
+            # Standard training step
             optimizer.zero_grad()
             logits = model(inputs)
-
             loss = calculate_loss(model, logits, targets)
-
             loss.backward()
             optimizer.step()
+
             epoch_loss.append(loss.item())
+            global_step += 1
 
         avg_loss = float(np.mean(epoch_loss))
 
@@ -108,4 +145,10 @@ def train_mlp(
         if avg_loss < loss_target or bad_epochs >= early_stopping_steps:
             break
 
-    return avg_loss
+    # Return TrainingRecord with Phase 1 data
+    training_record = TrainingRecord(
+        avg_loss=avg_loss,
+        batch_size=batch_size,
+        step_records=step_records,
+    )
+    return training_record

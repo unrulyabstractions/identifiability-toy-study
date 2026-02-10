@@ -1,14 +1,14 @@
 # orchestrator.py
 """High-level training orchestration."""
 
-from src.infra import profile_fn
-from src.model import MLP
 from src.experiment_config import ModelParams, TrainParams
-from src.schemas import TrialData
+from src.infra import profile_fn
 from src.math import (
     calculate_match_rate,
     logits_to_binary,
 )
+from src.model import MLP
+from src.schemas import TrialData
 
 from .train_loop import train_mlp
 
@@ -23,6 +23,7 @@ def train_model(
     debug: bool = False,
     input_size: int = 2,
     output_size: int = 1,
+    record_training: bool = True,
 ):
     """
     Train an MLP model with the given parameters.
@@ -50,7 +51,7 @@ def train_model(
         gate_names=list(model_params.logic_gates) if model_params.logic_gates else None,
     )
 
-    avg_loss = train_mlp(
+    training_record = train_mlp(
         model=model,
         x=data.train.x,
         y=data.train.y,
@@ -66,4 +67,4 @@ def train_model(
     val_acc = calculate_match_rate(
         data.val.y, logits_to_binary(model(data.val.x))
     ).item()
-    return model, avg_loss, val_acc
+    return model, training_record.avg_loss, val_acc, training_record

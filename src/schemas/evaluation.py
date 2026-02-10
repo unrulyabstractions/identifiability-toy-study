@@ -17,6 +17,7 @@ from src.schema_class import SchemaClass
 # Forward references for circular imports
 if TYPE_CHECKING:
     from .faithfulness import FaithfulnessMetrics
+    from src.training_analysis.types import TrainingAnalysis
 
 
 @dataclass
@@ -59,8 +60,8 @@ class ProfilingData(SchemaClass):
     phase_durations_ms: dict[str, float] = field(default_factory=dict)
 
 
-# Type alias for subcircuit keys: either int (legacy) or (node_idx, edge_var_idx) tuple
-SubcircuitKey = int | tuple[int, int]
+# Type alias for subcircuit keys: (node_idx, edge_var_idx) tuple
+SubcircuitKey = tuple[int, int]
 
 
 @dataclass
@@ -69,6 +70,7 @@ class Metrics(SchemaClass):
     avg_loss: float | None = None
     val_acc: float | None = None
     test_acc: float | None = None
+    training_analysis: "TrainingAnalysis | None" = None
 
     # Circuit Info
     per_gate_metrics: dict[str, GateMetrics] = field(default_factory=dict)
