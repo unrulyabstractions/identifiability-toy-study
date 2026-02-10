@@ -33,6 +33,45 @@ from src.schemas import (
 )
 
 
+def _reconstruct_full_subcircuit(sc: dict) -> dict:
+    """Reconstruct full node_masks from simplified (hidden-only) masks.
+
+    The saved circuits.json has node_masks for hidden layers only (per T1.d.1).
+    This function reconstructs full node_masks including input and output layers.
+
+    Args:
+        sc: Subcircuit dict with simplified node_masks and edge_masks
+
+    Returns:
+        Subcircuit dict with full node_masks for visualization
+    """
+    node_masks = sc.get("node_masks", [])
+    edge_masks = sc.get("edge_masks", [])
+
+    if not edge_masks:
+        return sc
+
+    # Infer input size from first edge_mask columns
+    input_size = len(edge_masks[0][0]) if edge_masks[0] and edge_masks[0][0] else 2
+
+    # Infer output size from last edge_mask rows
+    output_size = len(edge_masks[-1]) if edge_masks[-1] else 1
+
+    # Input layer: all nodes active (not masked)
+    input_mask = [1] * input_size
+
+    # Output layer: all nodes active (single gate output)
+    output_mask = [1] * output_size
+
+    # Reconstruct full node_masks: [input, hidden..., output]
+    full_node_masks = [input_mask] + node_masks + [output_mask]
+
+    return {
+        **sc,
+        "node_masks": full_node_masks,
+    }
+
+
 def get_all_runs(output_dir: str | Path) -> list[Path]:
     """Get all run directories in output_dir, sorted by name (newest first)."""
     output_dir = Path(output_dir)
@@ -343,8 +382,9 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
         trial.layer_weights = tensors.get("layer_weights")
         trial.layer_biases = tensors.get("layer_biases")
 
-        # Load circuits
-        trial.subcircuits = circuits_data.get("subcircuits", [])
+        # Load circuits (reconstruct full node_masks from simplified storage)
+        raw_subcircuits = circuits_data.get("subcircuits", [])
+        trial.subcircuits = [_reconstruct_full_subcircuit(sc) for sc in raw_subcircuits]
         trial.subcircuit_structure_analysis = circuits_data.get("subcircuit_structure_analysis", [])
 
         # Load metrics (reconstruct nested structures)
@@ -473,11 +513,29 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                 cf_data = f.get("counterfactual", {})
                 counterfactual = None
                 if cf_data:
+                    # Load effects lists
+                    suff_effects = [
+                        CounterfactualEffect(**e) for e in cf_data.get("sufficiency_effects", [])
+                    ]
+                    comp_effects = [
+                        CounterfactualEffect(**e) for e in cf_data.get("completeness_effects", [])
+                    ]
+                    nec_effects = [
+                        CounterfactualEffect(**e) for e in cf_data.get("necessity_effects", [])
+                    ]
+                    ind_effects = [
+                        CounterfactualEffect(**e) for e in cf_data.get("independence_effects", [])
+                    ]
                     counterfactual = CounterfactualMetrics(
+                        sufficiency_effects=suff_effects,
+                        completeness_effects=comp_effects,
+                        necessity_effects=nec_effects,
+                        independence_effects=ind_effects,
                         mean_sufficiency=cf_data.get("mean_sufficiency", 0),
                         mean_completeness=cf_data.get("mean_completeness", 0),
                         mean_necessity=cf_data.get("mean_necessity", 0),
                         mean_independence=cf_data.get("mean_independence", 0),
+                        overall_counterfactual=cf_data.get("overall_counterfactual", 0),
                     )
 
                 trial.metrics.per_gate_bests_faith[gate_name].append(

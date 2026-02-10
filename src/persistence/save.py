@@ -449,30 +449,53 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
 
     Creates:
         subcircuits/
-            subcircuit_score_ranking.json      - Rankings by gate (averaged across trials)
+            subcircuit_score_ranking.json      - Rankings by gate with all faithfulness scores
             subcircuit_score_ranking_per_trial.json - Per-trial rankings
-            mask_idx_map.json                  - Mapping node/edge indices to subcircuit idx
+            mask_idx_map.json                  - Mapping (node_mask_idx, edge_mask_idx) -> subcircuit_idx
             explanation.md                     - How to read these files
     """
     subcircuits_dir = run_dir / "subcircuits"
     subcircuits_dir.mkdir(parents=True, exist_ok=True)
 
-    # Get epsilon from config
+    # Get epsilon and architecture from config
     epsilon = 0.2
-    if hasattr(result.config, "base_trial") and hasattr(result.config.base_trial, "constraints"):
-        epsilon = getattr(result.config.base_trial.constraints, "epsilon", 0.2)
+    width = 3
+    depth = 2
+    if hasattr(result.config, "base_trial"):
+        if hasattr(result.config.base_trial, "constraints"):
+            epsilon = getattr(result.config.base_trial.constraints, "epsilon", 0.2)
+        if hasattr(result.config.base_trial, "model_params"):
+            width = getattr(result.config.base_trial.model_params, "width", 3)
+            depth = getattr(result.config.base_trial.model_params, "depth", 2)
 
     # Aggregate scores by (gate, subcircuit_idx) across all trials
-    gate_subcircuit_scores = {}  # gate -> subcircuit_idx -> list of accuracies
+    # Now including faithfulness scores (observational, interventional, counterfactual)
+    gate_subcircuit_data = {}  # gate -> subcircuit_idx -> list of score dicts
 
     per_trial_rankings = {}  # trial_id -> gate -> rankings
 
     for trial_id, trial in result.trials.items():
         per_trial_rankings[trial_id] = {}
+        bests_keys = trial.metrics.per_gate_bests or {}
+        bests_faith = trial.metrics.per_gate_bests_faith or {}
 
         for gate, gate_metrics in trial.metrics.per_gate_metrics.items():
-            if gate not in gate_subcircuit_scores:
-                gate_subcircuit_scores[gate] = {}
+            if gate not in gate_subcircuit_data:
+                gate_subcircuit_data[gate] = {}
+
+            # Build node_idx -> first faithfulness mapping for this gate
+            # Keys are (node_idx, edge_var_idx) tuples, we want to map by node_idx
+            gate_best_keys = bests_keys.get(gate, [])
+            gate_faith_list = bests_faith.get(gate, [])
+            node_idx_to_faith = {}  # node_idx -> first FaithfulnessMetrics
+            for k, faith in zip(gate_best_keys, gate_faith_list):
+                if isinstance(k, (tuple, list)):
+                    node_idx = k[0]
+                else:
+                    node_idx = k
+                # Only keep first faithfulness per node_idx (best edge variant)
+                if node_idx not in node_idx_to_faith:
+                    node_idx_to_faith[node_idx] = faith
 
             sc_metrics = getattr(gate_metrics, "subcircuit_metrics", [])
             trial_ranking = []
@@ -481,32 +504,80 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
                 idx = sm.idx
                 acc = sm.accuracy or 0
 
-                if idx not in gate_subcircuit_scores[gate]:
-                    gate_subcircuit_scores[gate][idx] = []
-                gate_subcircuit_scores[gate][idx].append(acc)
+                # Get faithfulness data for this subcircuit by node_idx
+                faith_data = node_idx_to_faith.get(idx)
+
+                # Extract faithfulness scores
+                obs_score = None
+                int_score = None
+                cf_score = None
+                if faith_data:
+                    if hasattr(faith_data, 'observational') and faith_data.observational:
+                        obs = faith_data.observational
+                        obs_score = getattr(obs, 'overall_observational', None)
+                    if hasattr(faith_data, 'interventional') and faith_data.interventional:
+                        int_data = faith_data.interventional
+                        int_score = getattr(int_data, 'overall_interventional', None)
+                    if hasattr(faith_data, 'counterfactual') and faith_data.counterfactual:
+                        cf_data = faith_data.counterfactual
+                        cf_score = getattr(cf_data, 'overall_counterfactual', None)
+
+                if idx not in gate_subcircuit_data[gate]:
+                    gate_subcircuit_data[gate][idx] = []
+
+                gate_subcircuit_data[gate][idx].append({
+                    "accuracy": acc,
+                    "bit_similarity": sm.bit_similarity,
+                    "observational": obs_score,
+                    "interventional": int_score,
+                    "counterfactual": cf_score,
+                })
 
                 trial_ranking.append({
                     "subcircuit_idx": idx,
                     "accuracy": acc,
                     "bit_similarity": sm.bit_similarity,
+                    "observational": obs_score,
+                    "interventional": int_score,
+                    "counterfactual": cf_score,
                 })
 
             trial_ranking.sort(key=lambda x: x.get("accuracy", 0), reverse=True)
             per_trial_rankings[trial_id][gate] = trial_ranking
 
-    # Compute averaged rankings per gate
+    # Compute averaged rankings per gate with all scores
     averaged_rankings = {}
-    for gate, subcircuit_accs in gate_subcircuit_scores.items():
+    for gate, subcircuit_data in gate_subcircuit_data.items():
         gate_rankings = []
-        for idx, accs in subcircuit_accs.items():
-            avg_acc = sum(accs) / len(accs) if accs else 0
+        for idx, data_list in subcircuit_data.items():
+            n = len(data_list)
+            accs = [d["accuracy"] for d in data_list]
+            avg_acc = sum(accs) / n if n > 0 else 0
+
+            # Average faithfulness scores (ignoring None)
+            obs_scores = [d["observational"] for d in data_list if d["observational"] is not None]
+            int_scores = [d["interventional"] for d in data_list if d["interventional"] is not None]
+            cf_scores = [d["counterfactual"] for d in data_list if d["counterfactual"] is not None]
+
             gate_rankings.append({
                 "subcircuit_idx": idx,
                 "avg_accuracy": avg_acc,
-                "n_trials": len(accs),
+                "n_trials": n,
                 "min_accuracy": min(accs) if accs else 0,
                 "max_accuracy": max(accs) if accs else 0,
                 "passes_epsilon": avg_acc >= (1 - epsilon),
+                "observational": {
+                    "avg": sum(obs_scores) / len(obs_scores) if obs_scores else None,
+                    "n": len(obs_scores),
+                },
+                "interventional": {
+                    "avg": sum(int_scores) / len(int_scores) if int_scores else None,
+                    "n": len(int_scores),
+                },
+                "counterfactual": {
+                    "avg": sum(cf_scores) / len(cf_scores) if cf_scores else None,
+                    "n": len(cf_scores),
+                },
             })
         gate_rankings.sort(key=lambda x: x.get("avg_accuracy", 0), reverse=True)
         averaged_rankings[gate] = gate_rankings
@@ -524,37 +595,73 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
         "per_trial": per_trial_rankings,
     }, subcircuits_dir / "subcircuit_score_ranking_per_trial.json")
 
-    # Create mask_idx_map from circuits data
+    # Create mask_idx_map with node_mask_idx, edge_mask_idx -> subcircuit_idx mapping
     first_trial = next(iter(result.trials.values()), None)
     if first_trial and first_trial.subcircuits:
-        mask_idx_map = []
+        # Track unique node patterns to assign node_mask_idx
+        seen_node_patterns = {}  # tuple(hidden_masks) -> node_mask_idx
+        node_mask_counter = 0
+
+        mask_idx_entries = []
+        idx_mapping = {}  # (node_mask_idx, edge_mask_idx) -> subcircuit_idx
+
         for sc in first_trial.subcircuits:
-            idx = sc.get("idx", len(mask_idx_map))
-            # Compute structural metrics
+            subcircuit_idx = sc.get("idx", len(mask_idx_entries))
             node_masks = sc.get("node_masks", [])
             edge_masks = sc.get("edge_masks", [])
 
-            # Node sparsity: fraction of active hidden nodes
+            # Extract hidden layer masks only (exclude input/output)
+            hidden_masks = tuple(tuple(m) for m in node_masks[1:-1]) if len(node_masks) > 2 else ()
+
+            # Assign node_mask_idx
+            if hidden_masks not in seen_node_patterns:
+                seen_node_patterns[hidden_masks] = node_mask_counter
+                node_mask_counter += 1
+            node_mask_idx = seen_node_patterns[hidden_masks]
+
+            # For full_edges_only=True, edge_mask_idx is always 0 for each node pattern
+            # Count how many subcircuits share this node pattern to assign edge_mask_idx
+            edge_mask_idx = sum(1 for e in mask_idx_entries if e["node_mask_idx"] == node_mask_idx)
+
+            # Compute structural metrics
             hidden_nodes = node_masks[1:-1] if len(node_masks) > 2 else node_masks
             total_hidden = sum(len(m) for m in hidden_nodes)
             active_hidden = sum(sum(m) for m in hidden_nodes)
             node_sparsity = active_hidden / total_hidden if total_hidden > 0 else 0
 
-            # Edge sparsity: fraction of active edges
             total_edges = sum(len(e) * len(e[0]) for e in edge_masks if e and e[0])
             active_edges = sum(sum(sum(row) for row in e) for e in edge_masks if e)
             edge_sparsity = active_edges / total_edges if total_edges > 0 else 0
 
-            mask_idx_map.append({
-                "subcircuit_idx": idx,
+            # Compute additional topological metrics
+            n_active_nodes_per_layer = [sum(m) for m in hidden_nodes]
+            connectivity_density = edge_sparsity  # Same as edge_sparsity for now
+
+            mask_idx_entries.append({
+                "subcircuit_idx": subcircuit_idx,
+                "node_mask_idx": node_mask_idx,
+                "edge_mask_idx": edge_mask_idx,
                 "node_sparsity": round(node_sparsity, 4),
                 "edge_sparsity": round(edge_sparsity, 4),
                 "n_hidden_layers": len(hidden_nodes),
+                "active_nodes_per_layer": n_active_nodes_per_layer,
+                "connectivity_density": round(connectivity_density, 4),
             })
 
+            idx_mapping[(node_mask_idx, edge_mask_idx)] = subcircuit_idx
+
+        # Create readable mapping table
+        mapping_table = [
+            {"node_mask_idx": k[0], "edge_mask_idx": k[1], "subcircuit_idx": v}
+            for k, v in sorted(idx_mapping.items())
+        ]
+
         _save_json({
-            "description": "Mapping of subcircuit indices to structural properties",
-            "subcircuits": mask_idx_map,
+            "description": "Mapping (node_mask_idx, edge_mask_idx) -> subcircuit_idx with structural metrics",
+            "architecture": {"width": width, "depth": depth},
+            "n_unique_node_patterns": node_mask_counter,
+            "mapping": mapping_table,
+            "subcircuits": mask_idx_entries,
         }, subcircuits_dir / "mask_idx_map.json")
 
     # Save summary.json with key statistics
@@ -563,7 +670,7 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
         "n_subcircuits": n_subcircuits,
         "n_trials": len(result.trials),
         "epsilon": epsilon,
-        "gates": list(gate_subcircuit_scores.keys()),
+        "gates": list(gate_subcircuit_data.keys()),
         "best_by_gate": {
             gate: rankings[0] if rankings else None
             for gate, rankings in averaged_rankings.items()
@@ -583,23 +690,39 @@ SUBCIRCUITS_EXPLANATION = """# Subcircuits Analysis
 
 ## Structure
 
-- `subcircuit_score_ranking.json`: Rankings averaged across all trials
-- `subcircuit_score_ranking_per_trial.json`: Per-trial rankings
-- `mask_idx_map.json`: Structural properties of each subcircuit
+- `subcircuit_score_ranking.json`: Rankings by gate with faithfulness scores
+- `subcircuit_score_ranking_per_trial.json`: Per-trial granular rankings
+- `mask_idx_map.json`: (node_mask_idx, edge_mask_idx) → subcircuit_idx mapping
+- `circuit_diagrams/`: Visual diagrams
+  - `node_masks/{idx}.png`: Diagrams for unique node patterns
+  - `edge_masks/{idx}.png`: Diagrams for edge configurations
+  - `subcircuit_masks/{idx}.png`: Diagrams for each subcircuit
+
+## Index Mapping
+
+subcircuit_idx = f(node_mask_idx, edge_mask_idx)
+
+- **node_mask_idx**: Identifies which hidden nodes are active
+- **edge_mask_idx**: Identifies edge configuration for that node pattern
+- With full_edges_only=True, typically edge_mask_idx=0
 
 ## Key Metrics
 
-For subcircuit S with index i:
+For subcircuit S_i and gate G:
 
-- **avg_accuracy**: mean(Pr[S(x) = G(x)]) across trials
-- **node_sparsity**: fraction of active hidden nodes
-- **edge_sparsity**: fraction of active edges
-- **passes_epsilon**: avg_accuracy >= 1 - ε
+- **accuracy**: Pr[S_i(x) = G(x)] — behavioral match
+- **observational**: Robustness under input perturbations
+- **interventional**: Faithfulness under activation patching
+- **counterfactual**: Necessity/sufficiency scores
+- **node_sparsity**: |active hidden nodes| / |total hidden nodes|
+- **edge_sparsity**: |active edges| / |total possible edges|
+- **passes_epsilon**: accuracy ≥ 1 - ε
 
-## Reading subcircuit_score_ranking.json
+## Reading Files
 
-`rankings_by_gate[gate]` lists subcircuits sorted by avg_accuracy.
-Higher accuracy = better match to gate behavior.
+`rankings_by_gate[gate]` in `subcircuit_score_ranking.json` lists
+subcircuits sorted by avg_accuracy. Each entry includes all faithfulness
+scores averaged across trials.
 """
 
 

@@ -696,11 +696,23 @@ def save_all_samples(
     output_dir: str,
     faithfulness: "FaithfulnessMetrics | None",
     subcircuit_key: int | tuple[int, int],
-) -> str:
-    """Save samples.json with all raw sample data.
+) -> dict[str, str]:
+    """Save samples.json files in structured nested folders per T1.i.
 
-    This file contains every individual sample from all tests.
-    Useful for detailed analysis and visualization.
+    Creates:
+        observational/
+            noise_perturbations/samples.json
+            out_distribution_transformations/samples.json
+        interventional/
+            in_circuit/in_distribution/samples.json
+            in_circuit/out_distribution/samples.json
+            out_circuit/in_distribution/samples.json
+            out_circuit/out_distribution/samples.json
+        counterfactual/
+            sufficiency/samples.json
+            completeness/samples.json
+            necessity/samples.json
+            independence/samples.json
 
     Args:
         output_dir: Directory to save to (e.g., XOR/46/0/)
@@ -708,76 +720,124 @@ def save_all_samples(
         subcircuit_key: The subcircuit key (int or tuple)
 
     Returns:
-        Path to the saved samples.json
+        Dict mapping category paths to saved file paths
     """
     if faithfulness is None:
-        return ""
+        return {}
 
     key_info = _format_key_for_json(subcircuit_key)
+    paths = {}
 
     def sample_to_dict(sample) -> dict:
         """Convert a sample dataclass to dict, handling nested fields."""
         return asdict(sample)
 
-    # Collect all observational samples
-    obs_samples = {"noise": [], "ood": []}
+    def save_samples_file(subdir: str, samples: list[dict]) -> str:
+        """Save samples list to a specific subfolder."""
+        folder = os.path.join(output_dir, subdir)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "samples.json")
+        data = {"subcircuit": key_info, "samples": samples}
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+        return path
+
+    # Observational samples - noise perturbations
     if faithfulness.observational:
         if faithfulness.observational.noise and faithfulness.observational.noise.samples:
-            obs_samples["noise"] = [sample_to_dict(s) for s in faithfulness.observational.noise.samples]
-        if faithfulness.observational.ood and faithfulness.observational.ood.samples:
-            obs_samples["ood"] = [sample_to_dict(s) for s in faithfulness.observational.ood.samples]
+            noise_samples = [sample_to_dict(s) for s in faithfulness.observational.noise.samples]
+            paths["observational/noise_perturbations"] = save_samples_file(
+                "observational/noise_perturbations", noise_samples
+            )
 
-    # Collect all interventional samples
-    int_samples = {
-        "in_circuit": {},
-        "out_circuit": {},
-        "in_circuit_ood": {},
-        "out_circuit_ood": {},
-    }
+        # OOD transformations
+        if faithfulness.observational.ood and faithfulness.observational.ood.samples:
+            ood_samples = [sample_to_dict(s) for s in faithfulness.observational.ood.samples]
+            paths["observational/out_distribution_transformations"] = save_samples_file(
+                "observational/out_distribution_transformations", ood_samples
+            )
+
+    # Interventional samples - nested by circuit location and distribution
     if faithfulness.interventional:
+        # in_circuit / in_distribution
+        in_circuit_id = []
         for patch_key, stats in faithfulness.interventional.in_circuit_stats.items():
             if stats.samples:
-                int_samples["in_circuit"][patch_key] = [sample_to_dict(s) for s in stats.samples]
-        for patch_key, stats in faithfulness.interventional.out_circuit_stats.items():
-            if stats.samples:
-                int_samples["out_circuit"][patch_key] = [sample_to_dict(s) for s in stats.samples]
+                for s in stats.samples:
+                    d = sample_to_dict(s)
+                    d["patch_key"] = patch_key
+                    in_circuit_id.append(d)
+        if in_circuit_id:
+            paths["interventional/in_circuit/in_distribution"] = save_samples_file(
+                "interventional/in_circuit/in_distribution", in_circuit_id
+            )
+
+        # in_circuit / out_distribution
+        in_circuit_ood = []
         for patch_key, stats in faithfulness.interventional.in_circuit_stats_ood.items():
             if stats.samples:
-                int_samples["in_circuit_ood"][patch_key] = [sample_to_dict(s) for s in stats.samples]
+                for s in stats.samples:
+                    d = sample_to_dict(s)
+                    d["patch_key"] = patch_key
+                    in_circuit_ood.append(d)
+        if in_circuit_ood:
+            paths["interventional/in_circuit/out_distribution"] = save_samples_file(
+                "interventional/in_circuit/out_distribution", in_circuit_ood
+            )
+
+        # out_circuit / in_distribution
+        out_circuit_id = []
+        for patch_key, stats in faithfulness.interventional.out_circuit_stats.items():
+            if stats.samples:
+                for s in stats.samples:
+                    d = sample_to_dict(s)
+                    d["patch_key"] = patch_key
+                    out_circuit_id.append(d)
+        if out_circuit_id:
+            paths["interventional/out_circuit/in_distribution"] = save_samples_file(
+                "interventional/out_circuit/in_distribution", out_circuit_id
+            )
+
+        # out_circuit / out_distribution
+        out_circuit_ood = []
         for patch_key, stats in faithfulness.interventional.out_circuit_stats_ood.items():
             if stats.samples:
-                int_samples["out_circuit_ood"][patch_key] = [sample_to_dict(s) for s in stats.samples]
+                for s in stats.samples:
+                    d = sample_to_dict(s)
+                    d["patch_key"] = patch_key
+                    out_circuit_ood.append(d)
+        if out_circuit_ood:
+            paths["interventional/out_circuit/out_distribution"] = save_samples_file(
+                "interventional/out_circuit/out_distribution", out_circuit_ood
+            )
 
-    # Collect all counterfactual samples
-    cf_samples = {
-        "sufficiency": [],
-        "completeness": [],
-        "necessity": [],
-        "independence": [],
-    }
+    # Counterfactual samples - by effect type
     if faithfulness.counterfactual:
         if faithfulness.counterfactual.sufficiency_effects:
-            cf_samples["sufficiency"] = [sample_to_dict(s) for s in faithfulness.counterfactual.sufficiency_effects]
+            suff_samples = [sample_to_dict(s) for s in faithfulness.counterfactual.sufficiency_effects]
+            paths["counterfactual/sufficiency"] = save_samples_file(
+                "counterfactual/sufficiency", suff_samples
+            )
+
         if faithfulness.counterfactual.completeness_effects:
-            cf_samples["completeness"] = [sample_to_dict(s) for s in faithfulness.counterfactual.completeness_effects]
+            comp_samples = [sample_to_dict(s) for s in faithfulness.counterfactual.completeness_effects]
+            paths["counterfactual/completeness"] = save_samples_file(
+                "counterfactual/completeness", comp_samples
+            )
+
         if faithfulness.counterfactual.necessity_effects:
-            cf_samples["necessity"] = [sample_to_dict(s) for s in faithfulness.counterfactual.necessity_effects]
+            nec_samples = [sample_to_dict(s) for s in faithfulness.counterfactual.necessity_effects]
+            paths["counterfactual/necessity"] = save_samples_file(
+                "counterfactual/necessity", nec_samples
+            )
+
         if faithfulness.counterfactual.independence_effects:
-            cf_samples["independence"] = [sample_to_dict(s) for s in faithfulness.counterfactual.independence_effects]
+            ind_samples = [sample_to_dict(s) for s in faithfulness.counterfactual.independence_effects]
+            paths["counterfactual/independence"] = save_samples_file(
+                "counterfactual/independence", ind_samples
+            )
 
-    # Build complete samples file
-    all_samples = {
-        "subcircuit": key_info,
-        "observational": obs_samples,
-        "interventional": int_samples,
-        "counterfactual": cf_samples,
-    }
-
-    path = os.path.join(output_dir, "samples.json")
-    with open(path, "w") as f:
-        json.dump(all_samples, f, indent=2)
-
-    return path
+    return paths
 
 
 # Keep old name for backwards compatibility

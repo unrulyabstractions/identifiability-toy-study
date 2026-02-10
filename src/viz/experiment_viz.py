@@ -47,8 +47,12 @@ def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) ->
 
     Creates:
         subcircuits/circuit_diagrams/
-            subcircuits/
-                {idx}.png - Diagram for each subcircuit
+            node_masks/
+                {node_mask_idx}.png - Diagram for each node mask (with full edges)
+            edge_masks/
+                {edge_mask_idx}.png - Diagram showing edge mask variations
+            subcircuit_masks/
+                {subcircuit_idx}.png - Diagram for each subcircuit
     """
     # Get circuits from first trial
     first_trial = next(iter(result.trials.values()), None)
@@ -56,21 +60,64 @@ def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) ->
         return
 
     diagrams_dir = Path(run_dir) / "subcircuits" / "circuit_diagrams"
-    subcircuits_dir = diagrams_dir / "subcircuits"
-    subcircuits_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate diagram for each subcircuit (limit to first 20 to avoid too many files)
-    max_diagrams = min(20, len(first_trial.subcircuits))
-    print(f"[VIZ] Generating {max_diagrams} circuit diagrams...")
+    # Create all three diagram folders
+    node_masks_dir = diagrams_dir / "node_masks"
+    edge_masks_dir = diagrams_dir / "edge_masks"
+    subcircuit_masks_dir = diagrams_dir / "subcircuit_masks"
+
+    node_masks_dir.mkdir(parents=True, exist_ok=True)
+    edge_masks_dir.mkdir(parents=True, exist_ok=True)
+    subcircuit_masks_dir.mkdir(parents=True, exist_ok=True)
+
+    # Track unique node patterns (by their serialized form)
+    seen_node_patterns = {}  # node_pattern_tuple -> node_mask_idx
+    node_mask_idx_counter = 0
+
+    max_diagrams = min(48, len(first_trial.subcircuits))
+    print(f"[VIZ] Generating circuit diagrams for {max_diagrams} subcircuits...")
 
     for sc_data in first_trial.subcircuits[:max_diagrams]:
-        idx = sc_data.get("idx", 0)
+        subcircuit_idx = sc_data.get("idx", 0)
         circuit = Circuit.from_dict(sc_data)
-        path = subcircuits_dir / f"{idx}.png"
+
+        # Generate subcircuit_masks/{subcircuit_idx}.png
+        sc_path = subcircuit_masks_dir / f"{subcircuit_idx}.png"
         try:
-            circuit.visualize(file_path=str(path), node_size="small")
+            circuit.visualize(file_path=str(sc_path), node_size="small")
         except Exception as e:
-            print(f"  Warning: Failed to generate diagram for subcircuit {idx}: {e}")
+            print(f"  Warning: Failed to generate subcircuit diagram {subcircuit_idx}: {e}")
+
+        # Track unique node patterns for node_masks/
+        node_masks = sc_data.get("node_masks", [])
+        # Serialize node pattern (exclude input/output which are always full)
+        hidden_masks = tuple(tuple(m) for m in node_masks[1:-1]) if len(node_masks) > 2 else ()
+        if hidden_masks not in seen_node_patterns:
+            seen_node_patterns[hidden_masks] = node_mask_idx_counter
+            # Generate node_masks/{node_mask_idx}.png
+            nm_path = node_masks_dir / f"{node_mask_idx_counter}.png"
+            try:
+                circuit.visualize(file_path=str(nm_path), node_size="small")
+            except Exception as e:
+                print(f"  Warning: Failed to generate node_mask diagram {node_mask_idx_counter}: {e}")
+            node_mask_idx_counter += 1
+
+    # For edge_masks, generate diagrams for a few representative edge configurations
+    # Since we use full_edges_only=True, each node pattern has one edge config
+    # Generate edge_masks as copies of node_masks (they're equivalent with full edges)
+    for node_mask_idx in range(min(node_mask_idx_counter, 20)):
+        src = node_masks_dir / f"{node_mask_idx}.png"
+        dst = edge_masks_dir / f"{node_mask_idx}.png"
+        if src.exists() and not dst.exists():
+            import shutil
+            try:
+                shutil.copy(src, dst)
+            except Exception:
+                pass
+
+    print(f"  Generated {len(list(subcircuit_masks_dir.glob('*.png')))} subcircuit diagrams")
+    print(f"  Generated {len(list(node_masks_dir.glob('*.png')))} node_mask diagrams")
+    print(f"  Generated {len(list(edge_masks_dir.glob('*.png')))} edge_mask diagrams")
 
 
 def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
@@ -216,6 +263,9 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                 node_pattern_edges.setdefault(node_idx, []).append((edge_var_idx, i, faith))
 
             for i, sc_key in enumerate(best_keys):
+                # Convert list to tuple for hashability (JSON loads as list)
+                if isinstance(sc_key, list):
+                    sc_key = tuple(sc_key)
                 node_idx, edge_var_idx = parse_subcircuit_key(sc_key)
                 circuit = subcircuits[node_idx]
 
@@ -338,12 +388,12 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                 )
                 viz_paths[trial_id][gname][sc_key]["faithfulness"]["json"] = json_paths
 
-                # Save summary.json and samples.json in this leaf folder
+                # Save summary.json and structured samples in nested folders
                 if has_faith:
                     summary_path = save_summary(folder, faithfulness_data, sc_key)
-                    samples_path = save_all_samples(folder, faithfulness_data, sc_key)
+                    samples_paths = save_all_samples(folder, faithfulness_data, sc_key)
                     viz_paths[trial_id][gname][sc_key]["summary"] = summary_path
-                    viz_paths[trial_id][gname][sc_key]["samples"] = samples_path
+                    viz_paths[trial_id][gname][sc_key]["samples"] = samples_paths
 
             # After processing all edge variations, save node pattern summaries
             for node_idx, edge_list in node_pattern_edges.items():
