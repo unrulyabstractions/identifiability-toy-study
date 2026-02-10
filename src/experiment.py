@@ -1,63 +1,22 @@
+"""
+An experiment has many runs. Each run is called a trial.
+The experiment as a whole will have an ExperimentConfig.
+Each individual trial will have a TrialSetup.
+Look at .common.schemas for full definitions.
+"""
+
 import copy
 import random
 from itertools import combinations, product
 
-from src.circuit import enumerate_circuits_for_architecture
+from src.circuit.precompute import precompute_circuits_for_architectures
 from src.domain import ALL_LOGIC_GATES
 from src.experiment_config import ExperimentConfig, TrialSetup
-from src.infra import parallel_map, profile
+from src.infra import parallel_map
 from src.schemas import ExperimentResult
 from src.training import generate_trial_data
 
 from .trial import run_trial_in_parallel, run_trial_in_series
-
-"""
-An experiment has many runs. Each run is called a trial
-The experiment as a whole will have a ExperimentConfig.
-Each individual trial will have a TrialSetup
-Look at .common.schemas for full definitions
-"""
-
-
-def _get_layer_widths(
-    input_size: int, output_size: int, width: int, depth: int
-) -> list[int]:
-    """Compute layer widths for an MLP architecture."""
-    return [input_size] + [width] * depth + [output_size]
-
-
-def _precompute_circuits_for_architectures(
-    cfg: ExperimentConfig, input_size: int, output_sizes: list[int], logger=None
-) -> dict[tuple[int, int, int], tuple[list, list]]:
-    """Pre-compute circuits for all unique (width, depth, output_size) combinations.
-
-    Returns:
-        Dict mapping (width, depth, output_size) -> (subcircuits, subcircuit_structures)
-    """
-    circuits_cache = {}
-
-    for width, depth, output_size in product(cfg.widths, cfg.depths, output_sizes):
-        key = (width, depth, output_size)
-        if key in circuits_cache:
-            continue
-
-        layer_widths = _get_layer_widths(input_size, output_size, width, depth)
-        logger and logger.info(
-            f"Pre-computing circuits for width={width}, depth={depth}, outputs={output_size}"
-        )
-
-        with profile("enumerate_circuits"):
-            subcircuits = enumerate_circuits_for_architecture(
-                layer_widths, min_sparsity=0.0, use_tqdm=True
-            )
-
-        with profile("analyze_structures"):
-            subcircuit_structures = [s.analyze_structure() for s in subcircuits]
-
-        circuits_cache[key] = (subcircuits, subcircuit_structures)
-        logger and logger.info(f"  Found {len(subcircuits)} subcircuits")
-
-    return circuits_cache
 
 
 def build_gate_combinations(
@@ -109,8 +68,8 @@ def run_experiment(
 
     # Pre-compute circuits for all architectures
     logger and logger.info("\nPre-computing circuits for all architectures...")
-    circuits_cache = _precompute_circuits_for_architectures(
-        cfg, input_size, output_sizes, logger
+    circuits_cache = precompute_circuits_for_architectures(
+        cfg.widths, cfg.depths, input_size, output_sizes, logger
     )
 
     # Collect all trial configurations
@@ -147,7 +106,9 @@ def run_experiment(
 
                 # Get pre-computed circuits for this architecture
                 output_size = len(logic_gates)
-                subcircuits, subcircuit_structures = circuits_cache[(width, depth, output_size)]
+                subcircuits, subcircuit_structures = circuits_cache[
+                    (width, depth, output_size)
+                ]
 
                 trial_settings.append(
                     (
