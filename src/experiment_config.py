@@ -23,7 +23,7 @@ from src.schema_class import SchemaClass
 # TEST HELPER
 ###############
 
-_FAST_TEST_MODE = False
+_FAST_TEST_MODE = True
 
 
 def set_test_mode_global(val: bool):
