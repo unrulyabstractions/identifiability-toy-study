@@ -59,17 +59,14 @@ def run_experiment(
         cfg.target_logic_gates, cfg.num_gates_per_run
     )
 
-    # Determine input/output sizes from gates
+    # Determine input size from gates (output is always 1 per gate)
     first_gate = gates_combinations[0][0]
     input_size = ALL_LOGIC_GATES[first_gate].n_inputs
-
-    # Compute all unique output sizes (each gate combo may have different length)
-    output_sizes = sorted(set(len(combo) for combo in gates_combinations))
 
     # Pre-compute circuits for all architectures
     logger and logger.info("\nPre-computing circuits for all architectures...")
     circuits_cache = precompute_circuits_for_architectures(
-        cfg.widths, cfg.depths, input_size, output_sizes, logger
+        cfg.widths, cfg.depths, input_size, logger
     )
 
     # Collect all trial configurations
@@ -105,10 +102,7 @@ def run_experiment(
                 )
 
                 # Get pre-computed circuits for this architecture
-                output_size = len(logic_gates)
-                subcircuits, subcircuit_structures = circuits_cache[
-                    (width, depth, output_size)
-                ]
+                subcircuits, subcircuit_structures = circuits_cache[(width, depth)]
 
                 trial_settings.append(
                     (
