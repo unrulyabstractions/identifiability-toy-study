@@ -727,7 +727,7 @@ scores averaged across trials.
 
 
 def _save_gate_summaries(trial, trial_dir: Path):
-    """Save per-gate summary.json and explanation.md files."""
+    """Save per-gate summary.json, explanation.md, and samples files."""
     # Get epsilon from trial setup
     epsilon = 0.2
     if hasattr(trial, "setup") and hasattr(trial.setup, "constraints"):
@@ -736,6 +736,10 @@ def _save_gate_summaries(trial, trial_dir: Path):
     gates_dir = trial_dir / "gates"
     gates_dir.mkdir(parents=True, exist_ok=True)
 
+    # Get faithfulness results keyed by gate
+    bests_keys = trial.metrics.per_gate_bests or {}
+    bests_faith = trial.metrics.per_gate_bests_faith or {}
+
     for gate_name, gate_metrics in trial.metrics.per_gate_metrics.items():
         gate_dir = gates_dir / gate_name
         gate_dir.mkdir(parents=True, exist_ok=True)
@@ -743,3 +747,120 @@ def _save_gate_summaries(trial, trial_dir: Path):
         gate_summary = _generate_gate_summary(gate_name, gate_metrics, epsilon)
         _save_json(gate_summary, gate_dir / "summary.json")
         _save_explanation(gate_dir / "explanation.md", GATE_EXPLANATION)
+
+        # Save samples for each subcircuit (T1.i)
+        gate_keys = bests_keys.get(gate_name, [])
+        gate_faith = bests_faith.get(gate_name, [])
+        _save_subcircuit_samples(gate_dir, gate_keys, gate_faith)
+
+
+def _save_subcircuit_samples(gate_dir: Path, keys: list, faith_results: list):
+    """Save samples in folder structure per T1.i.
+
+    Creates:
+        {node_mask_idx}/{edge_mask_idx}/
+            observational/
+                noise_perturbations/samples.json
+                out_distribution_transformations/samples.json
+            interventional/
+                in_circuit/in_distribution/samples.json
+                in_circuit/out_distribution/samples.json
+                out_circuit/in_distribution/samples.json
+                out_circuit/out_distribution/samples.json
+            counterfactual/
+                sufficiency/samples.json
+                completeness/samples.json
+                necessity/samples.json
+                independence/samples.json
+    """
+    from dataclasses import asdict
+
+    for key, faith in zip(keys, faith_results):
+        if faith is None:
+            continue
+
+        # Extract node_mask_idx and edge_mask_idx from key
+        if isinstance(key, (tuple, list)) and len(key) >= 2:
+            node_mask_idx, edge_mask_idx = key[0], key[1]
+        else:
+            node_mask_idx, edge_mask_idx = key, 0
+
+        sc_dir = gate_dir / str(node_mask_idx) / str(edge_mask_idx)
+
+        # Observational samples
+        if hasattr(faith, 'observational') and faith.observational:
+            obs = faith.observational
+
+            # Noise perturbations
+            if hasattr(obs, 'noise') and obs.noise and hasattr(obs.noise, 'samples'):
+                noise_dir = sc_dir / "observational" / "noise_perturbations"
+                noise_dir.mkdir(parents=True, exist_ok=True)
+                samples = [asdict(s) for s in obs.noise.samples]
+                _save_json({"samples": samples, "n": len(samples)}, noise_dir / "samples.json")
+
+            # OOD transformations
+            if hasattr(obs, 'ood') and obs.ood and hasattr(obs.ood, 'samples'):
+                ood_dir = sc_dir / "observational" / "out_distribution_transformations"
+                ood_dir.mkdir(parents=True, exist_ok=True)
+                samples = [asdict(s) for s in obs.ood.samples]
+                _save_json({"samples": samples, "n": len(samples)}, ood_dir / "samples.json")
+
+        # Interventional samples
+        if hasattr(faith, 'interventional') and faith.interventional:
+            intv = faith.interventional
+
+            # In-circuit in-distribution
+            if hasattr(intv, 'in_circuit_stats') and intv.in_circuit_stats:
+                in_in_dir = sc_dir / "interventional" / "in_circuit" / "in_distribution"
+                in_in_dir.mkdir(parents=True, exist_ok=True)
+                _save_json({"stats": intv.in_circuit_stats}, in_in_dir / "samples.json")
+
+            # In-circuit out-distribution
+            if hasattr(intv, 'in_circuit_stats_ood') and intv.in_circuit_stats_ood:
+                in_out_dir = sc_dir / "interventional" / "in_circuit" / "out_distribution"
+                in_out_dir.mkdir(parents=True, exist_ok=True)
+                _save_json({"stats": intv.in_circuit_stats_ood}, in_out_dir / "samples.json")
+
+            # Out-circuit in-distribution
+            if hasattr(intv, 'out_circuit_stats') and intv.out_circuit_stats:
+                out_in_dir = sc_dir / "interventional" / "out_circuit" / "in_distribution"
+                out_in_dir.mkdir(parents=True, exist_ok=True)
+                _save_json({"stats": intv.out_circuit_stats}, out_in_dir / "samples.json")
+
+            # Out-circuit out-distribution
+            if hasattr(intv, 'out_circuit_stats_ood') and intv.out_circuit_stats_ood:
+                out_out_dir = sc_dir / "interventional" / "out_circuit" / "out_distribution"
+                out_out_dir.mkdir(parents=True, exist_ok=True)
+                _save_json({"stats": intv.out_circuit_stats_ood}, out_out_dir / "samples.json")
+
+        # Counterfactual samples
+        if hasattr(faith, 'counterfactual') and faith.counterfactual:
+            cf = faith.counterfactual
+
+            # Sufficiency
+            if hasattr(cf, 'sufficiency_effects') and cf.sufficiency_effects:
+                suff_dir = sc_dir / "counterfactual" / "sufficiency"
+                suff_dir.mkdir(parents=True, exist_ok=True)
+                samples = [asdict(e) for e in cf.sufficiency_effects]
+                _save_json({"samples": samples, "n": len(samples)}, suff_dir / "samples.json")
+
+            # Completeness
+            if hasattr(cf, 'completeness_effects') and cf.completeness_effects:
+                comp_dir = sc_dir / "counterfactual" / "completeness"
+                comp_dir.mkdir(parents=True, exist_ok=True)
+                samples = [asdict(e) for e in cf.completeness_effects]
+                _save_json({"samples": samples, "n": len(samples)}, comp_dir / "samples.json")
+
+            # Necessity
+            if hasattr(cf, 'necessity_effects') and cf.necessity_effects:
+                nec_dir = sc_dir / "counterfactual" / "necessity"
+                nec_dir.mkdir(parents=True, exist_ok=True)
+                samples = [asdict(e) for e in cf.necessity_effects]
+                _save_json({"samples": samples, "n": len(samples)}, nec_dir / "samples.json")
+
+            # Independence
+            if hasattr(cf, 'independence_effects') and cf.independence_effects:
+                ind_dir = sc_dir / "counterfactual" / "independence"
+                ind_dir.mkdir(parents=True, exist_ok=True)
+                samples = [asdict(e) for e in cf.independence_effects]
+                _save_json({"samples": samples, "n": len(samples)}, ind_dir / "samples.json")
