@@ -682,8 +682,70 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
     }
     _save_json(summary, subcircuits_dir / "summary.json")
 
+    # Generate circuit diagrams (T1.h)
+    _generate_circuit_diagrams(first_trial, subcircuits_dir)
+
     # Save explanation
     _save_explanation(subcircuits_dir / "explanation.md", SUBCIRCUITS_EXPLANATION)
+
+
+def _generate_circuit_diagrams(trial, subcircuits_dir: Path):
+    """Generate circuit diagrams for all subcircuits.
+
+    Creates:
+        circuit_diagrams/
+            node_masks/{node_mask_idx}.png
+            edge_masks/{edge_mask_idx}.png
+            subcircuit_masks/{subcircuit_idx}.png
+    """
+    from src.circuit import Circuit
+
+    if not trial or not trial.subcircuits:
+        return
+
+    diagrams_dir = subcircuits_dir / "circuit_diagrams"
+    node_masks_dir = diagrams_dir / "node_masks"
+    edge_masks_dir = diagrams_dir / "edge_masks"
+    subcircuit_masks_dir = diagrams_dir / "subcircuit_masks"
+
+    node_masks_dir.mkdir(parents=True, exist_ok=True)
+    edge_masks_dir.mkdir(parents=True, exist_ok=True)
+    subcircuit_masks_dir.mkdir(parents=True, exist_ok=True)
+
+    # Track unique node patterns
+    seen_node_patterns = {}
+    node_mask_idx_counter = 0
+
+    max_diagrams = min(48, len(trial.subcircuits))
+
+    for sc_data in trial.subcircuits[:max_diagrams]:
+        subcircuit_idx = sc_data.get("idx", 0)
+        try:
+            circuit = Circuit.from_dict(sc_data)
+
+            # subcircuit_masks/{subcircuit_idx}.png
+            sc_path = subcircuit_masks_dir / f"{subcircuit_idx}.png"
+            circuit.visualize(file_path=str(sc_path), node_size="small")
+
+            # Track unique node patterns for node_masks/
+            node_masks = sc_data.get("node_masks", [])
+            hidden_masks = tuple(tuple(m) for m in node_masks[1:-1]) if len(node_masks) > 2 else ()
+
+            if hidden_masks not in seen_node_patterns:
+                seen_node_patterns[hidden_masks] = node_mask_idx_counter
+                nm_path = node_masks_dir / f"{node_mask_idx_counter}.png"
+                circuit.visualize(file_path=str(nm_path), node_size="small")
+                node_mask_idx_counter += 1
+        except Exception:
+            pass  # Silently skip diagram generation failures
+
+    # edge_masks are equivalent to node_masks with full_edges_only=True
+    import shutil
+    for node_mask_idx in range(min(node_mask_idx_counter, 20)):
+        src = node_masks_dir / f"{node_mask_idx}.png"
+        dst = edge_masks_dir / f"{node_mask_idx}.png"
+        if src.exists():
+            shutil.copy(src, dst)
 
 
 SUBCIRCUITS_EXPLANATION = """# Subcircuits Analysis
