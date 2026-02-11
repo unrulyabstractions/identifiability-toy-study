@@ -203,6 +203,10 @@ class ExperimentConfig(SchemaClass):
 
     num_runs: int = 1
 
+    # If total trials > this threshold, use iterative mode (save after each trial)
+    # Set to 0 to always use iterative mode, or a large number to always use monolith
+    max_num_trials_in_monolith: int = 10
+
     def __str__(self) -> str:
         setup_dict = asdict(self)
         setup_dict["experiment_id"] = self.get_id()

@@ -5,18 +5,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from src.experiment import run_experiment
+from src.experiment import get_trial_configs_for_experiment
 from src.experiment_config import ExperimentConfig, set_test_mode_global
-from src.infra import print_profile, profile, profile_fn, setup_logging
+from src.infra import print_profile, profile_fn, setup_logging
 from src.infra.profiler import Trace
-from src.persistence import (
-    get_all_runs,
-    load_results,
-    save_results,
+from src.persistence import get_all_runs, load_results
+from src.pipeline import (
+    do_spd_on_experiment,
+    do_viz_on_experiment,
+    run_iteratively,
+    run_monolith,
 )
-from src.schemas import ExperimentResult
-from src.spd import SpdResults, load_spd_results, run_spd, run_trial_on_spd_results, save_spd_results
-from src.viz import visualize_experiment, visualize_spd_experiment
 
 
 def get_args() -> Any:
@@ -77,6 +76,11 @@ def get_args() -> Any:
         default=None,
         help="Specific trial ID to process across runs (for --analysis-only or --spd-only)",
     )
+    parser.add_argument(
+        "--iterative",
+        action="store_true",
+        help="Force iterative mode (save after each trial)",
+    )
     args = parser.parse_args()
 
     # args.spd_only should turn on args.spd
@@ -105,9 +109,7 @@ def get_target_runs(output_dir: Path, run_filter: str | None) -> list[Path]:
     return []
 
 
-def filter_result_trials(
-    result: ExperimentResult, trial_filter: str | None
-) -> ExperimentResult:
+def filter_result_trials(result, trial_filter: str | None):
     """Filter trials in a result to only include matching trial IDs."""
     if trial_filter is None:
         return result
@@ -154,64 +156,35 @@ def rerun_all(
         total_trials_processed += len(result.trials)
         print("  Processing complete")
 
-    print(f"Finished analyzing {total_trials_processed} trial(s) across {len(runs)} run(s)")
-
-
-@profile_fn("do_viz")
-def do_viz(result: ExperimentResult, run_dir: str, spd: bool) -> None:
-    visualize_experiment(result, run_dir=run_dir)
-    if spd:
-        spd_result = load_spd_results(run_dir)
-        if spd_result:
-            visualize_spd_experiment(spd_result, run_dir=run_dir)
-
-
-@profile_fn("do_spd")
-def do_spd(
-    result: ExperimentResult, run_dir: str, viz: bool, spd_device: str
-) -> SpdResults:
-    spd_result = run_spd(result, run_dir=run_dir, device=spd_device)
-    save_spd_results(spd_result, run_dir=run_dir)
-
-    # Run trial analysis on SPD-discovered subcircuits
-    run_trial_on_spd_results(spd_result, result, run_dir=run_dir, device=spd_device)
-
-    if viz:
-        visualize_spd_experiment(spd_result, run_dir=run_dir)
-    return spd_result
+    print(
+        f"Finished analyzing {total_trials_processed} trial(s) across {len(runs)} run(s)"
+    )
 
 
 def rerun_pipeline(output_dir: Path, args: Any) -> bool:
+    """Handle --analysis-only and --spd-only modes."""
     did_rerun_pipeline = False
     if args.spd_only:
-        do_fx = lambda *a: do_spd(*a, viz=not args.no_viz, spd_device=args.spd_device)
-        rerun_all(output_dir, do_fx, "spd", run_filter=args.run, trial_filter=args.trial)
+        do_fx = lambda result, run_dir: do_spd_on_experiment(
+            result, str(run_dir), viz=not args.no_viz, spd_device=args.spd_device
+        )
+        rerun_all(
+            output_dir, do_fx, "spd", run_filter=args.run, trial_filter=args.trial
+        )
         did_rerun_pipeline = True
     if args.analysis_only:
-        do_fx = lambda *a: do_viz(*a, spd=args.spd)
-        rerun_all(output_dir, do_fx, "analysis", run_filter=args.run, trial_filter=args.trial)
+        do_fx = lambda result, run_dir: do_viz_on_experiment(
+            result, str(run_dir), spd=args.spd
+        )
+        rerun_all(
+            output_dir, do_fx, "analysis", run_filter=args.run, trial_filter=args.trial
+        )
         did_rerun_pipeline = True
     return did_rerun_pipeline
 
 
-def print_summary(
-    experiment_result: ExperimentResult, spd_result: SpdResults, logger: Any
-) -> None:
-    logger.info("\n\n\n\n")
-    logger.info("experiment_result")
-    logger.info("\n\n\n\n")
-    summary = experiment_result.print_summary()
-    logger.info(summary)
-    if spd_result:
-        logger.info("\n\n\n\n")
-        logger.info("spd_result")
-        logger.info("\n\n\n\n")
-        spd_summary = spd_result.print_summary()
-        logger.info(spd_summary)
-
-
 def exit_fx() -> None:
-    # Print profiling
+    """Print profiling and exit."""
     print_profile()
     sys.exit(0)
 
@@ -236,7 +209,7 @@ def main() -> None:
     if rerun_pipeline(output_dir, args):
         exit_fx()
 
-    # We identify run by time (with milliseconds to avoid collisions in parallel runs)
+    # We identify run by time (with microseconds to avoid collisions in parallel runs)
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
 
     # Run path
@@ -255,23 +228,32 @@ def main() -> None:
         device=args.device,
     )
 
-    # Run Experiment with many trials
-    with profile("run_experiment"):
-        experiment_result: ExperimentResult = run_experiment(cfg, logger=logger)
-        save_results(
-            experiment_result, run_dir=run_dir
-        )  # Save before just in case viz crashes
+    # Determine execution mode based on trial count
+    trial_configs = get_trial_configs_for_experiment(cfg, logger)
+    n_trials = len(trial_configs)
 
-    # Other experiments + viz
-    spd_result = None
-    if args.spd:
-        spd_result = do_spd(
-            experiment_result, run_dir, viz=not args.no_viz, spd_device=args.spd_device
+    use_iterative = args.iterative or n_trials > cfg.max_num_trials_in_monolith
+    mode_name = "iterative" if use_iterative else "monolith"
+    logger.info(f"\nRunning {n_trials} trials in {mode_name} mode\n")
+
+    if use_iterative:
+        run_iteratively(
+            cfg=cfg,
+            run_dir=run_dir,
+            logger=logger,
+            spd=args.spd,
+            no_viz=args.no_viz,
+            spd_device=args.spd_device,
         )
-    if not args.no_viz:
-        do_viz(experiment_result, run_dir, spd=args.spd)
-
-    print_summary(experiment_result, spd_result, logger)
+    else:
+        run_monolith(
+            cfg=cfg,
+            run_dir=run_dir,
+            logger=logger,
+            spd=args.spd,
+            no_viz=args.no_viz,
+            spd_device=args.spd_device,
+        )
 
     exit_fx()
 
