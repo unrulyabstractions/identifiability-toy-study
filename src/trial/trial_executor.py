@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from src.domain import ALL_LOGIC_GATES
+from src.domain import get_max_n_inputs, resolve_gate
 from src.experiment_config import TrialSetup
 from src.infra import ParallelConfig, get_eval_device, set_seeds, update_status_fx
 from src.math import calculate_match_rate, logits_to_binary
@@ -62,7 +62,7 @@ def run_trial(
     # ===== Train Model =====
     update_status("STARTED_MLP_TRAINING")
     gate_names = setup.model_params.logic_gates
-    input_size = ALL_LOGIC_GATES[gate_names[0]].n_inputs
+    input_size = get_max_n_inputs(gate_names)  # Use max to support mixed gate sizes
     output_size = len(gate_names)
 
     # train_model has @profile_fn("Train Model") directly in helpers.py
@@ -142,10 +142,13 @@ def run_trial(
     eval_device = get_eval_device(parallel_config, device)
 
     # Precompute circuit masks
+    # Compute n_inputs per gate for proper input masking with mixed gate sizes
+    gate_n_inputs_list = [resolve_gate(name).n_inputs for name in gate_names]
     precomputed_masks_per_gate = {}
     if parallel_config.precompute_masks:
         precomputed_masks_per_gate = precompute_masks_phase(
-            subcircuits, model, gate_names, eval_device, output_size
+            subcircuits, model, gate_names, eval_device, output_size,
+            gate_n_inputs_list=gate_n_inputs_list
         )
 
     # ===== Gate Analysis =====

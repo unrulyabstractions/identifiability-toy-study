@@ -176,6 +176,7 @@ def analyze_gate(
         for key in all_subcircuit_keys
     }
 
+    # Faithfulness analysis runs for ALL gates regardless of input count
     counterfactual_pairs = create_clean_corrupted_data(
         x=x,
         y=y_gate,
@@ -197,8 +198,9 @@ def analyze_gate(
         device,
         parallel_config,
     )
-    per_gate_bests_faith[gate_name].extend(faithfulness_results)
     update_status(f"FINISHED_FAITH:{gate_idx}")
 
     # Log faithfulness results for this gate
     log_gate_faithfulness_summary(gate_name, all_subcircuit_keys, faithfulness_results)
+
+    per_gate_bests_faith[gate_name].extend(faithfulness_results)

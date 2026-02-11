@@ -8,6 +8,7 @@ Structure:
         summary.json          - Ranked results across all trials and gates
         explanation.md        - How to read this folder
         config.json           - ExperimentConfig only
+        trial_org.json        - Maps sweep parameters (width, depth, etc.) to trial IDs
         circuits.json         - Subcircuit masks and structure analysis (run-level)
         profiling/
             profiling.json    - Timing data (events, phase durations)
@@ -15,7 +16,8 @@ Structure:
             {trial_id}/
                 summary.json      - Trial-level ranked results
                 explanation.md    - How to read this folder
-                setup.json        - TrialSetup
+                config.json       - Full effective config (device, debug, + all trial params)
+                setup.json        - TrialSetup (legacy, subset of config.json)
                 metrics.json      - Metrics (training, per-gate, robustness, faithfulness)
                 tensors.pt        - Test data, activations, weights
                 all_gates/
@@ -50,6 +52,7 @@ Structure:
 """
 
 import json
+import math
 import os
 from dataclasses import asdict
 from pathlib import Path
@@ -173,6 +176,378 @@ def _save_json(data: dict, path: Path):
         json.dump(data, f, indent=2, default=str)
 
 
+def _save_gates_registry(result, run_dir: Path):
+    """Save gates.json with gate name to base gate function mapping.
+
+    This documents which gate function each gate name uses, supporting
+    repeated gates like ["XOR", "XOR"] -> ["XOR", "XOR_2"].
+    """
+    from src.domain import build_gate_registry, get_max_n_inputs, resolve_gate
+
+    # Get gate names from first trial
+    first_trial = next(iter(result.trials.values()), None)
+    if first_trial is None:
+        return
+
+    gate_names = first_trial.setup.model_params.logic_gates
+
+    # Build registry
+    registry = build_gate_registry(gate_names)
+    max_n_inputs = get_max_n_inputs(gate_names)
+
+    gates_data = {
+        "description": "Mapping from gate name to base gate function. Supports repeated gates and mixed input sizes.",
+        "max_n_inputs": max_n_inputs,
+        "gates": [
+            {
+                "name": name,
+                "base_gate": base,
+                "n_inputs": resolve_gate(name).n_inputs,
+                "index": idx,
+            }
+            for idx, (name, base) in enumerate(registry.items())
+        ],
+        "registry": registry,
+    }
+    _save_json(gates_data, run_dir / "gates.json")
+
+
+def _save_summary_by_gate(result, run_dir: Path):
+    """Save summary_by_gate.json with per-gate aggregated metrics across all trials."""
+    from src.domain import get_base_gate_name
+
+    gate_summaries = {}
+
+    for trial_id, trial in result.trials.items():
+        for gate_name, gate_metrics in trial.metrics.per_gate_metrics.items():
+            if gate_name not in gate_summaries:
+                gate_summaries[gate_name] = {
+                    "gate_name": gate_name,
+                    "base_gate": get_base_gate_name(gate_name),
+                    "n_trials": 0,
+                    "test_accuracies": [],
+                    "best_subcircuit_accuracies": [],
+                    "trial_results": [],
+                }
+
+            summary = gate_summaries[gate_name]
+            summary["n_trials"] += 1
+
+            # Get test accuracy for this gate
+            gate_test_acc = getattr(gate_metrics, "test_acc", None)
+            if gate_test_acc is not None:
+                summary["test_accuracies"].append(gate_test_acc)
+
+            # Get best subcircuit metrics
+            sc_metrics = getattr(gate_metrics, "subcircuit_metrics", [])
+            sorted_by_acc = sorted(sc_metrics, key=lambda x: getattr(x, "accuracy", 0) or 0, reverse=True)
+
+            if sorted_by_acc:
+                best = sorted_by_acc[0]
+                summary["best_subcircuit_accuracies"].append(best.accuracy or 0)
+                summary["trial_results"].append({
+                    "trial_id": trial_id,
+                    "test_acc": gate_test_acc,
+                    "best_subcircuit_idx": best.idx,
+                    "best_subcircuit_accuracy": best.accuracy,
+                    "best_subcircuit_bit_similarity": best.bit_similarity,
+                })
+
+    # Compute aggregate statistics
+    for gate_name, summary in gate_summaries.items():
+        accs = summary["test_accuracies"]
+        sc_accs = summary["best_subcircuit_accuracies"]
+        summary["avg_test_accuracy"] = sum(accs) / len(accs) if accs else None
+        summary["avg_best_subcircuit_accuracy"] = sum(sc_accs) / len(sc_accs) if sc_accs else None
+        summary["min_best_subcircuit_accuracy"] = min(sc_accs) if sc_accs else None
+        summary["max_best_subcircuit_accuracy"] = max(sc_accs) if sc_accs else None
+
+    _save_json({
+        "description": "Per-gate summary aggregated across all trials",
+        "gates": gate_summaries,
+    }, run_dir / "summary_by_gate.json")
+
+
+def _save_trial_organization(result: ExperimentResult, run_dir: Path):
+    """Save trial_org.json mapping sweep parameters to trial IDs.
+
+    Creates a file that shows which trials used which sweep values, making it
+    easy to find trials with specific configurations.
+
+    Structure:
+        sweep_axes: Lists all unique values for each sweep parameter
+        trials: List of trial configs with their IDs
+        by_axis: Grouped trial IDs by each axis value
+    """
+    from collections import defaultdict
+
+    # Collect all unique sweep values and trial configs
+    widths = set()
+    depths = set()
+    activations = set()
+    learning_rates = set()
+    gate_combos = set()
+    seeds = set()
+
+    trials_list = []
+    by_width = defaultdict(list)
+    by_depth = defaultdict(list)
+    by_activation = defaultdict(list)
+    by_lr = defaultdict(list)
+    by_gates = defaultdict(list)
+    by_seed = defaultdict(list)
+
+    for trial_id, trial in result.trials.items():
+        setup = trial.setup
+        mp = setup.model_params
+        tp = setup.train_params
+
+        # Extract sweep values
+        width = mp.width
+        depth = mp.depth
+        activation = mp.activation
+        lr = tp.learning_rate
+        gates = tuple(mp.logic_gates)
+        seed = setup.seed
+
+        # Track unique values
+        widths.add(width)
+        depths.add(depth)
+        activations.add(activation)
+        learning_rates.add(lr)
+        gate_combos.add(gates)
+        seeds.add(seed)
+
+        # Build trial entry
+        trial_entry = {
+            "trial_id": trial_id,
+            "width": width,
+            "depth": depth,
+            "activation": activation,
+            "learning_rate": lr,
+            "gates": list(gates),
+            "seed": seed,
+        }
+        trials_list.append(trial_entry)
+
+        # Group by axis
+        by_width[width].append(trial_id)
+        by_depth[depth].append(trial_id)
+        by_activation[activation].append(trial_id)
+        by_lr[lr].append(trial_id)
+        by_gates[",".join(gates)].append(trial_id)
+        by_seed[seed].append(trial_id)
+
+    # Build output structure
+    trial_org = {
+        "description": "Maps sweep parameters to trial IDs for easy lookup",
+        "n_trials": len(result.trials),
+        "sweep_axes": {
+            "width": sorted(widths),
+            "depth": sorted(depths),
+            "activation": sorted(activations),
+            "learning_rate": sorted(learning_rates),
+            "gates": [list(g) for g in sorted(gate_combos, key=lambda x: (len(x), x))],
+            "seed": sorted(seeds),
+        },
+        "trials": sorted(trials_list, key=lambda t: (
+            t["width"], t["depth"], t["activation"], t["learning_rate"],
+            len(t["gates"]), tuple(t["gates"]), t["seed"]
+        )),
+        "by_axis": {
+            "width": {str(k): v for k, v in sorted(by_width.items())},
+            "depth": {str(k): v for k, v in sorted(by_depth.items())},
+            "activation": dict(sorted(by_activation.items())),
+            "learning_rate": {str(k): v for k, v in sorted(by_lr.items())},
+            "gates": dict(sorted(by_gates.items())),
+            "seed": {str(k): v for k, v in sorted(by_seed.items())},
+        },
+    }
+
+    _save_json(trial_org, run_dir / "trial_org.json")
+
+
+def _save_decision_boundary_visualizations(result: ExperimentResult, run_dir: Path, logger=None):
+    """Save decision boundary visualizations for each gate using Monte Carlo sampling.
+
+    Data generation happens here (calling generate_* functions), then plotting reads the data.
+
+    Creates:
+        visualizations/
+            decision_boundaries/
+                {gate_name}_decision_boundary.png (for 1D/2D)
+                {gate_name}_decision_boundary_3d.png (for 3D)
+                {gate_name}_decision_boundary_proj_*.png (2D projections for 3D+)
+    """
+    from src.domain import get_max_n_inputs
+    from src.visualization.decision_boundary import (
+        generate_grid_data,
+        generate_monte_carlo_data,
+        visualize_all_gates_from_data,
+    )
+
+    # Get first trial with a model
+    first_trial = next((t for t in result.trials.values() if t.model is not None), None)
+    if first_trial is None:
+        return
+
+    gate_names = first_trial.setup.model_params.logic_gates
+    n_inputs = get_max_n_inputs(gate_names)
+
+    viz_dir = run_dir / "visualizations" / "decision_boundaries"
+    viz_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Generate data for each gate
+        gate_data = {}
+        for gate_idx, gate_name in enumerate(gate_names):
+            if n_inputs <= 2:
+                # Use grid data for clean contour plots
+                data = generate_grid_data(
+                    model=first_trial.model,
+                    n_inputs=n_inputs,
+                    gate_idx=gate_idx,
+                    resolution=100,
+                )
+            else:
+                # Use Monte Carlo for higher dimensions
+                data = generate_monte_carlo_data(
+                    model=first_trial.model,
+                    n_inputs=n_inputs,
+                    gate_idx=gate_idx,
+                    n_samples=5000,
+                )
+            gate_data[gate_name] = data
+
+        # Save visualizations from data
+        paths = visualize_all_gates_from_data(
+            gate_data=gate_data,
+            output_dir=str(viz_dir),
+        )
+        logger and logger.info(f"Saved decision boundary visualizations to {viz_dir}")
+    except Exception as e:
+        logger and logger.warning(f"Failed to save decision boundary visualizations: {e}")
+
+
+def _save_subcircuit_decision_boundaries(result: ExperimentResult, run_dir: Path, logger=None):
+    """Save decision boundary visualizations for each analyzed subcircuit.
+
+    For each gate's best subcircuits (after filtering), generates Monte Carlo
+    decision boundary data and visualizations.
+
+    Creates:
+        visualizations/
+            subcircuit_boundaries/
+                {gate_name}/
+                    subcircuit_{node_idx}_{edge_idx}_decision_boundary.png
+    """
+    import torch
+    from src.domain import get_max_n_inputs, resolve_gate
+    from src.visualization.decision_boundary import (
+        generate_grid_data,
+        generate_monte_carlo_data,
+        plot_decision_boundary_from_data,
+    )
+
+    # Get first trial with metrics
+    first_trial = next(
+        (t for t in result.trials.values()
+         if t.model is not None and t.metrics.per_gate_bests),
+        None
+    )
+    if first_trial is None:
+        return
+
+    gate_names = first_trial.setup.model_params.logic_gates
+    model = first_trial.model
+    per_gate_bests = first_trial.metrics.per_gate_bests
+    max_n_inputs = get_max_n_inputs(gate_names)
+
+    viz_dir = run_dir / "visualizations" / "subcircuit_boundaries"
+
+    # Create a wrapper that pads inputs for gates with fewer inputs than max
+    class _PaddedGateModel:
+        def __init__(self, gate_model, gate_n_inputs, max_n_inputs, device):
+            self.gate_model = gate_model
+            self.gate_n_inputs = gate_n_inputs
+            self.max_n_inputs = max_n_inputs
+            self.device = device
+
+        def __call__(self, x):
+            # Pad input to max_n_inputs if needed
+            if x.shape[1] < self.max_n_inputs:
+                padding = torch.zeros(x.shape[0], self.max_n_inputs - x.shape[1], device=x.device)
+                x = torch.cat([x, padding], dim=1)
+            return self.gate_model(x)
+
+        def eval(self):
+            self.gate_model.eval()
+            return self
+
+        def parameters(self):
+            return self.gate_model.parameters()
+
+    try:
+        for gate_idx, gate_name in enumerate(gate_names):
+            gate_dir = viz_dir / gate_name
+            gate_dir.mkdir(parents=True, exist_ok=True)
+
+            # Get the best subcircuit keys for this gate
+            best_keys = per_gate_bests.get(gate_name, [])
+            if not best_keys:
+                continue
+
+            gate_n_inputs = resolve_gate(gate_name).n_inputs
+
+            # Get the gate model with input padding wrapper
+            gate_model = model.separate_into_k_mlps()[gate_idx]
+            device = str(next(gate_model.parameters()).device)
+            wrapped_model = _PaddedGateModel(gate_model, gate_n_inputs, max_n_inputs, device)
+
+            for key in best_keys[:5]:  # Limit to top 5 subcircuits per gate
+                # Key format is (node_idx, edge_var_idx)
+                if isinstance(key, (tuple, list)):
+                    node_idx, edge_var_idx = key
+                    subcircuit_name = f"subcircuit_n{node_idx}_e{edge_var_idx}"
+                else:
+                    subcircuit_name = f"subcircuit_{key}"
+
+                # Generate decision boundary data using the gate's actual input size
+                try:
+                    if gate_n_inputs <= 2:
+                        data = generate_grid_data(
+                            model=wrapped_model,
+                            n_inputs=gate_n_inputs,
+                            gate_idx=0,  # Single gate model has output index 0
+                            resolution=100,
+                            device=device,
+                        )
+                    else:
+                        data = generate_monte_carlo_data(
+                            model=wrapped_model,
+                            n_inputs=gate_n_inputs,
+                            gate_idx=0,
+                            n_samples=2000,
+                            device=device,
+                        )
+
+                    # Save visualization
+                    output_path = str(gate_dir / f"{subcircuit_name}_decision_boundary")
+                    if gate_n_inputs <= 2:
+                        output_path += ".png"
+                    plot_decision_boundary_from_data(
+                        data=data,
+                        gate_name=f"{gate_name} ({subcircuit_name})",
+                        output_path=output_path,
+                    )
+                except Exception as e:
+                    logger and logger.debug(f"Failed to generate subcircuit boundary for {gate_name}/{subcircuit_name}: {e}")
+
+        logger and logger.info(f"Saved subcircuit decision boundary visualizations to {viz_dir}")
+    except Exception as e:
+        logger and logger.warning(f"Failed to save subcircuit decision boundary visualizations: {e}")
+
+
 def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
     """
     Save experiment results to disk with clean folder structure.
@@ -183,7 +558,8 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
         profiling/profiling.json - Profiling data (run-level)
         trials/
             {trial_id}/
-                setup.json        - Trial setup parameters
+                config.json       - Full effective config (device, debug, + trial params)
+                setup.json        - Trial setup parameters (legacy)
                 metrics.json      - All metrics and analysis results
                 tensors.pt        - Tensor data (test samples, activations, weights)
                 all_gates/model.pt
@@ -202,6 +578,9 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
     _save_json(run_summary, run_dir / "summary.json")
     _save_explanation(run_dir / "explanation.md", RUN_EXPLANATION)
 
+    # Save gates.json with gate name -> base gate function mapping
+    _save_gates_registry(result, run_dir)
+
     # Save circuits at run level (from first trial - all trials share same circuit enumeration)
     _save_run_level_circuits(result, run_dir)
 
@@ -211,9 +590,21 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
     # Save subcircuits folder with rankings
     _save_subcircuits_folder(result, run_dir)
 
+    # Save summary_by_gate.json with per-gate aggregated metrics
+    _save_summary_by_gate(result, run_dir)
+
+    # Save trial_org.json mapping sweep parameters to trial IDs
+    _save_trial_organization(result, run_dir)
+
     # Create trials directory
     trials_dir = run_dir / "trials"
     trials_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save decision boundary visualizations (once for first trial's model)
+    _save_decision_boundary_visualizations(result, run_dir, logger)
+
+    # Save subcircuit-level decision boundary visualizations
+    _save_subcircuit_decision_boundaries(result, run_dir, logger)
 
     # Save each trial
     for trial_id, trial in result.trials.items():
@@ -229,19 +620,28 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
         setup_data = filter_non_serializable(asdict(trial.setup))
         _save_json(setup_data, trial_dir / "setup.json")
 
-        # 3. Metrics JSON - training and analysis results
+        # 3. Config JSON - full effective config (experiment-level + trial-level)
+        effective_config = {
+            "device": result.config.device,
+            "debug": result.config.debug,
+            "trial_id": trial_id,
+            **setup_data,
+        }
+        _save_json(effective_config, trial_dir / "config.json")
+
+        # 4. Metrics JSON - training and analysis results
         metrics_data = filter_non_serializable(asdict(trial.metrics))
         metrics_data["status"] = trial.status
         metrics_data["trial_id"] = trial.trial_id
         _save_json(metrics_data, trial_dir / "metrics.json")
 
-        # 4. Tensors PT - all tensor data
+        # 5. Tensors PT - all tensor data
         _save_tensors(trial, trial_dir, logger)
 
-        # 5. Models
+        # 6. Models
         _save_models(trial, trial_dir, logger)
 
-        # 6. Per-gate summaries
+        # 7. Per-gate summaries
         _save_gate_summaries(trial, trial_dir)
 
     logger and logger.info(f"Saved results to {run_dir}")
@@ -402,10 +802,14 @@ def _generate_run_summary(result: ExperimentResult) -> dict:
     if hasattr(result.config, "base_trial") and hasattr(result.config.base_trial, "constraints"):
         epsilon = getattr(result.config.base_trial.constraints, "epsilon", 0.2)
 
+    # Get normalized gate names from first trial (handles repeated gates like XOR, XOR_2)
+    first_trial = next(iter(result.trials.values()), None)
+    normalized_gates = first_trial.setup.model_params.logic_gates if first_trial else list(result.config.target_logic_gates)
+
     summary = {
         "experiment_id": result.experiment_id,
         "n_trials": len(result.trials),
-        "gates": list(result.config.target_logic_gates),
+        "gates": normalized_gates,
         "architecture": {
             "widths": result.config.widths,
             "depths": result.config.depths,
@@ -539,6 +943,7 @@ RUN_EXPLANATION = """# Run Summary
 
 - `summary.json`: Ranked results across all trials and gates
 - `config.json`: Experiment configuration
+- `trial_org.json`: Maps sweep parameters (width, depth, activation, etc.) to trial IDs
 - `circuits.json`: All enumerated subcircuits (shared across trials)
 - `profiling/`: Timing information
 - `trials/`: Per-trial results
@@ -563,7 +968,8 @@ TRIAL_EXPLANATION = """# Trial Summary
 ## Structure
 
 - `summary.json`: Trial-level ranked results
-- `setup.json`: Trial hyperparameters
+- `config.json`: Full effective config (device, debug, + all trial parameters)
+- `setup.json`: Trial hyperparameters (legacy, subset of config.json)
 - `metrics.json`: Full metrics data
 - `tensors.pt`: Test data, activations, weights
 - `all_gates/model.pt`: Trained MLP
@@ -838,21 +1244,84 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
     }
     _save_json(summary, subcircuits_dir / "summary.json")
 
+    # Compute rankings by node_mask_idx and edge_mask_idx for diagram naming
+    # Merge mask_idx_entries with averaged_rankings to get scores per (node_mask_idx, edge_mask_idx)
+    node_mask_scores = {}  # node_mask_idx -> list of avg_accuracies (best across edge variations)
+    edge_mask_scores = {}  # edge_mask_idx -> list of avg_accuracies (best across node patterns)
+
+    if first_trial and first_trial.subcircuits:
+        # Get all subcircuit scores (averaged across gates)
+        all_subcircuit_scores = {}
+        for gate, rankings in averaged_rankings.items():
+            for r in rankings:
+                sc_idx = r["subcircuit_idx"]
+                avg_acc = r.get("avg_accuracy", 0)
+                # Handle NaN values
+                if avg_acc is None or (isinstance(avg_acc, float) and math.isnan(avg_acc)):
+                    avg_acc = 0.0
+                if sc_idx not in all_subcircuit_scores:
+                    all_subcircuit_scores[sc_idx] = []
+                all_subcircuit_scores[sc_idx].append(avg_acc)
+
+        # Average across gates for each subcircuit
+        subcircuit_avg_scores = {}
+        for sc_idx, scores in all_subcircuit_scores.items():
+            valid_scores = [s for s in scores if s is not None and not (isinstance(s, float) and math.isnan(s))]
+            subcircuit_avg_scores[sc_idx] = sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
+
+        # Map to node_mask_idx and edge_mask_idx
+        for entry in mask_idx_entries:
+            sc_idx = entry["subcircuit_idx"]
+            nm_idx = entry["node_mask_idx"]
+            em_idx = entry["edge_mask_idx"]
+            score = subcircuit_avg_scores.get(sc_idx, 0.0)
+
+            if nm_idx not in node_mask_scores:
+                node_mask_scores[nm_idx] = []
+            node_mask_scores[nm_idx].append(score)
+
+            if em_idx not in edge_mask_scores:
+                edge_mask_scores[em_idx] = []
+            edge_mask_scores[em_idx].append(score)
+
+        # Compute best score for each node_mask_idx (best across edge variations)
+        node_mask_rankings = []
+        for nm_idx, scores in node_mask_scores.items():
+            valid = [s for s in scores if s is not None and not (isinstance(s, float) and math.isnan(s))]
+            best = max(valid) if valid else 0.0
+            avg = sum(valid) / len(valid) if valid else 0.0
+            node_mask_rankings.append({"node_mask_idx": nm_idx, "best_accuracy": best, "avg_accuracy": avg})
+        node_mask_rankings.sort(key=lambda x: x["best_accuracy"], reverse=True)
+
+        # Compute avg score for each edge_mask_idx (avg across node patterns)
+        edge_mask_rankings = []
+        for em_idx, scores in edge_mask_scores.items():
+            valid = [s for s in scores if s is not None and not (isinstance(s, float) and math.isnan(s))]
+            avg = sum(valid) / len(valid) if valid else 0.0
+            edge_mask_rankings.append({"edge_mask_idx": em_idx, "avg_accuracy": avg, "n_patterns": len(valid)})
+        edge_mask_rankings.sort(key=lambda x: x["avg_accuracy"], reverse=True)
+    else:
+        node_mask_rankings = []
+        edge_mask_rankings = []
+
     # Generate circuit diagrams (T1.h)
-    _generate_circuit_diagrams(first_trial, subcircuits_dir)
+    _generate_circuit_diagrams(first_trial, subcircuits_dir, node_mask_rankings, edge_mask_rankings)
 
     # Save explanation
     _save_explanation(subcircuits_dir / "explanation.md", SUBCIRCUITS_EXPLANATION)
 
 
-def _generate_circuit_diagrams(trial, subcircuits_dir: Path):
-    """Generate circuit diagrams for all subcircuits.
+def _generate_circuit_diagrams(
+    trial, subcircuits_dir: Path, node_mask_rankings: list = None, edge_mask_rankings: list = None
+):
+    """Generate circuit diagrams for all subcircuits with rankings in filenames.
 
     Creates:
         circuit_diagrams/
-            node_masks/{node_mask_idx}.png
-            edge_masks/{edge_mask_idx}.png
+            node_masks/rank{N:02d}_node{idx}.png  - ranked by best accuracy across edge variations
+            edge_masks/rank{N:02d}_edge{idx}.png  - ranked by avg accuracy across node patterns
             subcircuit_masks/{subcircuit_idx}.png
+            rankings.json                         - ranking metadata
     """
     from src.circuit import Circuit
 
@@ -868,8 +1337,19 @@ def _generate_circuit_diagrams(trial, subcircuits_dir: Path):
     edge_masks_dir.mkdir(parents=True, exist_ok=True)
     subcircuit_masks_dir.mkdir(parents=True, exist_ok=True)
 
+    # Build ranking lookup: node_mask_idx -> rank (0-indexed)
+    node_mask_rank = {}
+    if node_mask_rankings:
+        for rank, r in enumerate(node_mask_rankings):
+            node_mask_rank[r["node_mask_idx"]] = rank
+
+    edge_mask_rank = {}
+    if edge_mask_rankings:
+        for rank, r in enumerate(edge_mask_rankings):
+            edge_mask_rank[r["edge_mask_idx"]] = rank
+
     # Track unique node patterns
-    seen_node_patterns = {}
+    seen_node_patterns = {}  # hidden_pattern -> (node_mask_idx, circuit)
     node_mask_idx_counter = 0
 
     max_diagrams = min(48, len(trial.subcircuits))
@@ -888,20 +1368,66 @@ def _generate_circuit_diagrams(trial, subcircuits_dir: Path):
             hidden_masks = tuple(tuple(m) for m in node_masks[1:-1]) if len(node_masks) > 2 else ()
 
             if hidden_masks not in seen_node_patterns:
-                seen_node_patterns[hidden_masks] = node_mask_idx_counter
-                nm_path = node_masks_dir / f"{node_mask_idx_counter}.png"
-                circuit.visualize(file_path=str(nm_path), node_size="small")
+                seen_node_patterns[hidden_masks] = (node_mask_idx_counter, circuit)
                 node_mask_idx_counter += 1
         except Exception:
             pass  # Silently skip diagram generation failures
 
-    # edge_masks are equivalent to node_masks with full_edges_only=True
-    import shutil
-    for node_mask_idx in range(min(node_mask_idx_counter, 20)):
-        src = node_masks_dir / f"{node_mask_idx}.png"
-        dst = edge_masks_dir / f"{node_mask_idx}.png"
-        if src.exists():
-            shutil.copy(src, dst)
+    # Generate node_masks PNGs with ranking prefix
+    for hidden_pattern, (nm_idx, circuit) in seen_node_patterns.items():
+        rank = node_mask_rank.get(nm_idx, 99)
+        nm_path = node_masks_dir / f"rank{rank:02d}_node{nm_idx}.png"
+        try:
+            circuit.visualize(file_path=str(nm_path), node_size="small")
+        except Exception:
+            pass
+
+    # Generate edge_masks PNGs with ranking prefix
+    # Use edge_mask_idx from the circuit mapping, not unique edge patterns
+    # With full_edges_only=True, edge_mask_idx is always 0
+    seen_edge_mask_idx = {}  # edge_mask_idx -> circuit (first one for visualization)
+    edge_counts_local = {}  # node_mask_idx -> count (to track edge_mask_idx)
+
+    for sc_data in trial.subcircuits[:max_diagrams]:
+        node_masks = sc_data.get("node_masks", [])
+        hidden_masks = tuple(tuple(m) for m in node_masks[1:-1]) if len(node_masks) > 2 else ()
+
+        # Compute node_mask_idx for this pattern
+        nm_idx = None
+        for hp, (idx, _) in seen_node_patterns.items():
+            if hp == hidden_masks:
+                nm_idx = idx
+                break
+
+        if nm_idx is not None:
+            # Compute edge_mask_idx (how many times we've seen this node pattern)
+            if nm_idx not in edge_counts_local:
+                edge_counts_local[nm_idx] = 0
+            em_idx = edge_counts_local[nm_idx]
+            edge_counts_local[nm_idx] += 1
+
+            # Store first circuit for each unique edge_mask_idx
+            if em_idx not in seen_edge_mask_idx:
+                try:
+                    circuit = Circuit.from_dict(sc_data)
+                    seen_edge_mask_idx[em_idx] = circuit
+                except Exception:
+                    pass
+
+    for em_idx, circuit in seen_edge_mask_idx.items():
+        rank = edge_mask_rank.get(em_idx, 99)
+        em_path = edge_masks_dir / f"rank{rank:02d}_edge{em_idx}.png"
+        try:
+            circuit.visualize(file_path=str(em_path), node_size="small")
+        except Exception:
+            pass
+
+    # Save rankings metadata
+    _save_json({
+        "node_mask_rankings": node_mask_rankings or [],
+        "edge_mask_rankings": edge_mask_rankings or [],
+        "description": "Files named rank{N}_node{idx}.png where N is the rank (00=best)",
+    }, diagrams_dir / "rankings.json")
 
 
 SUBCIRCUITS_EXPLANATION = """# Subcircuits Analysis

@@ -38,7 +38,7 @@ def filter_subcircuits(
     1. Filter by bit_similarity and accuracy using epsilon threshold
     2. Sort by (accuracy DESC, bit_similarity DESC, node_sparsity DESC)
     3. Select up to max_subcircuits, diversifying by jaccard distance
-    4. If none pass threshold, still return the best one (always at least 1)
+    4. ALWAYS return at least 1 subcircuit (best one, even if none pass threshold)
 
     Note: Edge masks are not directly filtered here since circuits with
     the same node pattern but different edges are functionally equivalent
@@ -49,7 +49,7 @@ def filter_subcircuits(
         subcircuit_metrics: Per-subcircuit accuracy/similarity metrics
         subcircuits: Circuit objects (for jaccard calculation)
         subcircuit_structures: Circuit structure info (for sparsity)
-        max_subcircuits: Maximum number of subcircuits to return
+        max_subcircuits: Maximum number of subcircuits to return (0 means just best 1)
 
     Returns:
         FilterResult with selected indices and metadata
@@ -57,12 +57,20 @@ def filter_subcircuits(
     if not subcircuit_metrics:
         return FilterResult(indices=[], n_passing=0, n_total=0, best_metrics=None, best_failing=None)
 
+    # Always return at least 1 subcircuit
+    effective_max = max(1, max_subcircuits)
+
     metrics_by_idx = {m.idx: m for m in subcircuit_metrics}
     n_total = len(subcircuit_metrics)
 
     # First pass: filter by epsilon thresholds
+    # Note: NaN comparisons return False, so we explicitly check for NaN to exclude them
+    import math
     passing_indices = []
     for result in subcircuit_metrics:
+        # Exclude NaN values (they shouldn't pass the filter)
+        if math.isnan(result.bit_similarity) or math.isnan(result.accuracy):
+            continue
         if 1.0 - result.bit_similarity > constraints.epsilon:
             continue
         if 1.0 - result.accuracy > constraints.epsilon:
@@ -112,7 +120,7 @@ def filter_subcircuits(
         reverse=True,
     )
 
-    if max_subcircuits == 1:
+    if effective_max == 1:
         best_idx = sorted_indices[0]
         return FilterResult(
             indices=[best_idx],
@@ -126,7 +134,7 @@ def filter_subcircuits(
     selected = [sorted_indices[0]]
 
     for candidate_idx in sorted_indices[1:]:
-        if len(selected) >= max_subcircuits:
+        if len(selected) >= effective_max:
             break
 
         # Calculate max overlap with any already-selected subcircuit

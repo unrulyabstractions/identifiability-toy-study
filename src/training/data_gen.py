@@ -4,8 +4,8 @@
 import random
 
 from src.domain import (
-    ALL_LOGIC_GATES,
     generate_noisy_multi_gate_data,
+    resolve_gate,
 )
 from src.experiment_config import DataParams
 from src.schemas import Dataset, TrialData
@@ -22,7 +22,7 @@ def generate_dataset(
     Generate a dataset for the given logic gates.
 
     Args:
-        gate_names: List of gate names to include
+        gate_names: List of gate names to include (supports suffixed names like "XOR_2")
         device: Device to create tensors on
         n_repeats: Number of times to repeat the base data
         noise_std: Standard deviation of noise to add
@@ -31,7 +31,7 @@ def generate_dataset(
     Returns:
         Dataset with x and y tensors
     """
-    gates = [ALL_LOGIC_GATES[gate_name] for gate_name in gate_names]
+    gates = [resolve_gate(gate_name) for gate_name in gate_names]
     n_gates = len(gates)
     if n_gates > 1:
         x, y = generate_noisy_multi_gate_data(

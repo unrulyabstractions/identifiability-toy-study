@@ -181,13 +181,11 @@ def plot_decision_boundary_accuracy(
     Returns:
         Path to the saved figure
     """
-    from src.domain import ALL_LOGIC_GATES
+    from src.domain import resolve_gate
     from src.math import logits_to_binary
 
-    # Get gate function
-    if gate_name not in ALL_LOGIC_GATES:
-        raise ValueError(f"Unknown gate: {gate_name}. Available: {list(ALL_LOGIC_GATES.keys())}")
-    gate = ALL_LOGIC_GATES[gate_name]
+    # Get gate function (supports suffixed names like "XOR_2")
+    gate = resolve_gate(gate_name)
 
     # Sample uniformly
     x = np.random.uniform(x_range[0], x_range[1], n_samples)

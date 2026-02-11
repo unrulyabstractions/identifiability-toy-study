@@ -16,6 +16,7 @@ in their source modules (helpers.py and batched_eval.py).
 import torch
 
 from src.analysis import calculate_faithfulness_metrics
+from src.domain import generate_canonical_inputs
 from src.circuit import (
     adapt_masks_for_gate,
     batch_compute_metrics,
@@ -50,12 +51,7 @@ def compute_activations_phase(model, data, device, input_size):
         activations = model(data.test.x, return_activations=True)
 
         # Pre-compute canonical activations for visualization
-        canonical_inputs = {
-            "0_0": torch.tensor([[0.0, 0.0]], device=device),
-            "0_1": torch.tensor([[0.0, 1.0]], device=device),
-            "1_0": torch.tensor([[1.0, 0.0]], device=device),
-            "1_1": torch.tensor([[1.0, 1.0]], device=device),
-        }
+        canonical_inputs = generate_canonical_inputs(input_size, device)
         canonical_activations = {
             label: [a.clone() for a in model(inp, return_activations=True)]
             for label, inp in canonical_inputs.items()
@@ -116,15 +112,27 @@ def enumerate_circuits_phase(model, parallel_config):
 
 
 @profile_fn("Precompute Circuit Masks")
-def precompute_masks_phase(subcircuits, model, gate_names, eval_device, output_size):
-    """Precompute circuit masks for all gates."""
+def precompute_masks_phase(
+    subcircuits, model, gate_names, eval_device, output_size, gate_n_inputs_list=None
+):
+    """Precompute circuit masks for all gates.
+
+    Args:
+        subcircuits: List of subcircuits
+        model: Model to compute masks for
+        gate_names: List of gate names
+        eval_device: Device for evaluation
+        output_size: Number of output gates
+        gate_n_inputs_list: Optional list of n_inputs per gate (for mixed input sizes)
+    """
     precomputed_base_masks = precompute_circuit_masks_base(
         subcircuits, len(model.layers), device=eval_device
     )
     precomputed_masks_per_gate = {}
     for gate_idx in range(len(gate_names)):
+        gate_n_inputs = gate_n_inputs_list[gate_idx] if gate_n_inputs_list else None
         precomputed_masks_per_gate[gate_idx] = adapt_masks_for_gate(
-            precomputed_base_masks, gate_idx, output_size
+            precomputed_base_masks, gate_idx, output_size, gate_n_inputs=gate_n_inputs
         )
     return precomputed_masks_per_gate
 

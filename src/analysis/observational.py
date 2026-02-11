@@ -34,20 +34,33 @@ def _evaluate_samples(
     subcircuit: MLP,
     samples: list[tuple[torch.Tensor, torch.Tensor, float, str]],
     device: str,
+    ground_truth_fn=None,
 ) -> list[ObservationalSample]:
     """Evaluate gate_model and subcircuit on the same perturbed inputs.
 
     Pre-computes activations for circuit visualization (no model runs during viz).
     Handles bimodal transformations by adjusting output interpretation.
+
+    Args:
+        gate_model: Full gate model
+        subcircuit: Subcircuit model to evaluate
+        samples: List of (perturbed, base_input, magnitude, sample_type) tuples
+        device: Device for tensor operations
+        ground_truth_fn: Optional function to compute ground truth for a base input.
+                        If None, uses GROUND_TRUTH dict (2-input only).
     """
     results = []
 
     for perturbed, base_input, magnitude, sample_type in samples:
-        perturbed_dev = perturbed.unsqueeze(0).to(device)  # [1, 2]
+        perturbed_dev = perturbed.unsqueeze(0).to(device)  # [1, n_inputs]
 
         # Get ground truth from base input
-        base_key = (int(base_input[0].item()), int(base_input[1].item()))
-        ground_truth = GROUND_TRUTH.get(base_key, 0.0)
+        if ground_truth_fn is not None:
+            ground_truth = ground_truth_fn(base_input)
+        else:
+            # Legacy 2-input mode
+            base_key = tuple(int(b.item()) for b in base_input)
+            ground_truth = GROUND_TRUTH.get(base_key, 0.0)
 
         # Run BOTH models on the SAME perturbed input, get activations for viz
         with torch.inference_mode():
@@ -88,8 +101,8 @@ def _evaluate_samples(
 
         results.append(
             ObservationalSample(
-                input_values=[perturbed[0].item(), perturbed[1].item()],
-                base_input=[base_input[0].item(), base_input[1].item()],
+                input_values=perturbed.tolist(),
+                base_input=base_input.tolist(),
                 noise_magnitude=magnitude,
                 ground_truth=ground_truth,
                 gate_output=gate_output,
@@ -113,6 +126,7 @@ def calculate_observational_metrics(
     full_model: MLP,
     n_samples_per_base: int = 100,
     device: str = "cpu",
+    n_inputs: int = None,
 ) -> ObservationalMetrics:
     """
     Calculate observational metrics by perturbing BOTH gate_model and subcircuit the SAME way.
@@ -136,15 +150,20 @@ def calculate_observational_metrics(
         full_model: Full gate model (both get same perturbed inputs)
         n_samples_per_base: Samples per base input (100 = 400 total per category)
         device: Device for tensor operations
+        n_inputs: Number of input dimensions (defaults to model's first layer input size)
 
     Returns:
         ObservationalMetrics with all samples and aggregates
     """
+    # Determine input size from model if not specified
+    if n_inputs is None:
+        n_inputs = full_model.layers[0][0].in_features
+
+    # Generate all binary corner inputs for n-inputs
+    import itertools
     base_inputs = [
-        torch.tensor([0.0, 0.0]),
-        torch.tensor([0.0, 1.0]),
-        torch.tensor([1.0, 0.0]),
-        torch.tensor([1.0, 1.0]),
+        torch.tensor([float(b) for b in bits])
+        for bits in itertools.product([0, 1], repeat=n_inputs)
     ]
 
     # Generate samples (quick, do sequentially)

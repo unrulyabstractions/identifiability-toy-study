@@ -155,10 +155,13 @@ def generate_noisy_multi_gate_data(
     device="cpu",
 ):
     """
-    Generates noisy data for K logic gates. Each gate is expected to take the same number of inputs.
+    Generates noisy data for K logic gates. Supports mixed input sizes.
+
+    When gates have different n_inputs, uses max(n_inputs) for the input space.
+    Gates with fewer inputs use only the first n columns.
 
     Args:
-        logic_gates: List of logic gate functions, each accepting n_inputs and returning an output.
+        logic_gates: List of LogicGate objects. May have different n_inputs.
         n_repeats: Number of times to repeat the inputs for noise generation.
         noise_std: Standard deviation of the Gaussian noise added to the inputs.
         weights: Weights for sampling inputs.
@@ -167,15 +170,20 @@ def generate_noisy_multi_gate_data(
     Returns:
         Noisy inputs and corresponding outputs for the K logic gates.
     """
-    if len({lg.n_inputs for lg in logic_gates}) != 1:
-        raise ValueError("All logic gates must have the same number of inputs.")
-    n_inputs = logic_gates[0].n_inputs
+    # Use max n_inputs as the input dimension
+    max_n_inputs = max(lg.n_inputs for lg in logic_gates)
 
-    # Generate all possible input combinations for n_inputs binary inputs
-    inputs = LogicGate.get_inputs(n_inputs, n_repeats, weights)
+    # Generate all possible input combinations for max_n_inputs binary inputs
+    inputs = LogicGate.get_inputs(max_n_inputs, n_repeats, weights)
 
-    # Generate outputs for each logic gate and stack them horizontally (axis=1)
-    outputs = np.hstack([gate.gate_fn(inputs).reshape(-1, 1) for gate in logic_gates])
+    # Generate outputs for each logic gate
+    # Each gate uses only the first gate.n_inputs columns
+    outputs = []
+    for gate in logic_gates:
+        gate_inputs = inputs[:, :gate.n_inputs]  # Slice to gate's required inputs
+        output = gate.gate_fn(gate_inputs).reshape(-1, 1)
+        outputs.append(output)
+    outputs = np.hstack(outputs)
 
     out_x, out_y = LogicGate.add_noise_and_repeat(n_repeats, noise_std, inputs, outputs, device=device)
     return out_x, out_y
@@ -807,32 +815,45 @@ def not_implication_func(inputs, epsilon=0.5):
     return (A * (1 - B)).astype(np.float32)  # NOT Implication: A AND (NOT B)
 
 
-def majority_func(inputs):
-    return (np.sum(inputs, axis=1) > (inputs.shape[1] // 2)).astype(np.float32)
+def majority_func(inputs, epsilon=0.5):
+    """MAJORITY gate: output 1 if more than half of inputs are 1."""
+    inputs_bin = threshold(inputs, epsilon)
+    return (np.sum(inputs_bin, axis=1) > (inputs_bin.shape[1] / 2)).astype(np.float32)
 
 
-def parity_func(inputs):
-    return (np.sum(inputs, axis=1) % 2).astype(np.float32)
+def parity_func(inputs, epsilon=0.5):
+    """PARITY gate: output 1 if odd number of inputs are 1 (multi-input XOR)."""
+    inputs_bin = threshold(inputs, epsilon)
+    return (np.sum(inputs_bin, axis=1) % 2).astype(np.float32)
 
 
-def full_adder_func(inputs):
-    """
-    Full Adder function that computes the sum and carry of three binary inputs.
+# Note: and_func and or_func already work for any n_inputs via np.all/np.any
+# xor_func also works for any n_inputs (parity)
 
-    Args:
-        inputs (np.ndarray): A 2D array with exactly 3 columns representing the inputs
-                             (a, b, and carry-in). Shape should be (num_samples, 3).
 
-    Returns:
-        tuple: A tuple containing:
-            - np.ndarray: The sum output of the Full Adder. Shape will be (num_samples,).
-            - np.ndarray: The carry output of the Full Adder. Shape will be (num_samples,).
-    """
-    assert inputs.shape[1] == 3, "Full Adder requires exactly 3 inputs"
-    # Compute sum and carry outputs
-    sum_output = (np.sum(inputs, axis=1) % 2).astype(np.float32)
-    carry_output = (np.sum(inputs, axis=1) > 1).astype(np.float32)
-    return sum_output  # , carry_output
+def full_adder_sum_func(inputs, epsilon=0.5):
+    """Full Adder SUM output: XOR of all 3 inputs."""
+    inputs_bin = threshold(inputs, epsilon)
+    return (np.sum(inputs_bin, axis=1) % 2).astype(np.float32)
+
+
+def full_adder_carry_func(inputs, epsilon=0.5):
+    """Full Adder CARRY output: 1 if at least 2 inputs are 1."""
+    inputs_bin = threshold(inputs, epsilon)
+    return (np.sum(inputs_bin, axis=1) >= 2).astype(np.float32)
+
+
+# 1-input gates
+def not_func(inputs, epsilon=0.5):
+    """NOT gate: invert the single input."""
+    inputs_bin = threshold(inputs, epsilon)
+    return (1 - inputs_bin[:, 0]).astype(np.float32)
+
+
+def identity_func(inputs, epsilon=0.5):
+    """IDENTITY gate: pass through the single input."""
+    inputs_bin = threshold(inputs, epsilon)
+    return inputs_bin[:, 0].astype(np.float32)
 
 
 def threshold(inputs, epsilon=0.5):
@@ -1012,21 +1033,233 @@ OP_TO_TRUTH_TABLE = {
     ">": ((1, 1), (0, 1)),
 }
 
-ALL_LOGIC_GATES: Mapping[str, LogicGate] = {
-    "IMP": LogicGate(n_inputs=2, gate_fn=implication_func, name="IMP"),
-    "XOR": LogicGate(n_inputs=2, gate_fn=xor_func, name="XOR"),
-    "AND": LogicGate(n_inputs=2, gate_fn=and_func, name="AND"),
-    "OR": LogicGate(n_inputs=2, gate_fn=or_func, name="OR"),
-    "NAND": LogicGate(n_inputs=2, gate_fn=nand_func, name="NAND"),
-    "NOR": LogicGate(n_inputs=2, gate_fn=nor_func, name="NOR"),
-    "NIMP": LogicGate(n_inputs=2, gate_fn=not_implication_func, name="NIMP"),
-    # "MAJORITY": LogicGate(n_inputs=3, gate_fn=majority_func, name="MAJORITY"),
-    # "PARITY": LogicGate(n_inputs=3, gate_fn=parity_func, name="PARITY"),
-    # "FULL_ADDER": LogicGate(n_inputs=3, gate_fn=full_adder_func, name="FULL_ADDER"),
-    # "EXACT_2": LogicGate(
-    #     n_inputs=3, gate_fn=lambda x: exactly_k_func(x, 2), name="EXACT_2"
-    # ),
+# Base gate registry - default n_inputs
+# Gates marked with "n-ary" work with any number of inputs
+_BASE_LOGIC_GATES: Mapping[str, LogicGate] = {
+    # 1-input gates
+    "NOT": LogicGate(n_inputs=1, gate_fn=not_func, name="NOT"),
+    "ID": LogicGate(n_inputs=1, gate_fn=identity_func, name="ID"),
+    # 2-input gates (default)
+    "IMP": LogicGate(n_inputs=2, gate_fn=implication_func, name="IMP"),  # Binary only
+    "XOR": LogicGate(n_inputs=2, gate_fn=xor_func, name="XOR"),  # n-ary
+    "AND": LogicGate(n_inputs=2, gate_fn=and_func, name="AND"),  # n-ary
+    "OR": LogicGate(n_inputs=2, gate_fn=or_func, name="OR"),  # n-ary
+    "NAND": LogicGate(n_inputs=2, gate_fn=nand_func, name="NAND"),  # n-ary
+    "NOR": LogicGate(n_inputs=2, gate_fn=nor_func, name="NOR"),  # n-ary
+    "NIMP": LogicGate(n_inputs=2, gate_fn=not_implication_func, name="NIMP"),  # Binary only
+    # 3-input specific gates
+    "MAJORITY": LogicGate(n_inputs=3, gate_fn=majority_func, name="MAJORITY"),  # n-ary
+    "PARITY": LogicGate(n_inputs=3, gate_fn=parity_func, name="PARITY"),  # n-ary (same as XOR)
+    "FA_SUM": LogicGate(n_inputs=3, gate_fn=full_adder_sum_func, name="FA_SUM"),
+    "FA_CARRY": LogicGate(n_inputs=3, gate_fn=full_adder_carry_func, name="FA_CARRY"),
 }
+
+# Gates that can work with any number of inputs >= 2
+_NARY_GATES = {"XOR", "AND", "OR", "NAND", "NOR", "MAJORITY", "PARITY"}
+
+
+def create_gate(base_name: str, n_inputs: int) -> LogicGate:
+    """Create a LogicGate with specified n_inputs.
+
+    Args:
+        base_name: Base gate name (XOR, AND, OR, etc.)
+        n_inputs: Number of inputs for the gate
+
+    Returns:
+        LogicGate with specified n_inputs
+
+    Examples:
+        create_gate("XOR", 3) -> 3-input XOR gate
+        create_gate("AND", 4) -> 4-input AND gate
+    """
+    if base_name not in _BASE_LOGIC_GATES:
+        raise KeyError(f"Unknown gate: {base_name}. Available: {list(_BASE_LOGIC_GATES.keys())}")
+
+    base_gate = _BASE_LOGIC_GATES[base_name]
+
+    if base_name not in _NARY_GATES and n_inputs != base_gate.n_inputs:
+        raise ValueError(f"Gate {base_name} only supports {base_gate.n_inputs} inputs, not {n_inputs}")
+
+    if n_inputs < 1:
+        raise ValueError(f"n_inputs must be >= 1, got {n_inputs}")
+
+    # Create new gate with specified n_inputs
+    name = base_name if n_inputs == base_gate.n_inputs else f"{base_name}:{n_inputs}"
+    return LogicGate(n_inputs=n_inputs, gate_fn=base_gate.gate_fn, name=name)
+
+
+# Public registry includes only default variants
+# Use create_gate() or resolve_gate("XOR:3") for custom input counts
+ALL_LOGIC_GATES: Mapping[str, LogicGate] = _BASE_LOGIC_GATES
+
+
+def generate_canonical_inputs(n_inputs: int, device: str = "cpu"):
+    """Generate all binary input combinations for n_inputs dimensions.
+
+    Args:
+        n_inputs: Number of input dimensions
+        device: Torch device for tensors
+
+    Returns:
+        Dict mapping label (e.g., "0_1_0") to tensor of shape [1, n_inputs]
+
+    Example:
+        generate_canonical_inputs(2) -> {
+            "0_0": tensor([[0., 0.]]),
+            "0_1": tensor([[0., 1.]]),
+            "1_0": tensor([[1., 0.]]),
+            "1_1": tensor([[1., 1.]]),
+        }
+    """
+    import torch
+
+    canonical_inputs = {}
+    for i in range(2**n_inputs):
+        bits = tuple((i >> j) & 1 for j in range(n_inputs))
+        label = "_".join(str(b) for b in bits)
+        tensor = torch.tensor([list(map(float, bits))], device=device)
+        canonical_inputs[label] = tensor
+    return canonical_inputs
+
+
+def parse_gate_name(gate_name: str) -> tuple[str, int | None, int | None]:
+    """Parse a gate name into components.
+
+    Supports:
+        - "XOR" -> base="XOR", n_inputs=None, instance=None
+        - "XOR_2" -> base="XOR", n_inputs=None, instance=2
+        - "XOR:3" -> base="XOR", n_inputs=3, instance=None
+        - "XOR:3_2" -> base="XOR", n_inputs=3, instance=2
+
+    Returns:
+        Tuple of (base_name, n_inputs, instance_number)
+    """
+    import re
+
+    # Pattern: BASE[:N][_M] where N is n_inputs and M is instance number
+    match = re.match(r"^([A-Z_]+)(?::(\d+))?(?:_(\d+))?$", gate_name)
+    if not match:
+        return gate_name, None, None
+
+    base_name = match.group(1)
+    n_inputs = int(match.group(2)) if match.group(2) else None
+    instance = int(match.group(3)) if match.group(3) else None
+
+    return base_name, n_inputs, instance
+
+
+def get_base_gate_name(gate_name: str) -> str:
+    """Extract base gate name from a potentially suffixed name.
+
+    Examples:
+        "XOR" -> "XOR"
+        "XOR_2" -> "XOR"
+        "XOR:3" -> "XOR"
+        "XOR:3_2" -> "XOR"
+    """
+    base_name, _, _ = parse_gate_name(gate_name)
+    return base_name
+
+
+def resolve_gate(gate_name: str) -> LogicGate:
+    """Resolve a gate name to a LogicGate.
+
+    Supports:
+        - "XOR" -> 2-input XOR (default)
+        - "XOR_2" -> 2-input XOR (second instance, same function)
+        - "XOR:3" -> 3-input XOR
+        - "AND:4" -> 4-input AND
+        - "MAJORITY" -> 3-input MAJORITY (its default)
+
+    Args:
+        gate_name: Gate name with optional :N suffix for n_inputs
+
+    Returns:
+        LogicGate object configured for the specified inputs
+
+    Raises:
+        KeyError: If the base gate is not found
+        ValueError: If n_inputs is invalid for the gate type
+    """
+    base_name, n_inputs, _ = parse_gate_name(gate_name)
+
+    if base_name not in ALL_LOGIC_GATES:
+        raise KeyError(f"Unknown gate: {gate_name} (base: {base_name}). Available: {list(ALL_LOGIC_GATES.keys())}")
+
+    if n_inputs is not None:
+        # Custom n_inputs specified - use create_gate
+        return create_gate(base_name, n_inputs)
+    else:
+        # Use default n_inputs from registry
+        return ALL_LOGIC_GATES[base_name]
+
+
+def normalize_gate_names(gate_names: list[str]) -> list[str]:
+    """Convert a list of gate names to unique names, adding suffixes for duplicates.
+
+    Examples:
+        ["XOR", "AND"] -> ["XOR", "AND"]
+        ["XOR", "XOR"] -> ["XOR", "XOR_2"]
+        ["XOR", "XOR", "XOR"] -> ["XOR", "XOR_2", "XOR_3"]
+        ["XOR", "AND", "XOR"] -> ["XOR", "AND", "XOR_2"]
+
+    Args:
+        gate_names: List of gate names (may contain duplicates)
+
+    Returns:
+        List of unique gate names with suffixes for duplicates
+    """
+    counts = {}  # base_name -> count seen so far
+    normalized = []
+
+    for name in gate_names:
+        base_name = get_base_gate_name(name)
+
+        # Validate base gate exists
+        if base_name not in ALL_LOGIC_GATES:
+            raise KeyError(f"Unknown gate: {name}. Available: {list(ALL_LOGIC_GATES.keys())}")
+
+        # Track occurrences
+        if base_name not in counts:
+            counts[base_name] = 0
+        counts[base_name] += 1
+
+        # First occurrence uses base name, subsequent get suffix
+        if counts[base_name] == 1:
+            normalized.append(base_name)
+        else:
+            normalized.append(f"{base_name}_{counts[base_name]}")
+
+    return normalized
+
+
+def get_max_n_inputs(gate_names: list[str]) -> int:
+    """Get the maximum n_inputs across a list of gate names.
+
+    Args:
+        gate_names: List of gate names (supports suffixed names like "XOR_2")
+
+    Returns:
+        Maximum n_inputs across all gates
+    """
+    return max(resolve_gate(name).n_inputs for name in gate_names)
+
+
+def build_gate_registry(gate_names: list[str]) -> dict[str, str]:
+    """Build a registry mapping unique gate names to their base gate types.
+
+    This is useful for saving to gates.json to document the gate configuration.
+
+    Args:
+        gate_names: List of normalized gate names (output of normalize_gate_names)
+
+    Returns:
+        Dict mapping gate_name -> base_gate_type
+
+    Example:
+        ["XOR", "XOR_2", "AND"] -> {"XOR": "XOR", "XOR_2": "XOR", "AND": "AND"}
+    """
+    return {name: get_base_gate_name(name) for name in gate_names}
 
 
 def nn_sample_complexity(width, depth, output_dim=7, n_gates=7):

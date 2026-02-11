@@ -10,7 +10,7 @@ import random
 from itertools import combinations, product
 
 from src.circuit.precompute import precompute_circuits_for_architectures
-from src.domain import ALL_LOGIC_GATES
+from src.domain import get_max_n_inputs, normalize_gate_names
 from src.experiment_config import ExperimentConfig, TrialSetup
 from src.infra import parallel_map
 from src.schemas import ExperimentResult
@@ -55,18 +55,25 @@ def run_experiment(
 
     experiment_result = ExperimentResult(config=cfg)
 
+    # Normalize gate names to handle duplicates (e.g., ["XOR", "XOR"] -> ["XOR", "XOR_2"])
+    normalized_gates = normalize_gate_names(cfg.target_logic_gates)
+    logger and logger.info(f"Normalized gates: {normalized_gates}")
+
     gates_combinations = build_gate_combinations(
-        cfg.target_logic_gates, cfg.num_gates_per_run
+        normalized_gates, cfg.num_gates_per_run
     )
 
-    # Determine input size from gates (output is always 1 per gate)
-    first_gate = gates_combinations[0][0]
-    input_size = ALL_LOGIC_GATES[first_gate].n_inputs
+    # Determine input size from gates - use max across all gates to support mixed sizes
+    first_combo = gates_combinations[0]
+    input_size = get_max_n_inputs(first_combo)
+
+    # Determine output size (max gates across all combinations)
+    output_size = max(len(combo) for combo in gates_combinations)
 
     # Pre-compute circuits for all architectures
     logger and logger.info("\nPre-computing circuits for all architectures...")
     circuits_cache = precompute_circuits_for_architectures(
-        cfg.widths, cfg.depths, input_size, logger
+        cfg.widths, cfg.depths, input_size, output_size, logger
     )
 
     # Collect all trial configurations
@@ -82,7 +89,9 @@ def run_experiment(
                 data_params, logic_gates, cfg.device, logger=logger, debug=cfg.debug
             )
 
-            for width, depth, lr in product(cfg.widths, cfg.depths, cfg.learning_rates):
+            for width, depth, activation, lr in product(
+                cfg.widths, cfg.depths, cfg.activations, cfg.learning_rates
+            ):
                 # Each trial should have its independent set of params
                 model_params = copy.deepcopy(cfg.base_trial.model_params)
                 train_params = copy.deepcopy(cfg.base_trial.train_params)
@@ -91,6 +100,7 @@ def run_experiment(
                 train_params.learning_rate = lr
                 model_params.width = width
                 model_params.depth = depth
+                model_params.activation = activation
                 model_params.logic_gates = logic_gates
 
                 trial_setup = TrialSetup(

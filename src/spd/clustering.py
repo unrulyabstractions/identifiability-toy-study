@@ -20,7 +20,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from src.domain import ALL_LOGIC_GATES
+from src.domain import ALL_LOGIC_GATES, get_base_gate_name, resolve_gate, create_gate
+from src.domain.logic_gates import _NARY_GATES
 
 try:
     from scipy.cluster.hierarchy import fcluster, linkage
@@ -212,7 +213,10 @@ def map_clusters_to_functions(
         all_inputs.append(inp)
 
     cluster_functions = {}
+    # Resolve gate names (support suffixed names like "XOR_2") to base gate names
     gates_to_check = gate_names if gate_names else list(ALL_LOGIC_GATES.keys())
+    # Get unique base gates for comparison
+    base_gates_to_check = list(set(get_base_gate_name(g) for g in gates_to_check))
 
     for cluster_idx in range(n_clusters):
         component_indices = [
@@ -235,12 +239,18 @@ def map_clusters_to_functions(
         best_match = "UNKNOWN"
         best_jaccard = 0
 
-        for gate_name in gates_to_check:
-            if gate_name not in ALL_LOGIC_GATES:
+        for base_gate_name in base_gates_to_check:
+            if base_gate_name not in ALL_LOGIC_GATES:
                 continue
-            gate = ALL_LOGIC_GATES[gate_name]
-            if gate.n_inputs != n_inputs:
-                continue
+
+            # For n-ary gates, create a version with the model's n_inputs
+            # For fixed-input gates, skip if n_inputs doesn't match
+            if base_gate_name in _NARY_GATES:
+                gate = create_gate(base_gate_name, n_inputs)
+            else:
+                gate = ALL_LOGIC_GATES[base_gate_name]
+                if gate.n_inputs != n_inputs:
+                    continue
 
             truth_table = gate.truth_table()
             gate_active = {idx for idx, inp in enumerate(all_inputs) if truth_table.get(inp, 0) == 1}
@@ -251,7 +261,7 @@ def map_clusters_to_functions(
 
             if jaccard > best_jaccard:
                 best_jaccard = jaccard
-                best_match = gate_name
+                best_match = base_gate_name
 
         if best_jaccard > 0.5:
             cluster_functions[cluster_idx] = f"{best_match} ({best_jaccard:.2f})"

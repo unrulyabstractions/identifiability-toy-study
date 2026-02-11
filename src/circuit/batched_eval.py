@@ -147,11 +147,26 @@ def _get_model_weights(
 # =============================================================================
 
 
+def _get_activation_fn(activation: str):
+    """Get the functional activation from name."""
+    if activation == "leaky_relu":
+        return torch.nn.functional.leaky_relu
+    elif activation == "relu":
+        return torch.nn.functional.relu
+    elif activation == "tanh":
+        return torch.tanh
+    elif activation == "sigmoid":
+        return torch.sigmoid
+    else:
+        return torch.nn.functional.relu  # Default fallback
+
+
 def _evaluate_subcircuits_chunk(
     x: torch.Tensor,  # [n_samples, input_size]
     weights: list[torch.Tensor],  # each [out, in]
     biases: list[torch.Tensor],  # each [out]
     layer_masks_list: list[torch.Tensor],  # each [n_circuits, out, in]
+    activation: str = "leaky_relu",  # Activation function name
 ) -> torch.Tensor:  # [n_circuits, n_samples, 1]
     """
     Evaluate a chunk of subcircuits (internal helper).
@@ -161,11 +176,13 @@ def _evaluate_subcircuits_chunk(
         weights: List of weight tensors per layer
         biases: List of bias tensors per layer
         layer_masks_list: List of mask tensors [n_circuits, out, in] per layer
+        activation: Name of activation function to use
 
     Returns:
         Tensor [n_circuits, n_samples, 1]
     """
     n_circuits = layer_masks_list[0].shape[0]
+    act_fn = _get_activation_fn(activation)
 
     h = x.unsqueeze(0).expand(n_circuits, -1, -1)  # [n_circuits, n_samples, input_size]
 
@@ -178,7 +195,7 @@ def _evaluate_subcircuits_chunk(
         h = torch.bmm(h, W_masked.transpose(1, 2)) + b  # [n_circuits, n_samples, out]
 
         if layer_idx < len(weights) - 1:
-            h = torch.nn.functional.relu(h)  # [n_circuits, n_samples, hidden]
+            h = act_fn(h)  # [n_circuits, n_samples, hidden]
 
     return h  # [n_circuits, n_samples, 1]
 
@@ -210,6 +227,7 @@ def batch_evaluate_subcircuits(
     device = eval_device if eval_device is not None else model.device
     n_circuits = len(circuits)
     n_layers = len(model.layers)
+    activation = model.activation  # Get activation from model
 
     # Ensure input is on correct device
     if x.device.type != device:
@@ -227,14 +245,14 @@ def batch_evaluate_subcircuits(
 
             # If small enough, process in one batch
             if n_circuits <= max_batch_size:
-                return _evaluate_subcircuits_chunk(x, weights, biases, layer_masks_list)
+                return _evaluate_subcircuits_chunk(x, weights, biases, layer_masks_list, activation)
 
             # Chunk the precomputed masks
             results = []
             for start_idx, end_idx in chunked_indices(n_circuits, max_batch_size):
                 chunk_masks = [m[start_idx:end_idx] for m in layer_masks_list]
                 chunk_result = _evaluate_subcircuits_chunk(
-                    x, weights, biases, chunk_masks
+                    x, weights, biases, chunk_masks, activation
                 )
                 results.append(chunk_result)
             return torch.cat(results, dim=0)
@@ -246,7 +264,7 @@ def batch_evaluate_subcircuits(
             layer_masks_list = precompute_circuit_masks(
                 circuits, n_layers, gate_idx, device
             )
-            return _evaluate_subcircuits_chunk(x, weights, biases, layer_masks_list)
+            return _evaluate_subcircuits_chunk(x, weights, biases, layer_masks_list, activation)
 
         # Large circuit list - compute masks incrementally per chunk
         results = []
@@ -259,7 +277,7 @@ def batch_evaluate_subcircuits(
             )
 
             # Evaluate chunk
-            chunk_result = _evaluate_subcircuits_chunk(x, weights, biases, chunk_masks)
+            chunk_result = _evaluate_subcircuits_chunk(x, weights, biases, chunk_masks, activation)
             results.append(chunk_result.cpu())  # Move to CPU to free GPU memory
 
             # Explicitly delete chunk masks to free memory
@@ -317,25 +335,43 @@ def adapt_masks_for_gate(
     base_masks: list[torch.Tensor],
     gate_idx: int,
     output_size: int,
+    gate_n_inputs: int | None = None,
 ) -> list[torch.Tensor]:
     """
-    Adapt base masks for a specific gate by slicing the last layer.
+    Adapt base masks for a specific gate by slicing the last layer and masking unused inputs.
 
     This is a cheap operation (just slicing) compared to recomputing all masks.
+
+    When gates have different n_inputs (e.g., XOR uses 2 inputs, MAJORITY uses 3),
+    this function masks out the unused input columns in the first layer edge mask
+    to ensure consistent comparison across gates.
 
     Args:
         base_masks: Pre-computed masks from precompute_circuit_masks_base
         gate_idx: Which output gate to slice
         output_size: Total number of output gates
+        gate_n_inputs: Number of inputs this gate uses (if less than max_n_inputs,
+            unused input columns in first layer are masked out)
 
     Returns:
-        List of tensors with last layer sliced for gate_idx
+        List of tensors with last layer sliced for gate_idx and unused inputs masked
     """
-    if output_size == 1:
-        return base_masks
+    result = list(base_masks)  # Shallow copy
 
-    # Only need to slice the last layer
-    result = base_masks[:-1] + [base_masks[-1][:, gate_idx : gate_idx + 1, :]]
+    # Adapt output layer
+    if output_size > 1:
+        result[-1] = base_masks[-1][:, gate_idx : gate_idx + 1, :]
+
+    # Adapt input layer for gates with fewer inputs than max_n_inputs
+    if gate_n_inputs is not None:
+        first_layer = result[0]  # Shape: [n_circuits, hidden_size, max_n_inputs]
+        max_n_inputs = first_layer.shape[2]
+        if gate_n_inputs < max_n_inputs:
+            # Clone first layer and zero out unused input columns
+            first_layer = first_layer.clone()
+            first_layer[:, :, gate_n_inputs:] = 0
+            result[0] = first_layer
+
     return result
 
 
@@ -471,6 +507,8 @@ def batch_compute_metrics(
     all_bit_sims = []
     all_best_sims = []
 
+    activation = model.activation  # Get activation from model
+
     with torch.inference_mode():
         weights, biases = _get_model_weights(model, device, gate_idx)
 
@@ -483,7 +521,7 @@ def batch_compute_metrics(
             )
 
             # Evaluate chunk
-            y_chunk = _evaluate_subcircuits_chunk(x, weights, biases, chunk_masks)
+            y_chunk = _evaluate_subcircuits_chunk(x, weights, biases, chunk_masks, activation)
 
             # Compute metrics for chunk
             accs, logit_sims, bit_sims, best_sims = _compute_chunk_metrics(
@@ -579,8 +617,8 @@ def _find_top_variants(
     # Sort by score (ascending, so best = lowest negated values = first)
     scored_variants.sort(key=lambda x: x[0])
 
-    # Get top N variants
-    top_n = min(max_variants, len(scored_variants))
+    # Get top N variants (always at least 1)
+    top_n = min(max(1, max_variants), len(scored_variants))
     top_variants = []
     for i in range(top_n):
         _, global_idx, local_idx = scored_variants[i]

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from src.experiment import run_experiment
-from src.experiment_config import ExperimentConfig
+from src.experiment_config import ExperimentConfig, set_test_mode_global
 from src.infra import print_profile, profile, profile_fn, setup_logging
 from src.persistence import (
     get_all_runs,
@@ -14,7 +14,7 @@ from src.persistence import (
     save_results,
 )
 from src.schemas import ExperimentResult
-from src.spd import SpdResults, load_spd_results, run_spd, save_spd_results
+from src.spd import SpdResults, load_spd_results, run_spd, run_trial_on_spd_results, save_spd_results
 from src.viz import visualize_experiment, visualize_spd_experiment
 
 
@@ -33,6 +33,17 @@ def get_args() -> Any:
         help="Device for SPD decomposition. CPU is fastest for small models",
     )
     parser.add_argument("--debug", action="store_true", help="Enable debugging")
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Enable fast test mode (smaller datasets, fewer epochs)",
+    )
+    parser.add_argument(
+        "--test-gates",
+        type=int,
+        default=0,
+        help="Test gate configuration: 0=XOR, 1=OR+AND, 2=XOR+XOR, 3=ID+IMP, 4=ID+MAJ, 5=XOR+MAJ",
+    )
     parser.add_argument(
         "--analysis-only",
         action="store_true",
@@ -160,6 +171,10 @@ def do_spd(
 ) -> SpdResults:
     spd_result = run_spd(result, run_dir=run_dir, device=spd_device)
     save_spd_results(spd_result, run_dir=run_dir)
+
+    # Run trial analysis on SPD-discovered subcircuits
+    run_trial_on_spd_results(spd_result, result, run_dir=run_dir, device=spd_device)
+
     if viz:
         visualize_spd_experiment(spd_result, run_dir=run_dir)
     return spd_result
@@ -203,6 +218,10 @@ def exit_fx() -> None:
 def main() -> None:
     args = get_args()
 
+    # Set test mode BEFORE creating any configs (affects default values)
+    if args.test:
+        set_test_mode_global(True, args.test_gates)
+
     # Output path
     output_dir = Path("runs")
     os.makedirs(output_dir, exist_ok=True)
@@ -211,8 +230,8 @@ def main() -> None:
     if rerun_pipeline(output_dir, args):
         exit_fx()
 
-    # We identify run by time
-    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    # We identify run by time (with milliseconds to avoid collisions in parallel runs)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
 
     # Run path
     run_dir = os.path.join(output_dir, f"run_{timestamp}")

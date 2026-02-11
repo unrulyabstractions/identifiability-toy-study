@@ -147,38 +147,37 @@ def calculate_faithfulness_metrics(
         score_type: str,
     ) -> CounterfactualEffect:
         """Build a CounterfactualEffect from intervention results."""
-        y_clean_val = pair.y_clean.mean().item()
-        y_corrupted_val = pair.y_corrupted.mean().item()
-        y_intervened_val = y_intervened.mean().item()
+        # Convert logits to bits for scoring (user requested bit comparison, not logit)
+        y_clean_bit = logits_to_binary(pair.y_clean).mean().item()
+        y_corrupted_bit = logits_to_binary(pair.y_corrupted).mean().item()
+        y_intervened_bit = logits_to_binary(y_intervened).mean().item()
 
-        # Compute the appropriate score based on experiment type
+        # Compute the appropriate score based on experiment type (using bits)
         if score_type == "sufficiency":
             # Denoise in-circuit: recovery
             faith_score = compute_sufficiency_score(
-                y_intervened_val, y_clean_val, y_corrupted_val
+                y_intervened_bit, y_clean_bit, y_corrupted_bit
             )
         elif score_type == "completeness":
             # Denoise out-circuit: 1 - recovery = disruption
             faith_score = compute_completeness_score(
-                y_intervened_val, y_clean_val, y_corrupted_val
+                y_intervened_bit, y_clean_bit, y_corrupted_bit
             )
         elif score_type == "necessity":
             # Noise in-circuit: disruption
             faith_score = compute_necessity_score(
-                y_intervened_val, y_clean_val, y_corrupted_val
+                y_intervened_bit, y_clean_bit, y_corrupted_bit
             )
         elif score_type == "independence":
             # Noise out-circuit: 1 - disruption = recovery
             faith_score = compute_independence_score(
-                y_intervened_val, y_clean_val, y_corrupted_val
+                y_intervened_bit, y_clean_bit, y_corrupted_bit
             )
         else:
             raise ValueError(f"Unknown score_type: {score_type}")
 
-        output_changed = (
-            logits_to_binary(torch.tensor(y_intervened_val)).item()
-            == logits_to_binary(torch.tensor(y_corrupted_val)).item()
-        )
+        # Check if output bit matches corrupted bit
+        output_changed = y_intervened_bit == y_corrupted_bit
 
         # Convert activations to lists for JSON serialization
         clean_acts_list = [a.squeeze(0).tolist() for a in pair.act_clean]
@@ -191,9 +190,9 @@ def calculate_faithfulness_metrics(
             score_type=score_type,
             clean_input=pair.x_clean.flatten().tolist(),
             corrupted_input=pair.x_corrupted.flatten().tolist(),
-            expected_clean_output=y_clean_val,
-            expected_corrupted_output=y_corrupted_val,
-            actual_output=y_intervened_val,
+            expected_clean_output=y_clean_bit,
+            expected_corrupted_output=y_corrupted_bit,
+            actual_output=y_intervened_bit,
             output_changed_to_corrupted=output_changed,
             clean_activations=clean_acts_list,
             corrupted_activations=corrupted_acts_list,

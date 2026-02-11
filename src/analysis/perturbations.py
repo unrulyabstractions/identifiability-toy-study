@@ -47,7 +47,8 @@ def _generate_ood_multiply_samples(
     n_each = n_samples_per_base // 2
 
     for base_input in base_inputs:
-        if base_input[0].item() == 0.0 and base_input[1].item() == 0.0:
+        # Skip all-zeros input (multiplication won't change it)
+        if torch.all(base_input == 0.0):
             continue
 
         # Positive: scale > 1

@@ -45,6 +45,7 @@ def train_model(
         hidden_sizes=([model_params.width] * model_params.depth),
         input_size=input_size,
         output_size=output_size,
+        activation=model_params.activation,
         device=device,
         debug=debug,
         logger=logger,

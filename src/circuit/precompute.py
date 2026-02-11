@@ -7,18 +7,27 @@ from src.infra import profile
 from .circuit import enumerate_circuits_for_architecture
 
 
-def get_layer_widths(input_size: int, width: int, depth: int) -> list[int]:
+def get_layer_widths(
+    input_size: int, width: int, depth: int, output_size: int = 1
+) -> list[int]:
     """Compute layer widths for an MLP architecture.
 
-    Output size is always 1 since each gate is analyzed independently.
+    Args:
+        input_size: Number of input features
+        width: Hidden layer width
+        depth: Number of hidden layers
+        output_size: Number of output units (gates). For multi-gate models,
+            this should match the number of gates so masks can be properly
+            adapted for each gate.
     """
-    return [input_size] + [width] * depth + [1]
+    return [input_size] + [width] * depth + [output_size]
 
 
 def precompute_circuits_for_architectures(
     widths: list[int],
     depths: list[int],
     input_size: int,
+    output_size: int = 1,
     logger=None,
 ) -> dict[tuple[int, int], tuple[list, list]]:
     """Pre-compute circuits for all unique (width, depth) combinations.
@@ -27,6 +36,8 @@ def precompute_circuits_for_architectures(
         widths: List of hidden layer widths to enumerate
         depths: List of hidden layer depths to enumerate
         input_size: Number of input features
+        output_size: Number of output units (gates). For multi-gate models,
+            this should be the maximum number of gates across trials.
         logger: Optional logger for progress messages
 
     Returns:
@@ -39,7 +50,7 @@ def precompute_circuits_for_architectures(
         if key in circuits_cache:
             continue
 
-        layer_widths = get_layer_widths(input_size, width, depth)
+        layer_widths = get_layer_widths(input_size, width, depth, output_size)
         logger and logger.info(
             f"Pre-computing circuits for width={width}, depth={depth}"
         )

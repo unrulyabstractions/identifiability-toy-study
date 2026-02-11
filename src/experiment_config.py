@@ -23,12 +23,22 @@ from src.schema_class import SchemaClass
 # TEST HELPER
 ###############
 
-_FAST_TEST_MODE = True
+_FAST_TEST_MODE = False
+_FAST_TEST_GATES_IDX = 0
+
+# Test gate configurations:
+#   0: ["XOR"]                   - single 2-input gate (fastest)
+#   1: ["OR", "AND"]             - two 2-input gates
+#   2: ["XOR", "XOR"]            - duplicate gates
+#   3: ["ID", "IMP"]             - identity gate test
+#   4: ["ID", "MAJORITY"]        - 3-input gate test
+#   5: ["XOR", "MAJORITY"]       - mixed 2-input and 3-input
 
 
-def set_test_mode_global(val: bool):
-    global _FAST_TEST_MODE
+def set_test_mode_global(val: bool, test_gates_idx: int = 0):
+    global _FAST_TEST_MODE, _FAST_TEST_GATES_IDX
     _FAST_TEST_MODE = val
+    _FAST_TEST_GATES_IDX = test_gates_idx
 
 
 def get_default_train_n_samples():
@@ -44,10 +54,20 @@ def get_default_train_noise():
 
 
 def get_default_logic_gates():
-    ALL_GATES = ["XOR", "AND", "OR", "IMP"]
-    TEST_GATES = ["XOR"]
+    ALL_GATES = ["XOR", "XOR", "AND", "OR", "IMP", "MAJORITY"]
     if _FAST_TEST_MODE:
-        return TEST_GATES
+        if _FAST_TEST_GATES_IDX == 0:
+            return ["XOR"]
+        if _FAST_TEST_GATES_IDX == 1:
+            return ["OR", "AND"]
+        if _FAST_TEST_GATES_IDX == 2:
+            return ["XOR", "XOR"]
+        if _FAST_TEST_GATES_IDX == 3:
+            return ["ID", "IMP"]
+        if _FAST_TEST_GATES_IDX == 4:
+            return ["ID", "MAJORITY"]
+        if _FAST_TEST_GATES_IDX == 5:
+            return ["XOR", "MAJORITY"]
     return ALL_GATES
 
 
@@ -81,6 +101,12 @@ def get_default_num_gates_per_run():
     return [1, 2, 3]
 
 
+def get_default_activations():
+    if _FAST_TEST_MODE:
+        return ["leaky_relu"]
+    return ["leaky_relu", "relu"]
+
+
 ###############
 # CONFIGS
 ###############
@@ -100,6 +126,7 @@ class ModelParams(SchemaClass):
     logic_gates: list[str] = field(default_factory=lambda: get_default_logic_gates())
     width: int = 3
     depth: int = 2
+    activation: str = "leaky_relu"  # Single activation for the model
 
 
 @dataclass
@@ -160,6 +187,7 @@ class ExperimentConfig(SchemaClass):
 
     widths: list[int] = field(default_factory=lambda: [ModelParams().width])
     depths: list[int] = field(default_factory=lambda: [ModelParams().depth])
+    activations: list[str] = field(default_factory=get_default_activations)
     learning_rates: list[float] = field(
         default_factory=lambda: [TrainParams().learning_rate]
     )

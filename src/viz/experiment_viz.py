@@ -40,6 +40,12 @@ from .profiling_viz import (
     visualize_profiling_summary,
     visualize_profiling_timeline,
 )
+from src.visualization.decision_boundary import (
+    generate_grid_data,
+    generate_monte_carlo_data,
+    plot_decision_boundary_from_data,
+)
+from src.domain import resolve_gate
 
 
 def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) -> None:
@@ -309,6 +315,69 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                         gate_idx=gate_idx,
                     )
                     viz_paths[trial_id][gname][sc_key]["activations_mean"] = mean_act_path
+
+                # Subcircuit decision boundary visualization
+                if trial.model is not None:
+                    try:
+                        import torch
+                        gate_n_inputs = resolve_gate(gname).n_inputs
+                        model_n_inputs = trial.model.layers[0][0].in_features
+                        gate_model = trial.model.separate_into_k_mlps()[gate_idx]
+                        subcircuit_model = gate_model.separate_subcircuit(circuit, gate_idx=gate_idx)
+                        device = str(next(subcircuit_model.parameters()).device)
+
+                        # Create wrapper to pad inputs for mixed-input models
+                        class _PaddedSubcircuit:
+                            def __init__(self, model, gate_n_inputs, model_n_inputs, device):
+                                self.model = model
+                                self.gate_n_inputs = gate_n_inputs
+                                self.model_n_inputs = model_n_inputs
+                                self.device = device
+                            def __call__(self, x):
+                                if x.shape[1] < self.model_n_inputs:
+                                    padding = torch.zeros(x.shape[0], self.model_n_inputs - x.shape[1], device=x.device)
+                                    x = torch.cat([x, padding], dim=1)
+                                return self.model(x)
+                            def eval(self):
+                                self.model.eval()
+                                return self
+                            def parameters(self):
+                                return self.model.parameters()
+
+                        wrapped_model = _PaddedSubcircuit(subcircuit_model, gate_n_inputs, model_n_inputs, device)
+
+                        # Generate decision boundary data using gate's actual input size
+                        if gate_n_inputs <= 2:
+                            db_data = generate_grid_data(
+                                model=wrapped_model,
+                                n_inputs=gate_n_inputs,
+                                gate_idx=0,  # Single output subcircuit
+                                resolution=50,
+                                device=device,
+                            )
+                        else:
+                            db_data = generate_monte_carlo_data(
+                                model=wrapped_model,
+                                n_inputs=gate_n_inputs,
+                                gate_idx=0,
+                                n_samples=1000,
+                                device=device,
+                            )
+
+                        # Create viz subfolder and save
+                        viz_folder = os.path.join(folder, "viz")
+                        os.makedirs(viz_folder, exist_ok=True)
+                        db_output = os.path.join(viz_folder, "decision_boundary")
+                        if gate_n_inputs <= 2:
+                            db_output += ".png"
+                        db_paths = plot_decision_boundary_from_data(
+                            data=db_data,
+                            gate_name=sc_label,
+                            output_path=db_output,
+                        )
+                        viz_paths[trial_id][gname][sc_key]["decision_boundary"] = db_paths
+                    except Exception as e:
+                        print(f"[VIZ] Warning: Failed to generate decision boundary for {sc_label}: {e}")
 
                 # Robustness and Faithfulness visualization
                 # Robustness is now inside faithfulness.observational
