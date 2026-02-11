@@ -5,6 +5,7 @@ from typing import Any
 from src.domain import get_max_n_inputs, resolve_gate
 from src.experiment_config import TrialSetup
 from src.infra import ParallelConfig, get_eval_device, set_seeds, update_status_fx
+from src.infra.profiler import trace, traced
 from src.math import calculate_match_rate, logits_to_binary
 from src.schemas import TrialData, TrialResult
 from src.training import train_model
@@ -59,9 +60,11 @@ def run_trial(
     trial_metrics = trial_result.metrics
     update_status = update_status_fx(trial_result, logger, device=device)
 
+    gate_names = setup.model_params.logic_gates
+    trace("run_trial starting", gates=gate_names, seed=setup.seed, device=device)
+
     # ===== Train Model =====
     update_status("STARTED_MLP_TRAINING")
-    gate_names = setup.model_params.logic_gates
     input_size = get_max_n_inputs(gate_names)  # Use max to support mixed gate sizes
     output_size = len(gate_names)
 
@@ -153,34 +156,38 @@ def run_trial(
 
     # ===== Gate Analysis =====
     update_status("STARTED_GATE_ANALYSIS")
+    trace("gate_analysis starting", n_gates=len(gate_models), gates=gate_names)
+
     for gate_idx in range(len(gate_models)):
         gate_name = gate_names[gate_idx]
         gate_model = gate_models[gate_idx]
 
-        analyze_gate(
-            gate_idx=gate_idx,
-            gate_name=gate_name,
-            gate_model=gate_model,
-            gate_models=gate_models,
-            model=model,
-            y_pred=y_pred,
-            bit_gt=bit_gt,
-            bit_pred=bit_pred,
-            x=x,
-            activations=activations,
-            subcircuits=subcircuits,
-            subcircuit_structures=subcircuit_structures,
-            precomputed_masks_per_gate=precomputed_masks_per_gate,
-            parallel_config=parallel_config,
-            setup=setup,
-            device=device,
-            eval_device=eval_device,
-            update_status=update_status,
-            trial_metrics=trial_metrics,
-        )
+        with traced("analyze_gate", gate_idx=gate_idx, gate_name=gate_name):
+            analyze_gate(
+                gate_idx=gate_idx,
+                gate_name=gate_name,
+                gate_model=gate_model,
+                gate_models=gate_models,
+                model=model,
+                y_pred=y_pred,
+                bit_gt=bit_gt,
+                bit_pred=bit_pred,
+                x=x,
+                activations=activations,
+                subcircuits=subcircuits,
+                subcircuit_structures=subcircuit_structures,
+                precomputed_masks_per_gate=precomputed_masks_per_gate,
+                parallel_config=parallel_config,
+                setup=setup,
+                device=device,
+                eval_device=eval_device,
+                update_status=update_status,
+                trial_metrics=trial_metrics,
+            )
 
     update_status("FINISHED_GATE_ANALYSIS")
     update_status("SUCCESSFUL_TRIAL")
+    trace("run_trial complete", trial_id=trial_result.trial_id)
     return trial_result
 
 

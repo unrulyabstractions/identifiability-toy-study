@@ -10,6 +10,7 @@ from typing import Callable, TypeVar
 
 import torch
 
+from src.infra.profiler import Trace, trace
 from src.schema_class import SchemaClass
 
 
@@ -123,6 +124,7 @@ def parallel_map(
     max_workers: int = 4,
     desc: str = "items",
     single_item_fn: Callable[[T], R] | None = None,
+    trace_every: int = 1,
 ) -> list[tuple[int, R | None, Exception | None]]:
     """Apply fn to items in parallel, yielding (index, result, error) tuples.
 
@@ -135,6 +137,7 @@ def parallel_map(
         max_workers: Maximum parallel workers
         desc: Description for progress messages
         single_item_fn: Optional function for single-item case (e.g., with logging)
+        trace_every: When tracing enabled, report progress every N items
 
     Returns:
         List of (index, result, error) tuples. result is None if error occurred,
@@ -158,6 +161,8 @@ def parallel_map(
     if len(items) == 0:
         return []
 
+    trace(f"parallel_map starting", desc=desc, count=len(items), max_workers=max_workers)
+
     # Use single_item_fn for sequential execution (single item or max_workers=1)
     use_sequential = len(items) == 1 or max_workers == 1
     item_fn = single_item_fn if (single_item_fn and use_sequential) else fn
@@ -166,12 +171,15 @@ def parallel_map(
         # Run sequentially without threading overhead
         results: list[tuple[int, R | None, Exception | None]] = []
         for idx, item in enumerate(items):
+            if Trace.is_enabled() and (idx % trace_every == 0 or idx == 0):
+                trace(f"{desc} item", current=idx + 1, total=len(items))
             try:
                 result = item_fn(item)
                 results.append((idx, result, None))
             except Exception as e:
                 results.append((idx, None, e))
                 print(f"  {desc.capitalize()} {idx + 1}/{len(items)} failed: {e}")
+        trace(f"parallel_map complete", desc=desc, processed=len(results))
         return results
 
     # Multiple items - run in parallel
@@ -179,18 +187,28 @@ def parallel_map(
     print(f"Running {len(items)} {desc} with {n_workers} parallel workers")
 
     results = []
+    completed_count = 0
 
     with ThreadPoolExecutor(max_workers=n_workers) as executor:
         futures = {executor.submit(fn, item): i for i, item in enumerate(items)}
 
         for future in as_completed(futures):
             idx = futures[future]
+            completed_count += 1
             try:
                 result = future.result()
                 results.append((idx, result, None))
                 print(f"  {desc.capitalize()} {idx + 1}/{len(items)} completed")
+                if Trace.is_enabled() and (completed_count % trace_every == 0):
+                    trace(
+                        f"{desc} progress",
+                        completed=completed_count,
+                        total=len(items),
+                        pct=f"{completed_count/len(items)*100:.0f}%",
+                    )
             except Exception as e:
                 results.append((idx, None, e))
                 print(f"  {desc.capitalize()} {idx + 1}/{len(items)} failed: {e}")
 
+    trace(f"parallel_map complete", desc=desc, processed=len(results))
     return results

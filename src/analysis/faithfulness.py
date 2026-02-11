@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from src.circuit import CircuitStructure
+from src.infra.profiler import trace, traced
 from src.model import InterventionEffect, MLP, PatchShape
 from src.experiment_config import FaithfulnessConfig
 from src.schemas import (
@@ -131,12 +132,13 @@ def calculate_faithfulness_metrics(
     n_interventions_per_patch = config.n_interventions_per_patch
 
     # ===== OBSERVATIONAL: Input perturbation analysis =====
-    observational = calculate_observational_metrics(
-        subcircuit=subcircuit,
-        full_model=model,
-        n_samples_per_base=200,
-        device=device,
-    )
+    with traced("observational_metrics"):
+        observational = calculate_observational_metrics(
+            subcircuit=subcircuit,
+            full_model=model,
+            n_samples_per_base=200,
+            device=device,
+        )
 
     # ===== Helper: Build CounterfactualEffect from intervention =====
     def _build_effect(
@@ -267,66 +269,69 @@ def calculate_faithfulness_metrics(
     out_circuit_effects = {}
 
     # Interventional analysis (sequential for GPU safety)
-    if structure.in_patches:
-        in_circuit_effects["in"] = calculate_patches_causal_effect(
-            structure.in_patches,
-            x,
-            model,
-            subcircuit,
-            n_interventions_per_patch,
-            False,
-            device,
-            in_distribution_value_range,
-        )
-        in_circuit_effects["ood"] = calculate_patches_causal_effect(
-            structure.in_patches,
-            x,
-            model,
-            subcircuit,
-            n_interventions_per_patch,
-            False,
-            device,
-            out_distribution_value_range,
-        )
+    with traced("interventional_in_circuit", n_patches=len(structure.in_patches) if structure.in_patches else 0):
+        if structure.in_patches:
+            in_circuit_effects["in"] = calculate_patches_causal_effect(
+                structure.in_patches,
+                x,
+                model,
+                subcircuit,
+                n_interventions_per_patch,
+                False,
+                device,
+                in_distribution_value_range,
+            )
+            in_circuit_effects["ood"] = calculate_patches_causal_effect(
+                structure.in_patches,
+                x,
+                model,
+                subcircuit,
+                n_interventions_per_patch,
+                False,
+                device,
+                out_distribution_value_range,
+            )
 
-    if structure.out_patches:
-        out_circuit_effects["in"] = calculate_patches_causal_effect(
-            structure.out_patches,
-            x,
-            model,
-            subcircuit,
-            n_interventions_per_patch,
-            True,
-            device,
-            in_distribution_value_range,
-        )
-        out_circuit_effects["ood"] = calculate_patches_causal_effect(
-            structure.out_patches,
-            x,
-            model,
-            subcircuit,
-            n_interventions_per_patch,
-            True,
-            device,
-            out_distribution_value_range,
-        )
+    with traced("interventional_out_circuit", n_patches=len(structure.out_patches) if structure.out_patches else 0):
+        if structure.out_patches:
+            out_circuit_effects["in"] = calculate_patches_causal_effect(
+                structure.out_patches,
+                x,
+                model,
+                subcircuit,
+                n_interventions_per_patch,
+                True,
+                device,
+                in_distribution_value_range,
+            )
+            out_circuit_effects["ood"] = calculate_patches_causal_effect(
+                structure.out_patches,
+                x,
+                model,
+                subcircuit,
+                n_interventions_per_patch,
+                True,
+                device,
+                out_distribution_value_range,
+            )
 
     # ===== 2x2 Counterfactual Analysis =====
-    # Denoising experiments (run corrupted, patch with clean)
-    sufficiency_effects = compute_denoising_effects(
-        structure.in_circuit, counterfactual_pairs, "sufficiency"
-    )
-    completeness_effects = compute_denoising_effects(
-        structure.out_circuit, counterfactual_pairs, "completeness"
-    )
+    with traced("counterfactual_2x2", n_pairs=len(counterfactual_pairs)):
+        # Denoising experiments (run corrupted, patch with clean)
+        sufficiency_effects = compute_denoising_effects(
+            structure.in_circuit, counterfactual_pairs, "sufficiency"
+        )
+        completeness_effects = compute_denoising_effects(
+            structure.out_circuit, counterfactual_pairs, "completeness"
+        )
 
-    # Noising experiments (run clean, patch with corrupted)
-    necessity_effects = compute_noising_effects(
-        structure.in_circuit, counterfactual_pairs, "necessity"
-    )
-    independence_effects = compute_noising_effects(
-        structure.out_circuit, counterfactual_pairs, "independence"
-    )
+        # Noising experiments (run clean, patch with corrupted)
+        necessity_effects = compute_noising_effects(
+            structure.in_circuit, counterfactual_pairs, "necessity"
+        )
+        independence_effects = compute_noising_effects(
+            structure.out_circuit, counterfactual_pairs, "independence"
+        )
 
     # ===== Calculate Statistics =====
     all_counterfactual_effects = (

@@ -8,6 +8,7 @@ from typing import Any
 from src.experiment import run_experiment
 from src.experiment_config import ExperimentConfig, set_test_mode_global
 from src.infra import print_profile, profile, profile_fn, setup_logging
+from src.infra.profiler import Trace
 from src.persistence import (
     get_all_runs,
     load_results,
@@ -217,6 +218,11 @@ def exit_fx() -> None:
 
 def main() -> None:
     args = get_args()
+
+    # Enable debug tracing if --debug flag is set
+    if args.debug:
+        Trace.enable()
+        print("[DEBUG] Detailed tracing enabled - expect verbose output")
 
     # Set test mode BEFORE creating any configs (affects default values)
     if args.test:

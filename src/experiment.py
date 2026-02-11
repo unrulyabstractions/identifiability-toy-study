@@ -13,6 +13,7 @@ from src.circuit.precompute import precompute_circuits_for_architectures
 from src.domain import get_max_n_inputs, normalize_gate_names
 from src.experiment_config import ExperimentConfig, TrialSetup
 from src.infra import parallel_map
+from src.infra.profiler import trace, traced
 from src.schemas import ExperimentResult
 from src.training import generate_trial_data
 
@@ -51,6 +52,7 @@ def run_experiment(
     logger=None,
     max_parallel_trials: int = 1,
 ) -> ExperimentResult:
+    trace("run_experiment starting", widths=cfg.widths, depths=cfg.depths, activations=cfg.activations)
     logger and logger.info(f"\n\n ExperimentConfig: \n {cfg} \n\n")
 
     experiment_result = ExperimentResult(config=cfg)

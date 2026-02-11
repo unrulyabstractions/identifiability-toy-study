@@ -25,6 +25,7 @@ from src.circuit import (
     precompute_circuit_masks_base,
 )
 from src.infra import ParallelTasks, profile, profile_fn
+from src.infra.profiler import trace, traced, trace_progress
 from src.training import train_model
 
 # Re-export functions that have @profile_fn directly on them
@@ -181,6 +182,8 @@ def faithfulness_phase(
             device=device,
         )
 
+    trace("faithfulness_phase starting", n_subcircuits=len(subcircuit_keys))
+
     if parallel_config.enable_parallel_faithfulness and len(subcircuit_keys) > 1:
         with ParallelTasks(max_workers=min(4, len(subcircuit_keys))) as tasks:
             futures = [
@@ -190,7 +193,9 @@ def faithfulness_phase(
         return [f.result() for f in futures]
     else:
         results = []
-        for key in subcircuit_keys:
-            with profile("calc_faithfulness"):
+        for i, key in enumerate(subcircuit_keys):
+            trace_progress(i + 1, len(subcircuit_keys), "faithfulness subcircuits", every=5)
+            with traced("calc_faithfulness", key=key):
                 results.append(compute_single_faithfulness(key))
+        trace("faithfulness_phase complete", n_results=len(results))
         return results
