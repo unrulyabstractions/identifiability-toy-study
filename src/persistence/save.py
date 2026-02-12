@@ -1414,10 +1414,10 @@ def _generate_circuit_diagrams(
 
     Creates:
         circuit_diagrams/
-            node_masks/rank{N:02d}_node{idx}.png  - ranked by best accuracy across edge variations
-            edge_masks/rank{N:02d}_edge{idx}.png  - ranked by avg accuracy across node patterns
-            subcircuit_masks/{subcircuit_idx}.png
-            rankings.json                         - ranking metadata
+            ranked_node_masks/rank{N:02d}_node{idx}.png       - ranked by best metrics across edge variations
+            ranked_edge_masks/rank{N:02d}_edge{idx}.png       - ranked by avg metrics across node patterns
+            ranked_subcircuit_masks/{subcircuit_idx}.png      - all subcircuit diagrams
+            rankings.json                                      - ranking metadata
     """
     from src.circuit import Circuit
 
@@ -1425,13 +1425,13 @@ def _generate_circuit_diagrams(
         return
 
     diagrams_dir = subcircuits_dir / "circuit_diagrams"
-    node_masks_dir = diagrams_dir / "node_masks"
-    edge_masks_dir = diagrams_dir / "edge_masks"
-    subcircuit_masks_dir = diagrams_dir / "subcircuit_masks"
+    ranked_node_masks_dir = diagrams_dir / "ranked_node_masks"
+    ranked_edge_masks_dir = diagrams_dir / "ranked_edge_masks"
+    ranked_subcircuit_masks_dir = diagrams_dir / "ranked_subcircuit_masks"
 
-    node_masks_dir.mkdir(parents=True, exist_ok=True)
-    edge_masks_dir.mkdir(parents=True, exist_ok=True)
-    subcircuit_masks_dir.mkdir(parents=True, exist_ok=True)
+    ranked_node_masks_dir.mkdir(parents=True, exist_ok=True)
+    ranked_edge_masks_dir.mkdir(parents=True, exist_ok=True)
+    ranked_subcircuit_masks_dir.mkdir(parents=True, exist_ok=True)
 
     # Build ranking lookup: node_mask_idx -> rank (0-indexed)
     node_mask_rank = {}
@@ -1455,8 +1455,8 @@ def _generate_circuit_diagrams(
         try:
             circuit = Circuit.from_dict(sc_data)
 
-            # subcircuit_masks/{subcircuit_idx}.png
-            sc_path = subcircuit_masks_dir / f"{subcircuit_idx}.png"
+            # ranked_subcircuit_masks/{subcircuit_idx}.png
+            sc_path = ranked_subcircuit_masks_dir / f"{subcircuit_idx}.png"
             circuit.visualize(file_path=str(sc_path), node_size="small")
 
             # Track unique node patterns for node_masks/
@@ -1471,10 +1471,10 @@ def _generate_circuit_diagrams(
         except Exception:
             pass  # Silently skip diagram generation failures
 
-    # Generate node_masks PNGs with ranking prefix
+    # Generate ranked_node_masks PNGs with ranking prefix
     for hidden_pattern, (nm_idx, circuit) in seen_node_patterns.items():
         rank = node_mask_rank.get(nm_idx, 99)
-        nm_path = node_masks_dir / f"rank{rank:02d}_node{nm_idx}.png"
+        nm_path = ranked_node_masks_dir / f"rank{rank:02d}_node{nm_idx}.png"
         try:
             circuit.visualize(file_path=str(nm_path), node_size="small")
         except Exception:
@@ -1516,7 +1516,7 @@ def _generate_circuit_diagrams(
 
     for em_idx, circuit in seen_edge_mask_idx.items():
         rank = edge_mask_rank.get(em_idx, 99)
-        em_path = edge_masks_dir / f"rank{rank:02d}_edge{em_idx}.png"
+        em_path = ranked_edge_masks_dir / f"rank{rank:02d}_edge{em_idx}.png"
         try:
             circuit.visualize(file_path=str(em_path), node_size="small")
         except Exception:
