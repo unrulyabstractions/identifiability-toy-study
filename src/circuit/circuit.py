@@ -29,17 +29,55 @@ from .grounding import Grounding, compute_local_tts, enumerate_tts
 
 @dataclass
 class CircuitStructure:
+    """Structure analysis of a circuit.
+
+    Basic metrics:
+    - node_sparsity, edge_sparsity: Fraction of inactive components
+    - connectivity_density: Active edges / max possible between active nodes
+
+    Topology metrics:
+    - n_active_nodes, n_active_edges: Count of active components
+    - n_input_output_paths: Distinct paths from input to output
+    - avg_path_length, max_path_length: Path statistics
+    - bottleneck_width, bottleneck_ratio: Narrowest layer analysis
+    - layer_widths: Active nodes per layer [input, h1, ..., output]
+    """
+
+    # Basic metrics
     node_sparsity: float
     edge_sparsity: float
     connectivity_density: float  # active_edges / max_possible_edges_between_active_nodes
+
+    # Intervention patches
     in_patches: list[PatchShape]
     out_patches: list[PatchShape]
     in_circuit: PatchShape
     out_circuit: PatchShape
+
+    # Architecture info
     input_size: int
     output_size: int
     width: int
     depth: int
+
+    # Extended topology metrics (optional for backwards compat)
+    n_active_nodes: int = 0           # Total active hidden nodes
+    n_active_edges: int = 0           # Total active edges
+    n_input_output_paths: int = 0     # Distinct paths from input to output
+    avg_path_length: float = 0.0      # Average path length
+    max_path_length: int = 0          # Longest path (effective depth)
+    bottleneck_width: int = 0         # Min active nodes in any hidden layer
+    bottleneck_layer: int = 0         # Which layer is the bottleneck
+    bottleneck_ratio: float = 0.0     # bottleneck_width / max_width
+    layer_widths: list[int] = None    # Active nodes per layer
+    layer_densities: list[float] = None  # Active/total per layer
+
+    def __post_init__(self):
+        """Initialize mutable defaults."""
+        if self.layer_widths is None:
+            self.layer_widths = []
+        if self.layer_densities is None:
+            self.layer_densities = []
 
     def to_dict(self) -> dict:
         """Convert CircuitStructure to a serializable dictionary."""
@@ -55,6 +93,17 @@ class CircuitStructure:
             "output_size": self.output_size,
             "width": self.width,
             "depth": self.depth,
+            # Extended topology metrics
+            "n_active_nodes": self.n_active_nodes,
+            "n_active_edges": self.n_active_edges,
+            "n_input_output_paths": self.n_input_output_paths,
+            "avg_path_length": self.avg_path_length,
+            "max_path_length": self.max_path_length,
+            "bottleneck_width": self.bottleneck_width,
+            "bottleneck_layer": self.bottleneck_layer,
+            "bottleneck_ratio": self.bottleneck_ratio,
+            "layer_widths": self.layer_widths,
+            "layer_densities": self.layer_densities,
         }
 
     @classmethod
@@ -76,6 +125,17 @@ class CircuitStructure:
             output_size=data["output_size"],
             width=data["width"],
             depth=data["depth"],
+            # Extended topology metrics (with defaults for old data)
+            n_active_nodes=data.get("n_active_nodes", 0),
+            n_active_edges=data.get("n_active_edges", 0),
+            n_input_output_paths=data.get("n_input_output_paths", 0),
+            avg_path_length=data.get("avg_path_length", 0.0),
+            max_path_length=data.get("max_path_length", 0),
+            bottleneck_width=data.get("bottleneck_width", 0),
+            bottleneck_layer=data.get("bottleneck_layer", 0),
+            bottleneck_ratio=data.get("bottleneck_ratio", 0.0),
+            layer_widths=data.get("layer_widths", []),
+            layer_densities=data.get("layer_densities", []),
         )
 
 
@@ -242,6 +302,34 @@ class Circuit:
             total_active_edges / total_max_possible if total_max_possible > 0 else 0.0
         )
 
+        # Extended topology metrics
+        # Layer widths and densities
+        layer_widths = [int(np.sum(m)) for m in self.node_masks]
+        layer_totals = [len(m) for m in self.node_masks]
+        layer_densities = [
+            w / t if t > 0 else 0.0 for w, t in zip(layer_widths, layer_totals)
+        ]
+
+        # Active node count (hidden layers only)
+        hidden_widths = layer_widths[1:-1]
+        n_active_nodes = sum(hidden_widths)
+
+        # Bottleneck analysis (hidden layers only)
+        if hidden_widths:
+            bottleneck_width = min(hidden_widths)
+            bottleneck_layer = hidden_widths.index(bottleneck_width) + 1  # +1 for layer index
+            max_width = max(hidden_widths)
+            bottleneck_ratio = bottleneck_width / max_width if max_width > 0 else 0.0
+        else:
+            bottleneck_width = 0
+            bottleneck_layer = 0
+            bottleneck_ratio = 0.0
+
+        # Path counting using graph traversal
+        n_input_output_paths, path_lengths = self._count_paths()
+        avg_path_length = float(np.mean(path_lengths)) if path_lengths else 0.0
+        max_path_length = max(path_lengths) if path_lengths else 0
+
         return CircuitStructure(
             node_sparsity=node_sparsity,
             edge_sparsity=edge_sparsity,
@@ -254,7 +342,61 @@ class Circuit:
             output_size=len(self.node_masks[-1]),
             width=len(self.node_masks[1]),
             depth=len(self.node_masks[1:-1]),
+            # Extended topology metrics
+            n_active_nodes=n_active_nodes,
+            n_active_edges=total_active_edges,
+            n_input_output_paths=n_input_output_paths,
+            avg_path_length=avg_path_length,
+            max_path_length=max_path_length,
+            bottleneck_width=bottleneck_width,
+            bottleneck_layer=bottleneck_layer,
+            bottleneck_ratio=bottleneck_ratio,
+            layer_widths=layer_widths,
+            layer_densities=layer_densities,
         )
+
+    def _count_paths(self) -> tuple[int, list[int]]:
+        """Count distinct paths from input to output using dynamic programming.
+
+        Returns (n_paths, path_lengths).
+        """
+        n_layers = len(self.node_masks)
+
+        # Build adjacency: for each layer, which outputs can each input reach?
+        # path_counts[layer][node] = number of paths from input layer to this node
+        # path_lengths[layer][node] = list of path lengths to this node
+
+        from collections import defaultdict
+
+        path_counts = [defaultdict(int) for _ in range(n_layers)]
+        path_lengths_per_node = [defaultdict(list) for _ in range(n_layers)]
+
+        # Initialize input layer: each active input has 1 path of length 0
+        for i, active in enumerate(self.node_masks[0]):
+            if active == 1:
+                path_counts[0][i] = 1
+                path_lengths_per_node[0][i] = [0]
+
+        # Propagate through layers
+        for layer_idx, edge_mask in enumerate(self.edge_masks):
+            for out_idx, row in enumerate(edge_mask):
+                if self.node_masks[layer_idx + 1][out_idx] == 0:
+                    continue  # Skip inactive output nodes
+                for in_idx, edge_active in enumerate(row):
+                    if edge_active == 1 and path_counts[layer_idx][in_idx] > 0:
+                        path_counts[layer_idx + 1][out_idx] += path_counts[layer_idx][in_idx]
+                        # Extend path lengths
+                        for pl in path_lengths_per_node[layer_idx][in_idx]:
+                            path_lengths_per_node[layer_idx + 1][out_idx].append(pl + 1)
+
+        # Sum paths to output layer
+        output_layer = n_layers - 1
+        n_paths = sum(path_counts[output_layer].values())
+        all_lengths = []
+        for lengths in path_lengths_per_node[output_layer].values():
+            all_lengths.extend(lengths)
+
+        return n_paths, all_lengths
 
     @staticmethod
     def full(layer_sizes):

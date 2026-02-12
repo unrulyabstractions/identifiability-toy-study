@@ -62,6 +62,7 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from src.analysis.subcircuit_ranking import (
@@ -1546,6 +1547,174 @@ def _generate_circuit_diagrams(
         diagrams_dir / "edge_rankings.json",
     )
 
+    # Generate structural faithfulness analysis
+    _save_structural_faithfulness(trial, diagrams_dir)
+
+
+def _save_structural_faithfulness(trial, diagrams_dir: Path):
+    """Save structural faithfulness analysis comparing subcircuits to full circuit.
+
+    Creates:
+        circuit_diagrams/
+            structural_faithfulness/
+                summary.json               - Overview statistics
+                samples.json               - Per-subcircuit detailed metrics
+                structural_rankings.json   - Rankings by structural metrics
+    """
+    from src.circuit import Circuit
+    from src.analysis.structural_faithfulness import (
+        analyze_subcircuit_structure,
+        compute_structural_rankings,
+        compute_structural_summary,
+    )
+
+    if not trial or not trial.subcircuits:
+        return
+
+    structural_dir = diagrams_dir / "structural_faithfulness"
+    structural_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build full circuit (all nodes/edges active)
+    first_sc = trial.subcircuits[0]
+    node_masks = first_sc.get("node_masks", [])
+    if not node_masks:
+        return
+
+    layer_sizes = [len(m) for m in node_masks]
+    full_circuit = Circuit.full(layer_sizes)
+
+    # Analyze each subcircuit
+    samples = []
+    subcircuits = []
+    subcircuit_indices = []
+
+    for sc_data in trial.subcircuits:
+        sc_idx = sc_data.get("idx", 0)
+        node_mask_idx = sc_data.get("node_mask_idx", sc_idx)
+        edge_mask_idx = sc_data.get("edge_mask_idx", 0)
+
+        node_masks_arr = [np.array(m) for m in sc_data.get("node_masks", [])]
+        edge_masks_arr = [np.array(m) for m in sc_data.get("edge_masks", [])]
+
+        if not node_masks_arr or not edge_masks_arr:
+            continue
+
+        subcircuit = Circuit(node_masks=node_masks_arr, edge_masks=edge_masks_arr)
+        subcircuits.append(subcircuit)
+        subcircuit_indices.append((node_mask_idx, edge_mask_idx))
+
+        # Compute detailed structural analysis
+        metrics = analyze_subcircuit_structure(
+            subcircuit, full_circuit, node_mask_idx, edge_mask_idx
+        )
+
+        # Convert to dict for JSON serialization
+        sample = {
+            "subcircuit_idx": sc_idx,
+            "node_pattern_idx": node_mask_idx,
+            "edge_variation_idx": edge_mask_idx,
+            # Topology metrics
+            "topology": {
+                "n_active_nodes": metrics.topology.n_active_nodes,
+                "n_total_nodes": metrics.topology.n_total_nodes,
+                "n_active_edges": metrics.topology.n_active_edges,
+                "n_total_edges": metrics.topology.n_total_edges,
+                "n_input_output_paths": metrics.topology.n_input_output_paths,
+                "avg_path_length": metrics.topology.avg_path_length,
+                "max_path_length": metrics.topology.max_path_length,
+                "min_path_length": metrics.topology.min_path_length,
+                "bottleneck_width": metrics.topology.bottleneck_width,
+                "bottleneck_layer": metrics.topology.bottleneck_layer,
+                "bottleneck_ratio": metrics.topology.bottleneck_ratio,
+                "layer_widths": metrics.topology.layer_widths,
+                "layer_densities": metrics.topology.layer_densities,
+            },
+            # Centrality metrics
+            "centrality": {
+                "avg_betweenness": metrics.centrality.avg_betweenness,
+                "max_betweenness": metrics.centrality.max_betweenness,
+                "max_betweenness_node": metrics.centrality.max_betweenness_node,
+                "avg_in_degree": metrics.centrality.avg_in_degree,
+                "avg_out_degree": metrics.centrality.avg_out_degree,
+                "max_in_degree": metrics.centrality.max_in_degree,
+                "max_out_degree": metrics.centrality.max_out_degree,
+                "avg_importance": metrics.centrality.avg_importance,
+                "max_importance": metrics.centrality.max_importance,
+                "max_importance_node": metrics.centrality.max_importance_node,
+            },
+            # Structural faithfulness (vs full circuit)
+            "faithfulness": {
+                "node_functionality": metrics.faithfulness.node_functionality,
+                "node_surjectivity": metrics.faithfulness.node_surjectivity,
+                "node_injectivity": metrics.faithfulness.node_injectivity,
+                "node_retention_ratio": metrics.faithfulness.node_retention_ratio,
+                "edge_faithfulness": metrics.faithfulness.edge_faithfulness,
+                "edge_fullness": metrics.faithfulness.edge_fullness,
+                "edge_retention_ratio": metrics.faithfulness.edge_retention_ratio,
+                "edge_induced_ratio": metrics.faithfulness.edge_induced_ratio,
+                "path_coverage": metrics.faithfulness.path_coverage,
+                "causal_order_preserved": metrics.faithfulness.causal_order_preserved,
+                "per_layer_node_retention": metrics.faithfulness.per_layer_node_retention,
+                "per_layer_edge_retention": metrics.faithfulness.per_layer_edge_retention,
+                "abstraction_type": str(metrics.faithfulness.abstraction_type),
+            },
+            # Overall scores
+            "overall_structural": metrics.overall_structural,
+            "interpretation": metrics.interpretation,
+        }
+        samples.append(sample)
+
+    # Compute rankings
+    rankings = compute_structural_rankings(subcircuits, full_circuit, subcircuit_indices)
+    rankings_data = [
+        {
+            "node_pattern_idx": r.node_pattern_idx,
+            "edge_variation_idx": r.edge_variation_idx,
+            "overall_structural": r.overall_structural,
+            "path_coverage": r.path_coverage,
+            "node_retention_ratio": r.node_retention_ratio,
+            "edge_faithfulness": r.edge_faithfulness,
+            "bottleneck_ratio": r.bottleneck_ratio,
+            "avg_betweenness": r.avg_betweenness,
+            "efficiency_score": r.efficiency_score,
+            "robustness_score": r.robustness_score,
+        }
+        for r in rankings
+    ]
+
+    # Compute summary
+    summary = compute_structural_summary(subcircuits, full_circuit, "all_gates", subcircuit_indices)
+    summary_data = {
+        "n_subcircuits_analyzed": summary.n_subcircuits_analyzed,
+        "full_circuit": {
+            "n_paths": summary.full_circuit_n_paths,
+            "n_nodes": summary.full_circuit_n_nodes,
+            "n_edges": summary.full_circuit_n_edges,
+        },
+        "averages": {
+            "node_retention": summary.avg_node_retention,
+            "edge_retention": summary.avg_edge_retention,
+            "path_coverage": summary.avg_path_coverage,
+            "bottleneck_ratio": summary.avg_bottleneck_ratio,
+        },
+        "best_subcircuits": {
+            "by_path_coverage": summary.best_by_path_coverage,
+            "by_efficiency": summary.best_by_efficiency,
+            "by_robustness": summary.best_by_robustness,
+        },
+        "description": (
+            "Structural faithfulness analysis comparing subcircuits to full circuit. "
+            "Inspired by Zennaro's 'Abstraction between Structural Causal Models'. "
+            "Key metrics: path_coverage (I/O paths preserved), node_retention_ratio, "
+            "edge_faithfulness (edges between active nodes), bottleneck_ratio."
+        ),
+    }
+
+    # Save files
+    _save_json(summary_data, structural_dir / "summary.json")
+    _save_json({"samples": samples}, structural_dir / "samples.json")
+    _save_json({"rankings": rankings_data}, structural_dir / "structural_rankings.json")
+
 
 SUBCIRCUITS_EXPLANATION = """# Subcircuits Analysis
 
@@ -1554,13 +1723,47 @@ SUBCIRCUITS_EXPLANATION = """# Subcircuits Analysis
 - `subcircuit_score_ranking.json`: Rankings by gate with faithfulness scores
 - `subcircuit_score_ranking_per_trial.json`: Per-trial granular rankings
 - `mask_idx_map.json`: (node_pattern, edge_variation) → subcircuit_idx mapping
-- `circuit_diagrams/`: Visual diagrams
+- `circuit_diagrams/`: Visual diagrams and analysis
   - `ranking_metrics.json`: Metrics used for ranking (in priority order)
   - `node_rankings.json`: Node pattern rankings with all metrics
   - `edge_rankings.json`: Edge variation rankings with all metrics
   - `ranked_node_masks/rank{N}_node{idx}.png`: Node pattern diagrams
   - `ranked_edge_masks/rank{N}_edge{idx}.png`: Edge variation diagrams
   - `ranked_subcircuit_masks/rank{N}_sc{idx}.png`: Full subcircuit diagrams
+  - `structural_faithfulness/`: Structural analysis (see below)
+
+## Structural Faithfulness Analysis
+
+Located in `circuit_diagrams/structural_faithfulness/`:
+
+- `summary.json`: Overview statistics for all subcircuits
+- `samples.json`: Per-subcircuit detailed metrics (topology, centrality, faithfulness)
+- `structural_rankings.json`: Rankings by structural metrics
+
+### Key Structural Metrics
+
+Inspired by Zennaro's "Abstraction between Structural Causal Models":
+
+**Topology:**
+- `n_input_output_paths`: Distinct paths from input to output
+- `bottleneck_width`: Minimum active nodes in any hidden layer
+- `bottleneck_ratio`: bottleneck_width / max_width (higher = more robust)
+- `avg_path_length`, `max_path_length`: Path statistics
+
+**Centrality:**
+- `avg_betweenness`: Mean betweenness centrality (identifies bottleneck nodes)
+- `max_betweenness_node`: Most critical node for information flow
+- `avg_importance`: PageRank-like importance propagated from outputs
+
+**Structural Faithfulness (vs full circuit):**
+- `path_coverage`: Fraction of I/O paths preserved (key metric)
+- `node_retention_ratio`: Fraction of hidden nodes kept
+- `edge_faithfulness`: Active edges / max possible between active nodes
+- `abstraction_type`: IDENTITY, NODE_DROPPING, EDGE_DROPPING, or MIXED
+
+**Derived Scores:**
+- `efficiency_score`: High path coverage with low node retention
+- `robustness_score`: High path coverage with high bottleneck ratio
 
 ## Index Mapping
 
