@@ -1421,8 +1421,10 @@ def _generate_circuit_diagrams(
         circuit_diagrams/
             ranked_node_masks/rank{N:02d}_node{idx}.png       - ranked by best metrics across edge variations
             ranked_edge_masks/rank{N:02d}_edge{idx}.png       - ranked by avg metrics across node patterns
-            ranked_subcircuit_masks/{subcircuit_idx}.png      - all subcircuit diagrams
-            rankings.json                                      - ranking metadata
+            ranked_subcircuit_masks/rank{N:02d}_sc{idx}.png   - all subcircuits ranked by node pattern rank
+            ranking_metrics.json                               - metrics used for ranking
+            node_rankings.json                                 - node pattern rankings
+            edge_rankings.json                                 - edge variation rankings
     """
     from src.circuit import Circuit
 
@@ -1449,9 +1451,10 @@ def _generate_circuit_diagrams(
         for rank, r in enumerate(edge_mask_rankings):
             edge_mask_rank[r["edge_variation"]] = rank
 
-    # Track unique node patterns
+    # Track unique node patterns and subcircuit info for ranking
     seen_node_patterns = {}  # hidden_pattern -> (node_mask_idx, circuit)
     node_mask_idx_counter = 0
+    subcircuit_info = []  # [(subcircuit_idx, node_mask_idx, circuit), ...]
 
     max_diagrams = min(48, len(trial.subcircuits))
 
@@ -1459,10 +1462,6 @@ def _generate_circuit_diagrams(
         subcircuit_idx = sc_data.get("idx", 0)
         try:
             circuit = Circuit.from_dict(sc_data)
-
-            # ranked_subcircuit_masks/{subcircuit_idx}.png
-            sc_path = ranked_subcircuit_masks_dir / f"{subcircuit_idx}.png"
-            circuit.visualize(file_path=str(sc_path), node_size="small")
 
             # Track unique node patterns for node_masks/
             node_masks = sc_data.get("node_masks", [])
@@ -1473,8 +1472,21 @@ def _generate_circuit_diagrams(
             if hidden_masks not in seen_node_patterns:
                 seen_node_patterns[hidden_masks] = (node_mask_idx_counter, circuit)
                 node_mask_idx_counter += 1
+
+            # Get node_mask_idx for this subcircuit
+            nm_idx = seen_node_patterns[hidden_masks][0]
+            subcircuit_info.append((subcircuit_idx, nm_idx, circuit))
         except Exception:
             pass  # Silently skip diagram generation failures
+
+    # Generate ranked_subcircuit_masks PNGs with ranking prefix (based on node rank)
+    for subcircuit_idx, nm_idx, circuit in subcircuit_info:
+        rank = node_mask_rank.get(nm_idx, 99)
+        sc_path = ranked_subcircuit_masks_dir / f"rank{rank:02d}_sc{subcircuit_idx}.png"
+        try:
+            circuit.visualize(file_path=str(sc_path), node_size="small")
+        except Exception:
+            pass
 
     # Generate ranked_node_masks PNGs with ranking prefix
     for hidden_pattern, (nm_idx, circuit) in seen_node_patterns.items():
@@ -1527,18 +1539,32 @@ def _generate_circuit_diagrams(
         except Exception:
             pass
 
-    # Save rankings metadata
+    # Save rankings as separate JSON files
     _save_json(
         {
-            "ranking_metrics": SUBCIRCUIT_METRICS_RANKING,
-            "node_mask_rankings": node_mask_rankings or [],
-            "edge_mask_rankings": edge_mask_rankings or [],
+            "metrics": SUBCIRCUIT_METRICS_RANKING,
             "description": (
-                "Ranked by tuple of metrics in order: " + ", ".join(SUBCIRCUIT_METRICS_RANKING) +
-                ". Files named rank{N}_node{idx}.png where N is the rank (00=best)."
+                "Metrics used for tuple-based ranking, in priority order. "
+                "Higher values are better for all metrics."
             ),
         },
-        diagrams_dir / "rankings.json",
+        diagrams_dir / "ranking_metrics.json",
+    )
+
+    _save_json(
+        {
+            "rankings": node_mask_rankings or [],
+            "description": "Node patterns ranked by best metrics across edge variations. Files: rank{N}_node{idx}.png",
+        },
+        diagrams_dir / "node_rankings.json",
+    )
+
+    _save_json(
+        {
+            "rankings": edge_mask_rankings or [],
+            "description": "Edge variations ranked by avg metrics across node patterns. Files: rank{N}_edge{idx}.png",
+        },
+        diagrams_dir / "edge_rankings.json",
     )
 
 
@@ -1548,11 +1574,14 @@ SUBCIRCUITS_EXPLANATION = """# Subcircuits Analysis
 
 - `subcircuit_score_ranking.json`: Rankings by gate with faithfulness scores
 - `subcircuit_score_ranking_per_trial.json`: Per-trial granular rankings
-- `mask_idx_map.json`: (node_mask_idx, edge_mask_idx) → subcircuit_idx mapping
+- `mask_idx_map.json`: (node_pattern, edge_variation) → subcircuit_idx mapping
 - `circuit_diagrams/`: Visual diagrams
-  - `node_masks/{idx}.png`: Diagrams for unique node patterns
-  - `edge_masks/{idx}.png`: Diagrams for edge configurations
-  - `subcircuit_masks/{idx}.png`: Diagrams for each subcircuit
+  - `ranking_metrics.json`: Metrics used for ranking (in priority order)
+  - `node_rankings.json`: Node pattern rankings with all metrics
+  - `edge_rankings.json`: Edge variation rankings with all metrics
+  - `ranked_node_masks/rank{N}_node{idx}.png`: Node pattern diagrams
+  - `ranked_edge_masks/rank{N}_edge{idx}.png`: Edge variation diagrams
+  - `ranked_subcircuit_masks/rank{N}_sc{idx}.png`: Full subcircuit diagrams
 
 ## Index Mapping
 
