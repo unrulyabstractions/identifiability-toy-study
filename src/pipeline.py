@@ -12,7 +12,7 @@ from src.experiment import experiment_run, run_experiment
 from src.experiment_config import ExperimentConfig
 from src.infra import print_profile, profile_fn
 from src.infra.profiler import Trace
-from src.persistence import load_results, save_results
+from src.persistence import load_results, save_results, save_training_data
 from src.schemas import ExperimentResult, TrialResult
 from src.spd import (
     SpdResults,
@@ -141,7 +141,8 @@ def run_monolith(
 
     Best for small experiments where total runtime is short.
     """
-    experiment_result = run_experiment(cfg, logger=logger)
+    experiment_result, master_data = run_experiment(cfg, logger=logger)
+    save_training_data(master_data, run_dir, gate_names=cfg.target_logic_gates)
     save_experiment_results(experiment_result, run_dir=run_dir)
 
     spd_result = None
@@ -173,7 +174,10 @@ def run_iteratively(
     """
     experiment_result = ExperimentResult(config=cfg)
 
-    for trial_result in experiment_run(cfg, logger=logger):
+    trial_iterator, master_data = experiment_run(cfg, logger=logger)
+    save_training_data(master_data, run_dir, gate_names=cfg.target_logic_gates)
+
+    for trial_result in trial_iterator:
         # Save this trial incrementally
         save_trial_result(trial_result, run_dir, cfg)
         experiment_result.trials[trial_result.trial_id] = trial_result

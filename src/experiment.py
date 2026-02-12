@@ -12,7 +12,7 @@ from itertools import combinations, product
 
 from src.circuit.precompute import precompute_circuits_for_architectures
 from src.domain import get_max_n_inputs, normalize_gate_names
-from src.experiment_config import ExperimentConfig, TrialSetup, TrialSetting
+from src.experiment_config import ExperimentConfig, TrialSetting, TrialSetup
 from src.infra import parallel_map
 from src.infra.profiler import trace
 from src.schemas import ExperimentResult, TrialData, TrialResult
@@ -140,14 +140,18 @@ def build_trial_settings(
     return trial_settings, master_data
 
 
-def experiment_run(cfg: ExperimentConfig, logger=None) -> Iterator[TrialResult]:
-    """Generator that yields trial results one at a time.
+def experiment_run(
+    cfg: ExperimentConfig, logger=None
+) -> tuple[Iterator[TrialResult], TrialData]:
+    """Prepare experiment and return iterator for trial results.
 
     Use this for iterative execution where you want to save/process
     each trial as it completes.
 
-    Yields:
-        TrialResult for each completed trial
+    Returns:
+        Tuple of (trial_iterator, master_data) where:
+        - trial_iterator yields TrialResult for each completed trial
+        - master_data contains training/val/test data for all gates
     """
     trace(
         "experiment_run starting",
@@ -161,24 +165,30 @@ def experiment_run(cfg: ExperimentConfig, logger=None) -> Iterator[TrialResult]:
 
     logger and logger.info(f"\nRunning {len(trial_settings)} trials iteratively\n")
 
-    for idx, setting in enumerate(trial_settings):
-        logger and logger.info(f"\n[Trial {idx + 1}/{len(trial_settings)}]")
+    def trial_iterator():
+        for idx, setting in enumerate(trial_settings):
+            logger and logger.info(f"\n[Trial {idx + 1}/{len(trial_settings)}]")
 
-        try:
-            # Adapt master data for this trial's gates
-            trial_data = master_data.select_gates(setting.gate_indices)
+            try:
+                # Adapt master data for this trial's gates
+                trial_data = master_data.select_gates(setting.gate_indices)
 
-            trial_result = run_trial(
-                setting.setup,
-                trial_data,
-                device=cfg.device,
-                logger=logger,
-                debug=cfg.debug,
-                precomputed_circuits=(setting.subcircuits, setting.subcircuit_structures),
-            )
-            yield trial_result
-        except Exception as e:
-            logger and logger.error(f"Trial {idx + 1} failed: {e}")
+                trial_result = run_trial(
+                    setting.setup,
+                    trial_data,
+                    device=cfg.device,
+                    logger=logger,
+                    debug=cfg.debug,
+                    precomputed_circuits=(
+                        setting.subcircuits,
+                        setting.subcircuit_structures,
+                    ),
+                )
+                yield trial_result
+            except Exception as e:
+                logger and logger.error(f"Trial {idx + 1} failed: {e}")
+
+    return trial_iterator(), master_data
             # Continue with next trial rather than stopping
 
 
@@ -186,11 +196,15 @@ def run_experiment(
     cfg: ExperimentConfig,
     logger=None,
     max_parallel_trials: int = 1,
-) -> ExperimentResult:
+) -> tuple[ExperimentResult, TrialData]:
     """Run all trials in an experiment (parallel or serial).
 
     For long experiments, consider using experiment_run() generator
     with iterative saving instead.
+
+    Returns:
+        Tuple of (experiment_result, master_data) where master_data contains
+        the training/val/test data for all gates.
     """
     trace(
         "run_experiment starting",
@@ -208,10 +222,7 @@ def run_experiment(
     logger and logger.info(f"\nRunning {len(trial_settings)} trials\n")
 
     # Prepare contexts for parallel execution - each includes adapted data
-    trial_contexts = [
-        (setting, master_data, cfg, logger)
-        for setting in trial_settings
-    ]
+    trial_contexts = [(setting, master_data, cfg, logger) for setting in trial_settings]
 
     results = parallel_map(
         trial_contexts,
@@ -227,7 +238,7 @@ def run_experiment(
         else:
             experiment_result.trials[trial_result.trial_id] = trial_result
 
-    return experiment_result
+    return experiment_result, master_data
 
 
 def run_trial_from_setting_parallel(ctx):

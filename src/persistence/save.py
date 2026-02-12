@@ -10,6 +10,11 @@ Structure:
         config.json           - ExperimentConfig only
         trial_org.json        - Maps sweep parameters (width, depth, etc.) to trial IDs
         circuits.json         - Subcircuit masks and structure analysis (run-level)
+        training_data/
+            train.pt          - Training data tensors (x, y)
+            val.pt            - Validation data tensors (x, y)
+            test.pt           - Test data tensors (x, y)
+            metadata.json     - Data shapes and gate names
         profiling/
             profiling.json    - Timing data (events, phase durations)
         trials/
@@ -588,6 +593,40 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
         _save_gate_summaries(trial, trial_dir)
 
     logger and logger.info(f"Saved results to {run_dir}")
+
+
+def save_training_data(data, run_dir: str | Path, gate_names: list[str] = None):
+    """Save training data to disk.
+
+    Args:
+        data: TrialData object with train/val/test datasets
+        run_dir: Run directory path
+        gate_names: Optional list of gate names for metadata
+
+    Creates:
+        training_data/
+            train.pt   - {x: tensor, y: tensor}
+            val.pt     - {x: tensor, y: tensor}
+            test.pt    - {x: tensor, y: tensor}
+            metadata.json - shapes and gate info
+    """
+    run_dir = Path(run_dir)
+    data_dir = run_dir / "training_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save tensors
+    torch.save({"x": data.train.x, "y": data.train.y}, data_dir / "train.pt")
+    torch.save({"x": data.val.x, "y": data.val.y}, data_dir / "val.pt")
+    torch.save({"x": data.test.x, "y": data.test.y}, data_dir / "test.pt")
+
+    # Save metadata
+    metadata = {
+        "train_shape": {"x": list(data.train.x.shape), "y": list(data.train.y.shape)},
+        "val_shape": {"x": list(data.val.x.shape), "y": list(data.val.y.shape)},
+        "test_shape": {"x": list(data.test.x.shape), "y": list(data.test.y.shape)},
+        "gate_names": gate_names,
+    }
+    _save_json(metadata, data_dir / "metadata.json")
 
 
 def _simplify_circuit_masks(subcircuit: dict) -> dict:
@@ -1580,19 +1619,20 @@ def _save_subcircuit_samples(
 
     Creates:
         {node_mask_idx}/{edge_mask_idx}/
-            observational/
-                noise_perturbations/samples.json
-                out_distribution_transformations/samples.json
-            interventional/
-                in_circuit/in_distribution/samples.json
-                in_circuit/out_distribution/samples.json
-                out_circuit/in_distribution/samples.json
-                out_circuit/out_distribution/samples.json
-            counterfactual/
-                sufficiency/samples.json
-                completeness/samples.json
-                necessity/samples.json
-                independence/samples.json
+            faithfulness/
+                observational/
+                    noise_perturbations/samples.json
+                    out_distribution_transformations/samples.json
+                interventional/
+                    in_circuit/in_distribution/samples.json
+                    in_circuit/out_distribution/samples.json
+                    out_circuit/in_distribution/samples.json
+                    out_circuit/out_distribution/samples.json
+                counterfactual/
+                    sufficiency/samples.json
+                    completeness/samples.json
+                    necessity/samples.json
+                    independence/samples.json
     """
     from dataclasses import asdict
 
@@ -1625,15 +1665,24 @@ def _save_subcircuit_samples(
             "node_pattern": node_mask_idx,
             "edge_variation": edge_mask_idx,
             "ranked_metrics": ranked,
-            "subfolders": ["observational", "interventional", "counterfactual"],
+            "subfolders": ["faithfulness"],
         }
         sc_dir.mkdir(parents=True, exist_ok=True)
         _save_json(sc_summary, sc_dir / "summary.json")
 
+        # Create faithfulness directory to contain all faithfulness data
+        faith_dir = sc_dir / "faithfulness"
+        faith_dir.mkdir(parents=True, exist_ok=True)
+
+        # Faithfulness summary
+        faith_summary = {
+            "subfolders": ["observational", "interventional", "counterfactual"],
+        }
+
         # Observational samples
         if hasattr(faith, "observational") and faith.observational:
             obs = faith.observational
-            obs_dir = sc_dir / "observational"
+            obs_dir = faith_dir / "observational"
             obs_dir.mkdir(parents=True, exist_ok=True)
 
             # Observational summary
@@ -1680,7 +1729,7 @@ def _save_subcircuit_samples(
         # Interventional samples
         if hasattr(faith, "interventional") and faith.interventional:
             intv = faith.interventional
-            intv_dir = sc_dir / "interventional"
+            intv_dir = faith_dir / "interventional"
             intv_dir.mkdir(parents=True, exist_ok=True)
 
             # Interventional summary
@@ -1756,7 +1805,7 @@ def _save_subcircuit_samples(
         # Counterfactual samples
         if hasattr(faith, "counterfactual") and faith.counterfactual:
             cf = faith.counterfactual
-            cf_dir = sc_dir / "counterfactual"
+            cf_dir = faith_dir / "counterfactual"
             cf_dir.mkdir(parents=True, exist_ok=True)
 
             # Counterfactual summary (2x2 matrix)
@@ -1816,3 +1865,6 @@ def _save_subcircuit_samples(
                 cf_summary["independence_n_samples"] = len(samples)
 
             _save_json(cf_summary, cf_dir / "summary.json")
+
+        # Save faithfulness summary
+        _save_json(faith_summary, faith_dir / "summary.json")
