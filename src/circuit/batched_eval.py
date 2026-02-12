@@ -582,6 +582,7 @@ def _find_top_variants(
     logit_sims: np.ndarray,
     start_idx: int,
     end_idx: int,
+    min_variants: int = 1,
     max_variants: int = 1,
 ) -> EdgeVariantStats:
     """
@@ -594,6 +595,7 @@ def _find_top_variants(
         logit_sims: Array of logit similarities for all variants
         start_idx: Start index in the metrics arrays
         end_idx: End index in the metrics arrays
+        min_variants: Minimum number of variants to return (if available)
         max_variants: Maximum number of top variants to return
 
     Returns:
@@ -617,8 +619,10 @@ def _find_top_variants(
     # Sort by score (ascending, so best = lowest negated values = first)
     scored_variants.sort(key=lambda x: x[0])
 
-    # Get top N variants (always at least 1)
-    top_n = min(max(1, max_variants), len(scored_variants))
+    # Get top N variants (between min and max, respecting available count)
+    effective_min = max(1, min_variants)
+    effective_max = max(effective_min, max_variants)
+    top_n = min(max(effective_min, 1), effective_max, len(scored_variants))
     top_variants = []
     for i in range(top_n):
         _, global_idx, local_idx = scored_variants[i]
@@ -652,6 +656,7 @@ def batch_evaluate_edge_variants(
     eval_device: str | None = None,
     max_batch_size: int = DEFAULT_MAX_BATCH_SIZE,
     max_memory_gb: float = 16.0,
+    min_edge_variations: int = 1,
     max_edge_variations: int = 1,
 ) -> list[tuple[int, list[EdgeVariantResult], EdgeVariantStats]]:
     """
@@ -670,6 +675,7 @@ def batch_evaluate_edge_variants(
         eval_device: Device for evaluation
         max_batch_size: Maximum circuits per batch to avoid OOM errors.
         max_memory_gb: Target max memory usage in GB. Batch size adapts to stay under this.
+        min_edge_variations: Minimum number of edge variants to return per node pattern.
         max_edge_variations: Maximum number of top edge variants to return per node pattern.
 
     Returns:
@@ -754,6 +760,7 @@ def batch_evaluate_edge_variants(
 
         stats = _find_top_variants(
             edge_variants, accs, bit_sims, logit_sims, start, end,
+            min_variants=min_edge_variations,
             max_variants=max_edge_variations,
         )
         results.append((orig_idx, stats.top_variants, stats))

@@ -146,12 +146,33 @@ class IdentifiabilityConstraints(SchemaClass):
 class FaithfulnessConfig(SchemaClass):
     """Configuration for faithfulness analysis."""
 
+    min_subcircuits_per_gate: int = 1
     max_subcircuits_per_gate: int = get_default_max_subcircuits_per_gate()
-    max_edge_variations_per_subcircuits: int = (
+    min_edge_variations_per_subcircuit: int = 1
+    max_edge_variations_per_subcircuit: int = (
         get_default_max_edge_variations_per_subcircuits()
     )
     n_interventions_per_patch: int = get_default_faith_n_samples()
     n_counterfactual_pairs: int = get_default_faith_n_samples()
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.min_subcircuits_per_gate < 1:
+            raise ValueError("min_subcircuits_per_gate must be at least 1")
+        if self.max_subcircuits_per_gate < 1:
+            raise ValueError("max_subcircuits_per_gate must be at least 1")
+        if self.min_edge_variations_per_subcircuit < 1:
+            raise ValueError("min_edge_variations_per_subcircuit must be at least 1")
+        if self.max_edge_variations_per_subcircuit < 1:
+            raise ValueError("max_edge_variations_per_subcircuit must be at least 1")
+        if self.n_interventions_per_patch < 1:
+            raise ValueError("n_interventions_per_patch must be at least 1")
+        if self.n_counterfactual_pairs < 1:
+            raise ValueError("n_counterfactual_pairs must be at least 1")
+        if self.min_subcircuits_per_gate > self.max_subcircuits_per_gate:
+            raise ValueError("min_subcircuits_per_gate cannot exceed max_subcircuits_per_gate")
+        if self.min_edge_variations_per_subcircuit > self.max_edge_variations_per_subcircuit:
+            raise ValueError("min_edge_variations_per_subcircuit cannot exceed max_edge_variations_per_subcircuit")
 
 
 @dataclass
@@ -211,3 +232,22 @@ class ExperimentConfig(SchemaClass):
         setup_dict = asdict(self)
         setup_dict["experiment_id"] = self.get_id()
         return json.dumps(setup_dict, indent=4)
+
+
+@dataclass
+class TrialSetting:
+    """Configuration for a single trial within an experiment.
+
+    Contains everything needed to run a trial:
+    - setup: Trial configuration (seed, params, constraints)
+    - gate_indices: Which columns from master data to use for this trial's gates
+    - config: Reference to experiment config
+    - subcircuits: Pre-computed subcircuits for this architecture
+    - subcircuit_structures: Pre-computed structures for analysis
+    """
+
+    setup: TrialSetup
+    gate_indices: list[int]  # Indices into master data's y columns
+    config: ExperimentConfig
+    subcircuits: list
+    subcircuit_structures: list

@@ -7,18 +7,18 @@ Look at .common.schemas for full definitions.
 
 import copy
 import random
+from collections.abc import Iterator
 from itertools import combinations, product
-from typing import Iterator
 
 from src.circuit.precompute import precompute_circuits_for_architectures
 from src.domain import get_max_n_inputs, normalize_gate_names
-from src.experiment_config import ExperimentConfig, TrialSetup
+from src.experiment_config import ExperimentConfig, TrialSetup, TrialSetting
 from src.infra import parallel_map
 from src.infra.profiler import trace
-from src.schemas import ExperimentResult, TrialResult
+from src.schemas import ExperimentResult, TrialData, TrialResult
 from src.training import generate_trial_data
 
-from .trial import run_trial, run_trial_in_parallel, run_trial_in_series
+from .trial import run_trial
 
 
 def build_gate_combinations(
@@ -48,28 +48,42 @@ def build_gate_combinations(
     return combos
 
 
-def get_trial_configs_for_experiment(cfg: ExperimentConfig, logger=None) -> list[tuple]:
-    """Build all trial configurations for an experiment.
+def build_trial_settings(
+    cfg: ExperimentConfig, logger=None
+) -> tuple[list[TrialSetting], TrialData]:
+    """Build all trial settings for an experiment.
 
-    Returns a list of tuples, each containing:
-        (trial_setup, trial_data, cfg, logger, subcircuits, subcircuit_structures)
+    Generates training data ONCE for all possible gates, then each trial
+    adapts the data by selecting appropriate output columns.
 
-    This allows the caller to decide how to execute trials (parallel, serial, iterative).
+    Returns:
+        Tuple of (trial_settings, master_data) where:
+        - trial_settings: List of TrialSetting objects
+        - master_data: TrialData for ALL gates (trials select columns from this)
     """
     # Normalize gate names to handle duplicates (e.g., ["XOR", "XOR"] -> ["XOR", "XOR_2"])
     normalized_gates = normalize_gate_names(cfg.target_logic_gates)
     logger and logger.info(f"Normalized gates: {normalized_gates}")
+
+    # Build mapping from gate name to column index in master data
+    gate_to_index = {gate: idx for idx, gate in enumerate(normalized_gates)}
 
     gates_combinations = build_gate_combinations(
         normalized_gates, cfg.num_gates_per_run
     )
 
     # Determine input size from gates - use max across all gates to support mixed sizes
-    first_combo = gates_combinations[0]
-    input_size = get_max_n_inputs(first_combo)
+    input_size = get_max_n_inputs(normalized_gates)
 
-    # Determine output size (max gates across all combinations)
+    # Determine output size for circuits (max gates across all combinations)
     output_size = max(len(combo) for combo in gates_combinations)
+
+    # Generate data ONCE for ALL gates
+    logger and logger.info("\nGenerating data for all gates...")
+    data_params = copy.deepcopy(cfg.base_trial.data_params)
+    master_data = generate_trial_data(
+        data_params, normalized_gates, cfg.device, logger=logger, debug=cfg.debug
+    )
 
     # Pre-compute circuits for all architectures
     logger and logger.info("\nPre-computing circuits for all architectures...")
@@ -77,7 +91,7 @@ def get_trial_configs_for_experiment(cfg: ExperimentConfig, logger=None) -> list
         cfg.widths, cfg.depths, input_size, output_size, logger
     )
 
-    # Collect all trial configurations
+    # Collect all trial settings
     trial_settings = []
 
     logger and logger.info(
@@ -85,10 +99,8 @@ def get_trial_configs_for_experiment(cfg: ExperimentConfig, logger=None) -> list
     )
     for seed_offset in range(cfg.num_runs):
         for logic_gates in gates_combinations:
-            data_params = copy.deepcopy(cfg.base_trial.data_params)
-            trial_data = generate_trial_data(
-                data_params, logic_gates, cfg.device, logger=logger, debug=cfg.debug
-            )
+            # Compute which columns this trial needs from master data
+            gate_indices = [gate_to_index[gate] for gate in logic_gates]
 
             for width, depth, activation, lr in product(
                 cfg.widths, cfg.depths, cfg.activations, cfg.learning_rates
@@ -102,7 +114,7 @@ def get_trial_configs_for_experiment(cfg: ExperimentConfig, logger=None) -> list
                 model_params.width = width
                 model_params.depth = depth
                 model_params.activation = activation
-                model_params.logic_gates = logic_gates
+                model_params.logic_gates = list(logic_gates)
 
                 trial_setup = TrialSetup(
                     seed=cfg.base_trial.seed + seed_offset,
@@ -116,17 +128,16 @@ def get_trial_configs_for_experiment(cfg: ExperimentConfig, logger=None) -> list
                 subcircuits, subcircuit_structures = circuits_cache[(width, depth)]
 
                 trial_settings.append(
-                    (
-                        trial_setup,
-                        trial_data,
-                        cfg,
-                        logger,
-                        subcircuits,
-                        subcircuit_structures,
+                    TrialSetting(
+                        setup=trial_setup,
+                        gate_indices=gate_indices,
+                        config=cfg,
+                        subcircuits=subcircuits,
+                        subcircuit_structures=subcircuit_structures,
                     )
                 )
 
-    return trial_settings
+    return trial_settings, master_data
 
 
 def experiment_run(cfg: ExperimentConfig, logger=None) -> Iterator[TrialResult]:
@@ -146,21 +157,24 @@ def experiment_run(cfg: ExperimentConfig, logger=None) -> Iterator[TrialResult]:
     )
     logger and logger.info(f"\n\n ExperimentConfig: \n {cfg} \n\n")
 
-    trial_settings = get_trial_configs_for_experiment(cfg, logger)
+    trial_settings, master_data = build_trial_settings(cfg, logger)
 
     logger and logger.info(f"\nRunning {len(trial_settings)} trials iteratively\n")
 
-    for idx, (trial_setup, trial_data, _, _, subcircuits, subcircuit_structures) in enumerate(trial_settings):
+    for idx, setting in enumerate(trial_settings):
         logger and logger.info(f"\n[Trial {idx + 1}/{len(trial_settings)}]")
 
         try:
+            # Adapt master data for this trial's gates
+            trial_data = master_data.select_gates(setting.gate_indices)
+
             trial_result = run_trial(
-                trial_setup,
+                setting.setup,
                 trial_data,
                 device=cfg.device,
                 logger=logger,
                 debug=cfg.debug,
-                precomputed_circuits=(subcircuits, subcircuit_structures),
+                precomputed_circuits=(setting.subcircuits, setting.subcircuit_structures),
             )
             yield trial_result
         except Exception as e:
@@ -188,17 +202,23 @@ def run_experiment(
 
     experiment_result = ExperimentResult(config=cfg)
 
-    # Get all trial configurations
-    trial_settings = get_trial_configs_for_experiment(cfg, logger)
+    # Get all trial settings and master data
+    trial_settings, master_data = build_trial_settings(cfg, logger)
 
     logger and logger.info(f"\nRunning {len(trial_settings)} trials\n")
 
+    # Prepare contexts for parallel execution - each includes adapted data
+    trial_contexts = [
+        (setting, master_data, cfg, logger)
+        for setting in trial_settings
+    ]
+
     results = parallel_map(
-        trial_settings,
-        run_trial_in_parallel,
+        trial_contexts,
+        run_trial_from_setting_parallel,
         max_workers=max_parallel_trials,
         desc="trials",
-        single_item_fn=run_trial_in_series,
+        single_item_fn=run_trial_from_setting_series,
     )
 
     for idx, trial_result, error in results:
@@ -208,3 +228,31 @@ def run_experiment(
             experiment_result.trials[trial_result.trial_id] = trial_result
 
     return experiment_result
+
+
+def run_trial_from_setting_parallel(ctx):
+    """Run trial from TrialSetting context (for parallel execution)."""
+    setting, master_data, cfg, logger = ctx
+    trial_data = master_data.select_gates(setting.gate_indices)
+    return run_trial(
+        setting.setup,
+        trial_data,
+        device=cfg.device,
+        logger=None,  # Disable logging in parallel to avoid interleaving
+        debug=cfg.debug,
+        precomputed_circuits=(setting.subcircuits, setting.subcircuit_structures),
+    )
+
+
+def run_trial_from_setting_series(ctx):
+    """Run trial from TrialSetting context (for serial execution)."""
+    setting, master_data, cfg, logger = ctx
+    trial_data = master_data.select_gates(setting.gate_indices)
+    return run_trial(
+        setting.setup,
+        trial_data,
+        device=cfg.device,
+        logger=logger,
+        debug=cfg.debug,
+        precomputed_circuits=(setting.subcircuits, setting.subcircuit_structures),
+    )

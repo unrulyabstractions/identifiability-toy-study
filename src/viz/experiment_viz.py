@@ -265,20 +265,20 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
             node_pattern_edges: dict[int, list[tuple[int, int, "FaithfulnessMetrics"]]] = {}
             for i, sc_key in enumerate(best_keys):
                 faith = bests_faith[i] if i < len(bests_faith) else None
-                node_idx, edge_var_idx = parse_subcircuit_key(sc_key)
-                node_pattern_edges.setdefault(node_idx, []).append((edge_var_idx, i, faith))
+                node_mask_idx, edge_mask_idx = parse_subcircuit_key(sc_key)
+                node_pattern_edges.setdefault(node_mask_idx, []).append((edge_mask_idx, i, faith))
 
             for i, sc_key in enumerate(best_keys):
                 # Convert list to tuple for hashability (JSON loads as list)
                 if isinstance(sc_key, list):
                     sc_key = tuple(sc_key)
-                node_idx, edge_var_idx = parse_subcircuit_key(sc_key)
-                circuit = subcircuits[node_idx]
+                node_mask_idx, edge_mask_idx = parse_subcircuit_key(sc_key)
+                circuit = subcircuits[node_mask_idx]
 
                 # Build folder path and label based on key type
                 if isinstance(sc_key, (tuple, list)):
-                    folder = os.path.join(trial_dir, gname, str(node_idx), str(edge_var_idx))
-                    sc_label = f"{gname} (Node#{node_idx}/Edge#{edge_var_idx})"
+                    folder = os.path.join(trial_dir, gname, str(node_mask_idx), str(edge_mask_idx))
+                    sc_label = f"{gname} (Node#{node_mask_idx}/Edge#{edge_mask_idx})"
                 else:
                     folder = os.path.join(trial_dir, gname, str(sc_key))
                     sc_label = f"{gname} (SC #{sc_key})"
@@ -465,10 +465,10 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     viz_paths[trial_id][gname][sc_key]["samples"] = samples_paths
 
             # After processing all edge variations, save node pattern summaries
-            for node_idx, edge_list in node_pattern_edges.items():
-                node_dir = os.path.join(trial_dir, gname, str(node_idx))
-                edge_variations = [(edge_var_idx, faith) for edge_var_idx, _, faith in edge_list]
-                save_node_pattern_summary(node_idx, node_dir, edge_variations)
+            for node_mask_idx, edge_list in node_pattern_edges.items():
+                node_dir = os.path.join(trial_dir, gname, str(node_mask_idx))
+                edge_variations = [(edge_mask_idx, faith) for edge_mask_idx, _, faith in edge_list]
+                save_node_pattern_summary(node_mask_idx, node_dir, edge_variations)
 
     # Final viz profiling summary
     viz_elapsed_ms = (time.time() - viz_start) * 1000

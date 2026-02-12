@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from src.experiment import get_trial_configs_for_experiment
+from src.experiment import build_trial_settings
 from src.experiment_config import ExperimentConfig, set_test_mode_global
 from src.infra import print_profile, profile_fn, setup_logging
 from src.infra.profiler import Trace
@@ -42,7 +42,7 @@ def get_args() -> Any:
         "--test-gates",
         type=int,
         default=0,
-        help="Test gate configuration: 0=XOR, 1=OR+AND, 2=XOR+XOR, 3=ID+IMP, 4=ID+MAJ, 5=XOR+MAJ",
+        help="Test gate configuration: -1=ALL, 0=XOR, 1=OR+AND, 2=XOR+XOR, 3=ID+IMP, 4=ID+MAJ, 5=XOR+MAJ",
     )
     parser.add_argument(
         "--analysis-only",
@@ -189,26 +189,8 @@ def exit_fx() -> None:
     sys.exit(0)
 
 
-def main() -> None:
-    args = get_args()
-
-    # Enable debug tracing if --debug flag is set
-    if args.debug:
-        Trace.enable()
-        print("[DEBUG] Detailed tracing enabled - expect verbose output")
-
-    # Set test mode BEFORE creating any configs (affects default values)
-    if args.test:
-        set_test_mode_global(True, args.test_gates)
-
-    # Output path
-    output_dir = Path("runs")
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Alternative use of main to iterate on analysis/spd
-    if rerun_pipeline(output_dir, args):
-        exit_fx()
-
+def run_single_experiment(args: Any, output_dir: Path) -> None:
+    """Run a single experiment with the current test mode settings."""
     # We identify run by time (with microseconds to avoid collisions in parallel runs)
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
 
@@ -229,8 +211,8 @@ def main() -> None:
     )
 
     # Determine execution mode based on trial count
-    trial_configs = get_trial_configs_for_experiment(cfg, logger)
-    n_trials = len(trial_configs)
+    trial_settings, _ = build_trial_settings(cfg, logger)
+    n_trials = len(trial_settings)
 
     use_iterative = args.iterative or n_trials > cfg.max_num_trials_in_monolith
     mode_name = "iterative" if use_iterative else "monolith"
@@ -254,6 +236,45 @@ def main() -> None:
             no_viz=args.no_viz,
             spd_device=args.spd_device,
         )
+
+
+# All available test gate configurations
+ALL_TEST_GATE_CONFIGS = [0, 1, 2, 3, 4, 5]
+
+
+def main() -> None:
+    args = get_args()
+
+    # Enable debug tracing if --debug flag is set
+    if args.debug:
+        Trace.enable()
+        print("[DEBUG] Detailed tracing enabled - expect verbose output")
+
+    # Output path
+    output_dir = Path("runs")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Alternative use of main to iterate on analysis/spd
+    if rerun_pipeline(output_dir, args):
+        exit_fx()
+
+    # Determine which test configs to run
+    if args.test and args.test_gates == -1:
+        # Run all test configurations
+        test_configs = ALL_TEST_GATE_CONFIGS
+        print(f"Running ALL {len(test_configs)} test configurations: {test_configs}")
+        for i, config_idx in enumerate(test_configs):
+            print(f"\n{'='*60}")
+            print(f"  Test Configuration {i+1}/{len(test_configs)}: --test-gates {config_idx}")
+            print(f"{'='*60}\n")
+            set_test_mode_global(True, config_idx)
+            run_single_experiment(args, output_dir)
+            print_profile()
+    else:
+        # Run single configuration
+        if args.test:
+            set_test_mode_global(True, args.test_gates)
+        run_single_experiment(args, output_dir)
 
     exit_fx()
 

@@ -60,7 +60,7 @@ class ProfilingData(SchemaClass):
     phase_durations_ms: dict[str, float] = field(default_factory=dict)
 
 
-# Type alias for subcircuit keys: (node_idx, edge_var_idx) tuple
+# Type alias for subcircuit keys: (node_mask_idx, edge_mask_idx) tuple
 SubcircuitKey = tuple[int, int]
 
 
@@ -75,7 +75,7 @@ class Metrics(SchemaClass):
     # Circuit Info
     per_gate_metrics: dict[str, GateMetrics] = field(default_factory=dict)
     # Keys of subcircuits that produce best results
-    # Each key is either an int (legacy) or (node_idx, edge_var_idx) tuple
+    # Keys are (node_mask_idx, edge_mask_idx) tuples (int keys in old saved data)
     per_gate_bests: dict[str, list[SubcircuitKey]] = field(
         default_factory=lambda: defaultdict(list)
     )

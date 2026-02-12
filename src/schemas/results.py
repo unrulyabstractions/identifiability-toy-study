@@ -35,6 +35,30 @@ class TrialData:
     val: Dataset
     test: Dataset
 
+    def select_gates(self, gate_indices: list[int]) -> "TrialData":
+        """Create a new TrialData with only the specified gate columns.
+
+        Args:
+            gate_indices: Which columns to select from y (e.g., [0, 2] for gates 0 and 2)
+
+        Returns:
+            New TrialData with y tensors sliced to only the requested columns
+        """
+        return TrialData(
+            train=Dataset(
+                x=self.train.x,
+                y=self.train.y[:, gate_indices],
+            ),
+            val=Dataset(
+                x=self.val.x,
+                y=self.val.y[:, gate_indices],
+            ),
+            test=Dataset(
+                x=self.test.x,
+                y=self.test.y[:, gate_indices],
+            ),
+        )
+
 
 @dataclass
 class TrialResult(SchemaClass):
@@ -106,16 +130,16 @@ class ExperimentResult(SchemaClass):
                 viz = viz_paths.get(trial_id, {}).get(gate, {})
                 best_list = []
                 for key in bests:
-                    node_idx, edge_var_idx = parse_subcircuit_key(key)
-                    if node_idx not in by_idx:
+                    node_mask_idx, edge_mask_idx = parse_subcircuit_key(key)
+                    if node_mask_idx not in by_idx:
                         continue
-                    sm = by_idx[node_idx]
+                    sm = by_idx[node_mask_idx]
 
                     # Build entry with appropriate key format
                     if isinstance(key, (tuple, list)):
                         entry = {
-                            "node_idx": node_idx,
-                            "edge_var_idx": edge_var_idx,
+                            "node_pattern": node_mask_idx,
+                            "edge_variation": edge_mask_idx,
                             "acc": sm.accuracy,
                             "sim": sm.bit_similarity,
                         }

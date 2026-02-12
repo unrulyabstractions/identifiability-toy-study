@@ -121,6 +121,7 @@ def analyze_gate(
         per_gate_metrics[gate_name].subcircuit_metrics,
         subcircuits,
         subcircuit_structures,
+        min_subcircuits=setup.faithfulness_config.min_subcircuits_per_gate,
         max_subcircuits=setup.faithfulness_config.max_subcircuits_per_gate,
     )
     per_gate_bests[gate_name] = filter_result.indices
@@ -149,23 +150,24 @@ def analyze_gate(
         y_pred=y_gate_eval,
         gate_idx=gate_idx,
         eval_device=eval_device,
-        max_edge_variations=setup.faithfulness_config.max_edge_variations_per_subcircuits,
+        min_edge_variations=setup.faithfulness_config.min_edge_variations_per_subcircuit,
+        max_edge_variations=setup.faithfulness_config.max_edge_variations_per_subcircuit,
     )
 
     # Build hierarchical structure: node_pattern_idx -> [edge_variations]
-    # Each entry is (node_idx, edge_var_idx, circuit)
-    all_subcircuit_keys = []  # List of (node_idx, edge_var_idx)
-    all_circuits = {}  # (node_idx, edge_var_idx) -> circuit
-    all_structures = {}  # (node_idx, edge_var_idx) -> structure
+    # Each entry is (node_mask_idx, edge_mask_idx, circuit)
+    all_subcircuit_keys = []  # List of (node_mask_idx, edge_mask_idx)
+    all_circuits = {}  # (node_mask_idx, edge_mask_idx) -> circuit
+    all_structures = {}  # (node_mask_idx, edge_mask_idx) -> structure
 
     for orig_idx, top_variants, stats in edge_results:
-        node_idx = best_node_indices[orig_idx]
-        for edge_var_idx, variant in enumerate(top_variants):
-            key = (node_idx, edge_var_idx)
+        node_mask_idx = best_node_indices[orig_idx]
+        for edge_mask_idx, variant in enumerate(top_variants):
+            key = (node_mask_idx, edge_mask_idx)
             all_subcircuit_keys.append(key)
             all_circuits[key] = variant.circuit
             # Use the node pattern's structure (edge variations share the same structure)
-            all_structures[key] = subcircuit_structures[node_idx]
+            all_structures[key] = subcircuit_structures[node_mask_idx]
 
     # Store the hierarchical indices for this gate
     per_gate_bests[gate_name] = all_subcircuit_keys

@@ -567,23 +567,23 @@ def save_gate_summary(
         faith = bests_faith[i] if i < len(bests_faith) else None
         scores = _compute_subcircuit_scores(faith)
 
-        # Get node_idx (handle tuple, list, and int keys)
-        node_idx, edge_var_idx = parse_subcircuit_key(key)
+        # Get node_mask_idx (handle tuple, list, and int keys)
+        node_mask_idx, edge_mask_idx = parse_subcircuit_key(key)
 
         # Keep only the best edge variation per node pattern
-        if node_idx not in node_pattern_best:
-            node_pattern_best[node_idx] = (edge_var_idx, scores, faith)
+        if node_mask_idx not in node_pattern_best:
+            node_pattern_best[node_mask_idx] = (edge_mask_idx, scores, faith)
         else:
-            _, existing_scores, _ = node_pattern_best[node_idx]
+            _, existing_scores, _ = node_pattern_best[node_mask_idx]
             if scores["overall"] > existing_scores["overall"]:
-                node_pattern_best[node_idx] = (edge_var_idx, scores, faith)
+                node_pattern_best[node_mask_idx] = (edge_mask_idx, scores, faith)
 
     # Build summaries for best per node pattern
     node_summaries = []
-    for node_idx, (edge_var_idx, scores, _) in node_pattern_best.items():
+    for node_mask_idx, (edge_mask_idx, scores, _) in node_pattern_best.items():
         node_summaries.append({
-            "node_pattern": node_idx,
-            "best_edge_variation": edge_var_idx,
+            "node_pattern": node_mask_idx,
+            "best_edge_variation": edge_mask_idx,
             "observational": round(scores["observational"]["score"], 3),
             "interventional": round(scores["interventional"]["score"], 3),
             "counterfactual": round(scores["counterfactual"]["score"], 3),
@@ -608,26 +608,26 @@ def save_gate_summary(
 
 
 def save_node_pattern_summary(
-    node_idx: int,
+    node_mask_idx: int,
     node_dir: str,
     edge_variations: list[tuple[int, "FaithfulnessMetrics | None"]],
 ) -> str:
     """Save summary.json for a node pattern, ranking its edge variations.
 
     Args:
-        node_idx: The node pattern index
+        node_mask_idx: The node pattern index
         node_dir: Directory for this node pattern (e.g., XOR/46/)
-        edge_variations: List of (edge_var_idx, faithfulness_metrics) tuples
+        edge_variations: List of (edge_mask_idx, faithfulness_metrics) tuples
 
     Returns:
         Path to the saved summary.json
     """
     # Build edge variation summaries
     edge_summaries = []
-    for edge_var_idx, faith in edge_variations:
+    for edge_mask_idx, faith in edge_variations:
         scores = _compute_subcircuit_scores(faith)
         edge_summaries.append({
-            "edge_variation": edge_var_idx,
+            "edge_variation": edge_mask_idx,
             "observational": round(scores["observational"]["score"], 3),
             "interventional": round(scores["interventional"]["score"], 3),
             "counterfactual": round(scores["counterfactual"]["score"], 3),
@@ -638,7 +638,7 @@ def save_node_pattern_summary(
     ranked_edges = rank_subcircuits(edge_summaries, key="overall")
 
     summary = {
-        "node_pattern": node_idx,
+        "node_pattern": node_mask_idx,
         "n_edge_variations": len(edge_variations),
         "edge_variations": ranked_edges,
     }
@@ -838,7 +838,3 @@ def save_all_samples(
             )
 
     return paths
-
-
-# Keep old name for backwards compatibility
-save_full_results = save_summary

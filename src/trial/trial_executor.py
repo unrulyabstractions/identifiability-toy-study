@@ -189,27 +189,3 @@ def run_trial(
     update_status("SUCCESSFUL_TRIAL")
     trace("run_trial complete", trial_id=trial_result.trial_id)
     return trial_result
-
-
-def run_trial_in_parallel(ctx):
-    trial_setup, trial_data, cfg, logger, subcircuits, subcircuit_structures = ctx
-    return run_trial(
-        trial_setup,
-        trial_data,
-        device=cfg.device,
-        logger=None,  # Disable logging in parallel to avoid interleaving
-        debug=cfg.debug,
-        precomputed_circuits=(subcircuits, subcircuit_structures),
-    )
-
-
-def run_trial_in_series(ctx):
-    trial_setup, trial_data, cfg, logger, subcircuits, subcircuit_structures = ctx
-    return run_trial(
-        trial_setup,
-        trial_data,
-        device=cfg.device,
-        logger=logger,
-        debug=cfg.debug,
-        precomputed_circuits=(subcircuits, subcircuit_structures),
-    )

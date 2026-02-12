@@ -30,6 +30,7 @@ def filter_subcircuits(
     subcircuit_metrics: list["SubcircuitMetrics"],
     subcircuits: list["Circuit"],
     subcircuit_structures: list["CircuitStructure"],
+    min_subcircuits: int = 1,
     max_subcircuits: int = 1,
 ) -> FilterResult:
     """Filter subcircuits by epsilon thresholds, then select diverse top-k.
@@ -37,8 +38,8 @@ def filter_subcircuits(
     Steps:
     1. Filter by bit_similarity and accuracy using epsilon threshold
     2. Sort by (accuracy DESC, bit_similarity DESC, node_sparsity DESC)
-    3. Select up to max_subcircuits, diversifying by jaccard distance
-    4. ALWAYS return at least 1 subcircuit (best one, even if none pass threshold)
+    3. Select between min_subcircuits and max_subcircuits, diversifying by jaccard distance
+    4. If fewer than min pass threshold, include best non-passing ones
 
     Note: Edge masks are not directly filtered here since circuits with
     the same node pattern but different edges are functionally equivalent
@@ -49,7 +50,8 @@ def filter_subcircuits(
         subcircuit_metrics: Per-subcircuit accuracy/similarity metrics
         subcircuits: Circuit objects (for jaccard calculation)
         subcircuit_structures: Circuit structure info (for sparsity)
-        max_subcircuits: Maximum number of subcircuits to return (0 means just best 1)
+        min_subcircuits: Minimum number of subcircuits to return (if available)
+        max_subcircuits: Maximum number of subcircuits to return
 
     Returns:
         FilterResult with selected indices and metadata
@@ -57,8 +59,9 @@ def filter_subcircuits(
     if not subcircuit_metrics:
         return FilterResult(indices=[], n_passing=0, n_total=0, best_metrics=None, best_failing=None)
 
-    # Always return at least 1 subcircuit
-    effective_max = max(1, max_subcircuits)
+    # Ensure at least min_subcircuits (default 1) and respect max
+    effective_min = max(1, min_subcircuits)
+    effective_max = max(effective_min, max_subcircuits)
 
     metrics_by_idx = {m.idx: m for m in subcircuit_metrics}
     n_total = len(subcircuit_metrics)
@@ -98,19 +101,8 @@ def filter_subcircuits(
             best_failing = metrics_by_idx[idx]
             break
 
-    # If none pass, use best overall (always return at least 1)
-    if not passing_indices:
-        best_idx = all_sorted[0]
-        return FilterResult(
-            indices=[best_idx],
-            n_passing=0,
-            n_total=n_total,
-            best_metrics=metrics_by_idx[best_idx],
-            best_failing=best_failing,
-        )
-
     # Sort passing by quality
-    sorted_indices = sorted(
+    sorted_passing = sorted(
         passing_indices,
         key=lambda idx: (
             metrics_by_idx[idx].accuracy,
@@ -120,22 +112,15 @@ def filter_subcircuits(
         reverse=True,
     )
 
-    if effective_max == 1:
-        best_idx = sorted_indices[0]
-        return FilterResult(
-            indices=[best_idx],
-            n_passing=n_passing,
-            n_total=n_total,
-            best_metrics=metrics_by_idx[best_idx],
-            best_failing=best_failing,
-        )
-
-    # Greedy selection: pick best, then diversify
-    selected = [sorted_indices[0]]
-
-    for candidate_idx in sorted_indices[1:]:
+    # Greedy selection from passing indices
+    selected = []
+    for candidate_idx in sorted_passing:
         if len(selected) >= effective_max:
             break
+
+        if not selected:
+            selected.append(candidate_idx)
+            continue
 
         # Calculate max overlap with any already-selected subcircuit
         max_overlap = max(
@@ -158,10 +143,22 @@ def filter_subcircuits(
             # Not a tie - just add (it's lower quality but still passes)
             selected.append(candidate_idx)
 
+    # If we have fewer than effective_min, add best non-passing ones
+    if len(selected) < effective_min:
+        for idx in all_sorted:
+            if len(selected) >= effective_min:
+                break
+            if idx not in selected:
+                selected.append(idx)
+
+    # Handle empty selection (shouldn't happen but be safe)
+    if not selected and all_sorted:
+        selected = all_sorted[:effective_min]
+
     return FilterResult(
         indices=selected,
         n_passing=n_passing,
         n_total=n_total,
-        best_metrics=metrics_by_idx[selected[0]],
+        best_metrics=metrics_by_idx[selected[0]] if selected else None,
         best_failing=best_failing,
     )

@@ -93,10 +93,10 @@ def log_edge_variant_summary(
 
 
 def parse_subcircuit_key(key) -> tuple[int, int]:
-    """Parse a subcircuit key into (node_idx, edge_var_idx).
+    """Parse a subcircuit key into (node_mask_idx, edge_mask_idx).
 
-    Handles both legacy int keys and new (node_idx, edge_var_idx) tuple/list keys.
-    For legacy int keys, returns (key, 0).
+    Current format: (node_mask_idx, edge_mask_idx) tuple/list
+    Old saved data format: int (treated as (key, 0))
     """
     if isinstance(key, (tuple, list)):
         return key[0], key[1]
@@ -105,14 +105,10 @@ def parse_subcircuit_key(key) -> tuple[int, int]:
 
 def format_subcircuit_key(key) -> str:
     """Format a subcircuit key for display."""
-    node_idx, edge_var_idx = parse_subcircuit_key(key)
-    if edge_var_idx == 0 and not isinstance(key, (tuple, list)):
+    node_mask_idx, edge_mask_idx = parse_subcircuit_key(key)
+    if edge_mask_idx == 0 and not isinstance(key, (tuple, list)):
         return f"SC#{key}"
-    return f"Node#{node_idx}/Edge#{edge_var_idx}"
-
-
-# Alias for backwards compatibility
-_format_subcircuit_key = format_subcircuit_key
+    return f"Node#{node_mask_idx}/Edge#{edge_mask_idx}"
 
 
 def log_faithfulness_metrics(
@@ -126,7 +122,7 @@ def log_faithfulness_metrics(
     inter = faith.interventional
     cf = faith.counterfactual
 
-    key_str = _format_subcircuit_key(subcircuit_key)
+    key_str = format_subcircuit_key(subcircuit_key)
     print(f"{prefix}{key_str} Faithfulness:")
 
     # Observational

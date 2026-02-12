@@ -8,7 +8,7 @@ Provides two modes:
 from pathlib import Path
 from typing import Any, Iterator
 
-from src.experiment import experiment_run, get_trial_configs_for_experiment, run_experiment
+from src.experiment import experiment_run, run_experiment
 from src.experiment_config import ExperimentConfig
 from src.infra import print_profile, profile_fn
 from src.infra.profiler import Trace

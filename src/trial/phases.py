@@ -162,7 +162,7 @@ def faithfulness_phase(
     Args:
         subcircuit_keys: List of keys identifying subcircuits. Can be:
             - Integers (legacy: node pattern indices)
-            - Tuples of (node_idx, edge_var_idx) for hierarchical structure
+            - Tuples of (node_mask_idx, edge_mask_idx) for hierarchical structure
         subcircuit_models: Dict mapping keys to subcircuit models
         subcircuit_structures: Dict mapping keys to circuit structures
     """
