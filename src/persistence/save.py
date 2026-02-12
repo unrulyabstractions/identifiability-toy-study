@@ -333,9 +333,12 @@ def _save_decision_boundary_visualizations(
 
     try:
         # Save visualizations from pre-computed data
+        # Pass loss for full circuit decision boundary plots
+        loss = first_trial.metrics.avg_loss if first_trial.metrics else None
         visualize_all_gates_from_data(
             gate_data=gate_data,
             output_dir=str(viz_dir),
+            loss=loss,
         )
         logger and logger.info(f"Saved decision boundary visualizations to {viz_dir}")
     except Exception as e:

@@ -31,8 +31,8 @@ def generate_monte_carlo_data(
     n_inputs: int,
     gate_idx: int = 0,
     n_samples: int = 10000,
-    low: float = -0.5,
-    high: float = 1.5,
+    low: float = -3.0,
+    high: float = 3.0,
     device: str = "cpu",
 ) -> dict:
     """Generate Monte Carlo samples and model predictions for decision boundary visualization.
@@ -95,8 +95,8 @@ def generate_grid_data(
     n_inputs: int,
     gate_idx: int = 0,
     resolution: int = 100,
-    low: float = -0.5,
-    high: float = 1.5,
+    low: float = -3.0,
+    high: float = 3.0,
     device: str = "cpu",
 ) -> dict:
     """Generate grid samples and model predictions for 1D/2D decision boundary visualization.
@@ -176,6 +176,7 @@ def plot_decision_boundary_1d_from_data(
     gate_name: str = "Gate",
     output_path: str = None,
     show: bool = False,
+    loss: float = None,
 ) -> str:
     """Plot decision boundary for 1-input case from pre-computed data.
 
@@ -184,6 +185,7 @@ def plot_decision_boundary_1d_from_data(
         gate_name: Name for title
         output_path: Path to save figure
         show: Whether to display
+        loss: Optional loss value to display in title (for full circuit)
 
     Returns:
         Path to saved figure
@@ -213,7 +215,20 @@ def plot_decision_boundary_1d_from_data(
 
     ax.set_xlabel("Input")
     ax.set_ylabel("P(output=1)")
-    ax.set_title(f"{gate_name}: Decision Boundary (1D)")
+
+    # Title with optional loss info
+    title = f"{gate_name}: Decision Boundary (1D)"
+    ax.set_title(title)
+    if loss is not None:
+        # Add loss as subtitle in smaller grey monospace font
+        ax.text(
+            0.5, 1.02, f"loss: {loss:.4f}",
+            transform=ax.transAxes,
+            ha="center", va="bottom",
+            fontsize=9, color="gray",
+            fontfamily="monospace",
+        )
+
     ax.set_xlim(data["low"], data["high"])
     ax.set_ylim(-0.05, 1.05)
     ax.legend()
@@ -242,6 +257,7 @@ def plot_decision_boundary_2d_from_data(
     output_path: str = None,
     show: bool = False,
     mc_data: dict = None,
+    loss: float = None,
 ) -> str:
     """Plot decision boundary for 2-input case from pre-computed data.
 
@@ -251,6 +267,7 @@ def plot_decision_boundary_2d_from_data(
         output_path: Path to save figure
         show: Whether to display
         mc_data: Optional Monte Carlo data for overlay
+        loss: Optional loss value to display in title (for full circuit)
 
     Returns:
         Path to saved figure
@@ -293,7 +310,20 @@ def plot_decision_boundary_2d_from_data(
     plt.colorbar(cf, ax=ax, label="P(output=1)")
     ax.set_xlabel("Input 1")
     ax.set_ylabel("Input 2")
-    ax.set_title(f"{gate_name}: Decision Boundary (2D)")
+
+    # Title with optional loss info
+    title = f"{gate_name}: Decision Boundary (2D)"
+    ax.set_title(title)
+    if loss is not None:
+        # Add loss as subtitle in smaller grey Roboto Mono font
+        ax.text(
+            0.5, 1.02, f"loss: {loss:.4f}",
+            transform=ax.transAxes,
+            ha="center", va="bottom",
+            fontsize=9, color="gray",
+            fontfamily="monospace",
+        )
+
     ax.set_xlim(data["low"], data["high"])
     ax.set_ylim(data["low"], data["high"])
     ax.set_aspect("equal")
@@ -564,6 +594,7 @@ def plot_decision_boundary_from_data(
     gate_name: str = "Gate",
     output_path: str = None,
     show: bool = False,
+    loss: float = None,
 ) -> str | dict[str, str]:
     """Plot decision boundary from pre-computed data - dispatches based on n_inputs.
 
@@ -572,6 +603,7 @@ def plot_decision_boundary_from_data(
         gate_name: Name for title
         output_path: Path to save figure(s)
         show: Whether to display
+        loss: Optional loss value to display in title (for full circuit only)
 
     Returns:
         Path (for 1D/2D) or dict of paths (for 3D+)
@@ -579,9 +611,9 @@ def plot_decision_boundary_from_data(
     n_inputs = data["n_inputs"]
 
     if n_inputs == 1:
-        return plot_decision_boundary_1d_from_data(data, gate_name, output_path, show)
+        return plot_decision_boundary_1d_from_data(data, gate_name, output_path, show, loss=loss)
     elif n_inputs == 2:
-        return plot_decision_boundary_2d_from_data(data, gate_name, output_path, show)
+        return plot_decision_boundary_2d_from_data(data, gate_name, output_path, show, loss=loss)
     elif n_inputs == 3:
         return plot_decision_boundary_3d_from_data(data, gate_name, output_path, show)
     else:
@@ -592,6 +624,7 @@ def visualize_all_gates_from_data(
     gate_data: dict[str, dict],
     output_dir: str,
     show: bool = False,
+    loss: float = None,
 ) -> dict[str, str | dict[str, str]]:
     """Visualize decision boundaries for all gates from pre-computed data.
 
@@ -599,6 +632,7 @@ def visualize_all_gates_from_data(
         gate_data: Dict mapping gate_name -> data dict
         output_dir: Directory to save figures
         show: Whether to display
+        loss: Optional loss value to display in title (for full circuit plots)
 
     Returns:
         Dict mapping gate_name -> path(s)
@@ -616,6 +650,7 @@ def visualize_all_gates_from_data(
             gate_name=gate_name,
             output_path=output_path,
             show=show,
+            loss=loss,
         )
 
     return results

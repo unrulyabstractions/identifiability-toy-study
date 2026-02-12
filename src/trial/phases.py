@@ -250,7 +250,7 @@ def decision_boundary_phase(
                 n_inputs=n_inputs,
                 gate_idx=gate_idx,
                 device=device,
-                resolution=200,  # Higher resolution for smoother contours
+                resolution=400,  # Higher resolution for smoother contours (-3 to 3 range)
             )
         else:
             gate_db_data[gate_name] = generate_monte_carlo_data(
@@ -268,6 +268,9 @@ def decision_boundary_phase(
         subcircuit_db_data[gate_name] = {}
         gate_model = gate_models[gate_idx]
 
+        # Get stored edge-masked circuits for this gate
+        gate_circuits = trial_metrics.per_gate_circuits.get(gate_name, {})
+
         for key in per_gate_bests[gate_name]:
             # Extract node_mask_idx and edge_mask_idx
             if isinstance(key, (tuple, list)) and len(key) >= 2:
@@ -275,24 +278,28 @@ def decision_boundary_phase(
             else:
                 node_mask_idx, edge_mask_idx = key, 0
 
-            # Find the subcircuit
-            sc_data = None
-            for sc in subcircuits:
-                if isinstance(sc, dict):
-                    if sc.get("idx") == node_mask_idx:
-                        sc_data = sc
+            # Look up the edge-masked circuit (stored during gate analysis)
+            # Keys are stored as "node_idx,edge_idx" strings for JSON serialization
+            lookup_key = f"{node_mask_idx},{edge_mask_idx}"
+            sc_data = gate_circuits.get(lookup_key)
+
+            # Fallback to base circuit if edge-masked not available
+            if sc_data is None:
+                for sc in subcircuits:
+                    if isinstance(sc, dict):
+                        if sc.get("idx") == node_mask_idx:
+                            sc_data = sc
+                            break
+                    else:
+                        sc_data = sc.to_dict() if hasattr(sc, "to_dict") else None
                         break
-                else:
-                    # Circuit object
-                    sc_data = sc.to_dict() if hasattr(sc, "to_dict") else None
-                    break
 
             if sc_data is None:
                 continue
 
             try:
                 circuit = Circuit.from_dict(sc_data)
-                subcircuit_model = gate_model.separate_subcircuit(circuit, gate_idx=gate_idx)
+                subcircuit_model = gate_model.separate_subcircuit(circuit, gate_idx=0)
 
                 if n_inputs <= 2:
                     data = generate_grid_data(
@@ -300,7 +307,7 @@ def decision_boundary_phase(
                         n_inputs=n_inputs,
                         gate_idx=0,  # Subcircuit model has single output
                         device=device,
-                        resolution=200,  # Higher resolution for smoother contours
+                        resolution=400,  # Higher resolution for smoother contours (-3 to 3 range)
                     )
                 else:
                     data = generate_monte_carlo_data(

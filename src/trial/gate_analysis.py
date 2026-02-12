@@ -172,6 +172,12 @@ def analyze_gate(
     # Store the hierarchical indices for this gate
     per_gate_bests[gate_name] = all_subcircuit_keys
 
+    # Store edge-masked circuits for decision boundary visualization
+    # Use string keys "node_idx,edge_idx" for JSON serialization
+    trial_metrics.per_gate_circuits[gate_name] = {
+        f"{key[0]},{key[1]}": circuit.to_dict() for key, circuit in all_circuits.items()
+    }
+
     # Create subcircuit models for all variations
     best_subcircuit_models = {
         key: gate_model.separate_subcircuit(all_circuits[key], gate_idx=gate_idx)

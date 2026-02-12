@@ -83,3 +83,8 @@ class Metrics(SchemaClass):
     per_gate_bests_faith: dict[str, list["FaithfulnessMetrics"]] = field(
         default_factory=lambda: defaultdict(list)
     )
+    # Edge-masked circuits for each best subcircuit (for decision boundary visualization)
+    # Maps gate_name -> {(node_mask_idx, edge_mask_idx) -> circuit_dict}
+    per_gate_circuits: dict[str, dict] = field(
+        default_factory=lambda: defaultdict(dict)
+    )
