@@ -509,7 +509,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                 # Save summary.json and structured samples in nested folders
                 if has_faith:
                     summary_path = save_summary(folder, faithfulness_data, sc_key)
-                    samples_paths = save_all_samples(folder, faithfulness_data, sc_key)
+                    samples_paths = save_all_samples(faithfulness_dir, faithfulness_data, sc_key)
                     viz_paths[trial_id][gname][sc_key]["summary"] = summary_path
                     viz_paths[trial_id][gname][sc_key]["samples"] = samples_paths
 

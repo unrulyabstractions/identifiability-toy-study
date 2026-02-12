@@ -698,9 +698,9 @@ def save_all_samples(
     faithfulness: "FaithfulnessMetrics | None",
     subcircuit_key: int | tuple[int, int],
 ) -> dict[str, str]:
-    """Save samples.json files in structured nested folders per T1.i.
+    """Save samples.json files in structured nested folders inside faithfulness/.
 
-    Creates:
+    Creates inside output_dir (the faithfulness directory):
         observational/
             noise_perturbations/samples.json
             out_distribution_transformations/samples.json
@@ -716,7 +716,7 @@ def save_all_samples(
             independence/samples.json
 
     Args:
-        output_dir: Directory to save to (e.g., XOR/46/0/)
+        output_dir: Faithfulness directory (e.g., XOR/46/0/faithfulness/)
         faithfulness: Full faithfulness metrics
         subcircuit_key: The subcircuit key (int or tuple)
 
