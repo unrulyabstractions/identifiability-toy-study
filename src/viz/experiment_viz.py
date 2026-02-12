@@ -20,30 +20,36 @@ if TYPE_CHECKING:
     from src.schemas import FaithfulnessMetrics
 
 
-def no_pytorch(func):
-    """Decorator that blocks PyTorch usage during function execution.
+def no_pytorch_inference(func):
+    """Decorator that detects PyTorch model inference during function execution.
 
-    This ensures visualization functions cannot accidentally run model inference.
+    This ensures visualization functions don't accidentally run model inference.
     All data should be pre-computed in trial execution phases.
+
+    Note: This allows read-only torch operations (type checks, tensor inspection)
+    but blocks nn.Module forward passes.
     """
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        torch_mod = sys.modules.get("torch")
+        import torch.nn as nn
 
-        class TorchBlocker:
-            def __getattr__(self, name):
-                raise RuntimeError(
-                    f"PyTorch usage detected: torch.{name}. "
-                    "Visualization must use pre-computed data only."
-                )
+        # Store original forward methods
+        original_module_call = nn.Module.__call__
 
-        sys.modules["torch"] = TorchBlocker()
+        def blocked_forward(self, *args, **kwargs):
+            raise RuntimeError(
+                f"PyTorch model inference detected: {type(self).__name__}.__call__(). "
+                "Visualization must use pre-computed data only. "
+                "Move model inference to trial execution phase."
+            )
+
+        # Block nn.Module forward passes
+        nn.Module.__call__ = blocked_forward
         try:
             return func(*args, **kwargs)
         finally:
-            if torch_mod is not None:
-                sys.modules["torch"] = torch_mod
+            nn.Module.__call__ = original_module_call
 
     return wrapper
 
@@ -172,7 +178,7 @@ def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) ->
     print(f"  Generated {len(list(edge_masks_dir.glob('*.png')))} edge_mask diagrams")
 
 
-@no_pytorch
+@no_pytorch_inference
 def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
     """
     Generate all visualizations for experiment using pre-computed data.
