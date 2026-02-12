@@ -256,39 +256,39 @@ def save_faithfulness_json(
     faithfulness_dir: str,
     faithfulness: "FaithfulnessMetrics | None",
 ) -> dict[str, str]:
-    """Save result.json in each subfolder and summary.json in faithfulness/."""
+    """Save summary.json in each faithfulness subfolder."""
     paths = {}
     obs_overall = 0.0
     int_overall = 0.0
     cf_overall = 0.0
 
-    # Observational result.json (from faithfulness.observational)
+    # Observational summary.json (from faithfulness.observational)
     observational = faithfulness.observational if faithfulness else None
     if observational_dir and observational:
         obs_metrics = compute_observational_metrics(observational)
         obs_overall = obs_metrics.get("overall_score", 0.0)
-        path = os.path.join(observational_dir, "result.json")
+        path = os.path.join(observational_dir, "summary.json")
         with open(path, "w") as f:
             json.dump(obs_metrics, f, indent=2)
-        paths["observational/result.json"] = path
+        paths["observational/summary.json"] = path
 
-    # Interventional result.json
+    # Interventional summary.json
     if interventional_dir and faithfulness:
         int_metrics = compute_interventional_metrics(faithfulness)
         int_overall = int_metrics.get("overall_score", 0.0)
-        path = os.path.join(interventional_dir, "result.json")
+        path = os.path.join(interventional_dir, "summary.json")
         with open(path, "w") as f:
             json.dump(int_metrics, f, indent=2)
-        paths["interventional/result.json"] = path
+        paths["interventional/summary.json"] = path
 
-    # Counterfactual result.json
+    # Counterfactual summary.json
     if counterfactual_dir and faithfulness:
         cf_metrics = compute_counterfactual_metrics(faithfulness)
         cf_overall = cf_metrics.get("overall_score", 0.0)
-        path = os.path.join(counterfactual_dir, "result.json")
+        path = os.path.join(counterfactual_dir, "summary.json")
         with open(path, "w") as f:
             json.dump(cf_metrics, f, indent=2)
-        paths["counterfactual/result.json"] = path
+        paths["counterfactual/summary.json"] = path
 
     # Compute epsilon from the SAME component scores used for overall score
     # Epsilon = min distance from 1.0 across components (always positive magnitude)
