@@ -35,14 +35,12 @@ def get_args() -> Any:
     parser.add_argument("--debug", action="store_true", help="Enable debugging")
     parser.add_argument(
         "--test",
-        action="store_true",
-        help="Enable fast test mode (smaller datasets, fewer epochs)",
-    )
-    parser.add_argument(
-        "--test-gates",
         type=int,
-        default=0,
-        help="Test gate configuration: -1=ALL, 0=XOR, 1=OR+AND, 2=XOR+XOR, 3=ID+IMP, 4=ID+MAJ, 5=XOR+MAJ",
+        nargs="?",
+        const=0,
+        default=None,
+        metavar="GATES",
+        help="Enable fast test mode. Optional gate config: -1=ALL, 0=XOR, 1=OR+AND, 2=XOR+XOR, 3=ID+IMP, 4=ID+MAJ, 5=XOR+MAJ",
     )
     parser.add_argument(
         "--analysis-only",
@@ -259,23 +257,22 @@ def main() -> None:
         exit_fx()
 
     # Determine which test configs to run
-    if args.test and args.test_gates == -1:
+    # args.test is None (not test mode), -1 (all), or 0-5 (specific config)
+    if args.test is not None and args.test == -1:
         # Run all test configurations
         test_configs = ALL_TEST_GATE_CONFIGS
         print(f"Running ALL {len(test_configs)} test configurations: {test_configs}")
         for i, config_idx in enumerate(test_configs):
             print(f"\n{'=' * 60}")
-            print(
-                f"  Test Configuration {i + 1}/{len(test_configs)}: --test-gates {config_idx}"
-            )
+            print(f"  Test Configuration {i + 1}/{len(test_configs)}: --test {config_idx}")
             print(f"{'=' * 60}\n")
             set_test_mode_global(True, config_idx)
             run_single_experiment(args, output_dir)
             print_profile()
     else:
         # Run single configuration
-        if args.test:
-            set_test_mode_global(True, args.test_gates)
+        if args.test is not None:
+            set_test_mode_global(True, args.test)
         run_single_experiment(args, output_dir)
 
     exit_fx()
