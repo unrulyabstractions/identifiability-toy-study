@@ -1368,6 +1368,9 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
                 if valid:
                     ranking_entry[f"best_{name}"] = max(valid)
                     ranking_entry[f"avg_{name}"] = sum(valid) / len(valid)
+                else:
+                    ranking_entry[f"best_{name}"] = None
+                    ranking_entry[f"avg_{name}"] = None
             node_mask_rankings.append(ranking_entry)
 
         # Sort using tuple of best values for each ranking metric
@@ -1385,6 +1388,8 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
                 if valid:
                     ranking_entry[f"avg_{name}"] = sum(valid) / len(valid)
                     ranking_entry["n_patterns"] = max(ranking_entry["n_patterns"], len(valid))
+                else:
+                    ranking_entry[f"avg_{name}"] = None
             edge_mask_rankings.append(ranking_entry)
 
         # Sort using tuple of avg values for each ranking metric
