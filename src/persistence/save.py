@@ -359,8 +359,9 @@ def _save_subcircuit_decision_boundaries(
         visualizations/
             subcircuit_boundaries/
                 {gate_name}/
-                    subcircuit_{node_mask_idx}_{edge_idx}_decision_boundary.png
+                    subcircuit_n{node_mask_idx}_e{edge_idx}_decision_boundary.png
     """
+    from src.circuit import parse_subcircuit_idx
     from src.domain import resolve_gate
     from src.visualization.decision_boundary import plot_decision_boundary_from_data
 
@@ -383,6 +384,10 @@ def _save_subcircuit_decision_boundaries(
     if not subcircuit_db_data:
         return
 
+    # Get architecture params for subcircuit index parsing
+    width = first_trial.setup.model_params.width
+    depth = first_trial.setup.model_params.depth
+
     viz_dir = run_dir / "visualizations" / "subcircuit_boundaries"
 
     try:
@@ -393,12 +398,9 @@ def _save_subcircuit_decision_boundaries(
             gate_n_inputs = resolve_gate(gate_name).n_inputs
 
             for key, data in subcircuit_data.items():
-                # Key format is (node_mask_idx, edge_mask_idx)
-                if isinstance(key, (tuple, list)):
-                    node_mask_idx, edge_mask_idx = key
-                    subcircuit_name = f"subcircuit_n{node_mask_idx}_e{edge_mask_idx}"
-                else:
-                    subcircuit_name = f"subcircuit_{key}"
+                # Parse flat subcircuit index
+                node_mask_idx, edge_mask_idx = parse_subcircuit_idx(width, depth, key)
+                subcircuit_name = f"subcircuit_n{node_mask_idx}_e{edge_mask_idx}"
 
                 try:
                     # Save visualization from pre-computed data

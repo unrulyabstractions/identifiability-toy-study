@@ -22,6 +22,7 @@ from src.circuit import (
     batch_compute_metrics,
     batch_evaluate_edge_variants,
     enumerate_all_valid_circuit,
+    parse_subcircuit_idx,
     precompute_circuit_masks_base,
 )
 from src.infra import ParallelTasks, profile, profile_fn
@@ -210,6 +211,7 @@ def decision_boundary_phase(
     subcircuits,
     trial_metrics,
     device,
+    setup,
 ):
     """Generate decision boundary data for visualization.
 
@@ -223,11 +225,12 @@ def decision_boundary_phase(
         subcircuits: List of subcircuit dicts
         trial_metrics: Metrics with per_gate_bests containing best subcircuit keys
         device: Compute device
+        setup: Trial setup with model params (for width/depth)
 
     Returns:
         Tuple of (gate_db_data, subcircuit_db_data) where:
         - gate_db_data: dict mapping gate_name -> decision boundary data
-        - subcircuit_db_data: dict mapping gate_name -> {(nm_idx, em_idx): data}
+        - subcircuit_db_data: dict mapping gate_name -> {subcircuit_idx: data}
     """
     from src.circuit import Circuit
     from src.domain import resolve_gate
@@ -235,6 +238,10 @@ def decision_boundary_phase(
         generate_grid_data,
         generate_monte_carlo_data,
     )
+
+    # Get architecture parameters for subcircuit indexing
+    width = setup.model_params.width
+    depth = setup.model_params.depth
 
     gate_db_data = {}
     subcircuit_db_data = {}
@@ -271,17 +278,12 @@ def decision_boundary_phase(
         # Get stored edge-masked circuits for this gate
         gate_circuits = trial_metrics.per_gate_circuits.get(gate_name, {})
 
-        for key in per_gate_bests[gate_name]:
-            # Extract node_mask_idx and edge_mask_idx
-            if isinstance(key, (tuple, list)) and len(key) >= 2:
-                node_mask_idx, edge_mask_idx = key[0], key[1]
-            else:
-                node_mask_idx, edge_mask_idx = key, 0
+        for subcircuit_idx in per_gate_bests[gate_name]:
+            # Parse flat index to get node and edge indices
+            node_mask_idx, edge_mask_idx = parse_subcircuit_idx(width, depth, subcircuit_idx)
 
             # Look up the edge-masked circuit (stored during gate analysis)
-            # Keys are stored as "node_idx,edge_idx" strings for JSON serialization
-            lookup_key = f"{node_mask_idx},{edge_mask_idx}"
-            sc_data = gate_circuits.get(lookup_key)
+            sc_data = gate_circuits.get(subcircuit_idx)
 
             # Fallback to base circuit if edge-masked not available
             if sc_data is None:
@@ -317,7 +319,7 @@ def decision_boundary_phase(
                         device=device,
                     )
 
-                subcircuit_db_data[gate_name][(node_mask_idx, edge_mask_idx)] = data
+                subcircuit_db_data[gate_name][subcircuit_idx] = data
             except Exception:
                 pass  # Skip failures silently
 

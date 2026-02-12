@@ -131,6 +131,10 @@ class ExperimentResult(SchemaClass):
         summary = {"experiment_id": self.experiment_id, "trials": {}}
 
         for trial_id, trial in self.trials.items():
+            # Get architecture params for subcircuit index parsing
+            width = trial.setup.model_params.width
+            depth = trial.setup.model_params.depth
+
             gates = {}
             for gate, gm in trial.metrics.per_gate_metrics.items():
                 by_idx = {sm.idx: sm for sm in gm.subcircuit_metrics}
@@ -138,25 +142,17 @@ class ExperimentResult(SchemaClass):
                 viz = viz_paths.get(trial_id, {}).get(gate, {})
                 best_list = []
                 for key in bests:
-                    node_mask_idx, edge_mask_idx = parse_subcircuit_key(key)
+                    node_mask_idx, edge_mask_idx = parse_subcircuit_key(key, width, depth)
                     if node_mask_idx not in by_idx:
                         continue
                     sm = by_idx[node_mask_idx]
 
-                    # Build entry with appropriate key format
-                    if isinstance(key, (tuple, list)):
-                        entry = {
-                            "node_pattern": node_mask_idx,
-                            "edge_variation": edge_mask_idx,
-                            "acc": sm.accuracy,
-                            "sim": sm.bit_similarity,
-                        }
-                    else:
-                        entry = {
-                            "idx": key,
-                            "acc": sm.accuracy,
-                            "sim": sm.bit_similarity,
-                        }
+                    entry = {
+                        "node_pattern": node_mask_idx,
+                        "edge_variation": edge_mask_idx,
+                        "acc": sm.accuracy,
+                        "sim": sm.bit_similarity,
+                    }
 
                     if key in viz:
                         entry["viz"] = viz[key]

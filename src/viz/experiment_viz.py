@@ -242,6 +242,8 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
         layer_weights = trial.layer_weights or []
         layer_biases = trial.layer_biases or []
         gate_names = trial.setup.model_params.logic_gates
+        width = trial.setup.model_params.width
+        depth = trial.setup.model_params.depth
 
         if not canonical_activations or not layer_weights:
             continue
@@ -306,7 +308,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
 
                 # Save gate summary.json
                 gate_folder = os.path.join(trial_dir, gname)
-                summary_path = save_gate_summary(gname, gate_folder, trial.metrics)
+                summary_path = save_gate_summary(gname, gate_folder, trial.metrics, width, depth)
                 viz_paths[trial_id][gname]["summary"] = summary_path
 
         # --- Subcircuit visualization ---
@@ -324,27 +326,20 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
             ] = {}
             for i, sc_key in enumerate(best_keys):
                 faith = bests_faith[i] if i < len(bests_faith) else None
-                node_mask_idx, edge_mask_idx = parse_subcircuit_key(sc_key)
+                node_mask_idx, edge_mask_idx = parse_subcircuit_key(sc_key, width, depth)
                 node_pattern_edges.setdefault(node_mask_idx, []).append(
                     (edge_mask_idx, i, faith)
                 )
 
             for i, sc_key in enumerate(best_keys):
-                # Convert list to tuple for hashability (JSON loads as list)
-                if isinstance(sc_key, list):
-                    sc_key = tuple(sc_key)
-                node_mask_idx, edge_mask_idx = parse_subcircuit_key(sc_key)
+                node_mask_idx, edge_mask_idx = parse_subcircuit_key(sc_key, width, depth)
                 circuit = subcircuits[node_mask_idx]
 
-                # Build folder path and label based on key type
-                if isinstance(sc_key, (tuple, list)):
-                    folder = os.path.join(
-                        trial_dir, gname, str(node_mask_idx), str(edge_mask_idx)
-                    )
-                    sc_label = f"{gname} (Node#{node_mask_idx}/Edge#{edge_mask_idx})"
-                else:
-                    folder = os.path.join(trial_dir, gname, str(sc_key))
-                    sc_label = f"{gname} (SC #{sc_key})"
+                # Build folder path and label
+                folder = os.path.join(
+                    trial_dir, gname, str(node_mask_idx), str(edge_mask_idx)
+                )
+                sc_label = f"{gname} (Node#{node_mask_idx}/Edge#{edge_mask_idx})"
 
                 os.makedirs(folder, exist_ok=True)
                 viz_paths[trial_id].setdefault(gname, {})[sc_key] = {}
@@ -387,9 +382,8 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                     gate_db_data = trial.subcircuit_decision_boundary_data.get(
                         gname, {}
                     )
-                    # Convert to tuple for lookup (stored as tuple keys)
-                    lookup_key = (node_mask_idx, edge_mask_idx)
-                    db_data = gate_db_data.get(lookup_key)
+                    # Lookup using flat subcircuit index
+                    db_data = gate_db_data.get(sc_key)
                     if db_data:
                         try:
                             gate_n_inputs = resolve_gate(gname).n_inputs

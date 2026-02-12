@@ -92,28 +92,33 @@ def log_edge_variant_summary(
     )
 
 
-def parse_subcircuit_key(key) -> tuple[int, int]:
-    """Parse a subcircuit key into (node_mask_idx, edge_mask_idx).
+def parse_subcircuit_key(key: int, width: int, depth: int) -> tuple[int, int]:
+    """Parse a flat subcircuit index into (node_mask_idx, edge_mask_idx).
 
-    Current format: (node_mask_idx, edge_mask_idx) tuple/list
-    Old saved data format: int (treated as (key, 0))
+    Args:
+        key: Flat subcircuit index from make_subcircuit_idx()
+        width: Width of hidden layers
+        depth: Number of hidden layers
+
+    Returns:
+        Tuple of (node_mask_idx, edge_mask_idx)
     """
-    if isinstance(key, (tuple, list)):
-        return key[0], key[1]
-    return key, 0
+    from src.circuit import parse_subcircuit_idx
+
+    return parse_subcircuit_idx(width, depth, key)
 
 
-def format_subcircuit_key(key) -> str:
+def format_subcircuit_key(key: int, width: int, depth: int) -> str:
     """Format a subcircuit key for display."""
-    node_mask_idx, edge_mask_idx = parse_subcircuit_key(key)
-    if edge_mask_idx == 0 and not isinstance(key, (tuple, list)):
-        return f"SC#{key}"
+    node_mask_idx, edge_mask_idx = parse_subcircuit_key(key, width, depth)
     return f"Node#{node_mask_idx}/Edge#{edge_mask_idx}"
 
 
 def log_faithfulness_metrics(
-    subcircuit_key,
+    subcircuit_key: int,
     faith: "FaithfulnessMetrics",
+    width: int,
+    depth: int,
     indent: int = 4,
 ) -> None:
     """Log faithfulness metrics for a subcircuit."""
@@ -122,7 +127,7 @@ def log_faithfulness_metrics(
     inter = faith.interventional
     cf = faith.counterfactual
 
-    key_str = format_subcircuit_key(subcircuit_key)
+    key_str = format_subcircuit_key(subcircuit_key, width, depth)
     print(f"{prefix}{key_str} Faithfulness:")
 
     # Observational
@@ -161,6 +166,8 @@ def log_gate_faithfulness_summary(
     gate_name: str,
     subcircuit_indices: list[int],
     faithfulness_results: list["FaithfulnessMetrics"],
+    width: int,
+    depth: int,
 ) -> None:
     """Log faithfulness summary for all subcircuits of a gate."""
     if not faithfulness_results:
@@ -168,4 +175,4 @@ def log_gate_faithfulness_summary(
 
     print(f"\n  {gate_name} Faithfulness Results:")
     for idx, faith in zip(subcircuit_indices, faithfulness_results):
-        log_faithfulness_metrics(idx, faith)
+        log_faithfulness_metrics(idx, faith, width, depth)

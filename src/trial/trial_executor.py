@@ -201,6 +201,7 @@ def run_trial(
         subcircuits=subcircuits,
         trial_metrics=trial_metrics,
         device=device,
+        setup=setup,
     )
     trial_result.decision_boundary_data = db_data
     trial_result.subcircuit_decision_boundary_data = subcircuit_db_data

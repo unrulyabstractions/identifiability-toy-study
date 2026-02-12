@@ -60,8 +60,9 @@ class ProfilingData(SchemaClass):
     phase_durations_ms: dict[str, float] = field(default_factory=dict)
 
 
-# Type alias for subcircuit keys: (node_mask_idx, edge_mask_idx) tuple
-SubcircuitKey = tuple[int, int]
+# Type alias for subcircuit keys: flat index from make_subcircuit_idx(node_mask_idx, edge_mask_idx)
+# Use parse_subcircuit_idx() to decompose back to (node_mask_idx, edge_mask_idx)
+SubcircuitKey = int
 
 
 @dataclass
@@ -74,8 +75,7 @@ class Metrics(SchemaClass):
 
     # Circuit Info
     per_gate_metrics: dict[str, GateMetrics] = field(default_factory=dict)
-    # Keys of subcircuits that produce best results
-    # Keys are (node_mask_idx, edge_mask_idx) tuples (int keys in old saved data)
+    # Keys of subcircuits that produce best results (flat indices from make_subcircuit_idx)
     per_gate_bests: dict[str, list[SubcircuitKey]] = field(
         default_factory=lambda: defaultdict(list)
     )
@@ -84,7 +84,7 @@ class Metrics(SchemaClass):
         default_factory=lambda: defaultdict(list)
     )
     # Edge-masked circuits for each best subcircuit (for decision boundary visualization)
-    # Maps gate_name -> {(node_mask_idx, edge_mask_idx) -> circuit_dict}
-    per_gate_circuits: dict[str, dict] = field(
+    # Maps gate_name -> {subcircuit_idx -> circuit_dict}
+    per_gate_circuits: dict[str, dict[int, dict]] = field(
         default_factory=lambda: defaultdict(dict)
     )

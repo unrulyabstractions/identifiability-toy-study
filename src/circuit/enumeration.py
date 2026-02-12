@@ -297,33 +297,43 @@ def enumerate_subcircuits_with_constraint(
     return enumerate_circuits(layer_widths, min_sparsity, full_edges_only=True)
 
 
-def calculate_subcircuit_idx(
-    width: int, depth: int, node_mask_idx: int, edge_mask_idx: int
-) -> int:
-    """Calculate flat subcircuit index from node mask and edge mask indices.
+# =============================================================================
+# Subcircuit Index Utilities
+# =============================================================================
+# A subcircuit is uniquely identified by (node_mask_idx, edge_mask_idx).
+# The flat subcircuit_idx is computed using the architecture (width, depth).
+
+
+def make_subcircuit_idx(width: int, depth: int, node_mask_idx: int, edge_mask_idx: int) -> int:
+    """Create a flat subcircuit index from node and edge mask indices.
+
+    This is the canonical way to create a unique identifier for a subcircuit.
+    Use parse_subcircuit_idx() to decompose back to (node_mask_idx, edge_mask_idx).
+
+    The index space is deterministic based on architecture:
+    - max_edge_configs = 2^(width * width * (depth - 1))
+    - subcircuit_idx = node_mask_idx * max_edge_configs + edge_mask_idx
 
     Args:
         width: Width of hidden layers
         depth: Number of hidden layers
         node_mask_idx: Index of the node mask pattern
-        edge_mask_idx: Index of the edge mask configuration
+        edge_mask_idx: Index of the edge mask configuration (0 = best)
 
     Returns:
-        Flat subcircuit index combining node and edge mask indices
+        Flat subcircuit index
     """
     max_edge_configs = 2 ** (width * width * (depth - 1))
     return node_mask_idx * max_edge_configs + edge_mask_idx
 
 
-def get_node_and_edge_from_subcircuit_idx(
-    width: int, depth: int, subcircuit_idx: int
-) -> tuple[int, int]:
-    """Inverse of calculate_subcircuit_idx.
+def parse_subcircuit_idx(width: int, depth: int, subcircuit_idx: int) -> tuple[int, int]:
+    """Extract node and edge mask indices from a flat subcircuit index.
 
     Args:
         width: Width of hidden layers
         depth: Number of hidden layers
-        subcircuit_idx: Flat subcircuit index
+        subcircuit_idx: Flat subcircuit index from make_subcircuit_idx()
 
     Returns:
         Tuple of (node_mask_idx, edge_mask_idx)

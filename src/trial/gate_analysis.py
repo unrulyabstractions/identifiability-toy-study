@@ -1,7 +1,7 @@
 """Gate analysis - per-gate metric computation, edge optimization, and faithfulness."""
 
 from src.analysis import FilterResult, create_clean_corrupted_data, filter_subcircuits
-from src.circuit import batch_compute_metrics, batch_evaluate_edge_variants
+from src.circuit import batch_compute_metrics, batch_evaluate_edge_variants, make_subcircuit_idx
 from src.infra.logging import (
     log_filtering_result,
     log_gate_faithfulness_summary,
@@ -63,6 +63,10 @@ def analyze_gate(
     per_gate_metrics = trial_metrics.per_gate_metrics
     per_gate_bests = trial_metrics.per_gate_bests
     per_gate_bests_faith = trial_metrics.per_gate_bests_faith
+
+    # Get architecture parameters for subcircuit indexing
+    width = setup.model_params.width
+    depth = setup.model_params.depth
 
     y_gate = y_pred[..., [gate_idx]]  # [n_samples, 1] - model logits for this gate
     bit_gate_gt = bit_gt[..., [gate_idx]]  # [n_samples, 1] - binary ground truth
@@ -154,34 +158,32 @@ def analyze_gate(
         max_edge_variations=setup.faithfulness_config.max_edge_variations_per_subcircuit,
     )
 
-    # Build hierarchical structure: node_pattern_idx -> [edge_variations]
-    # Each entry is (node_mask_idx, edge_mask_idx, circuit)
-    all_subcircuit_keys = []  # List of (node_mask_idx, edge_mask_idx)
-    all_circuits = {}  # (node_mask_idx, edge_mask_idx) -> circuit
-    all_structures = {}  # (node_mask_idx, edge_mask_idx) -> structure
+    # Build flat subcircuit indices using make_subcircuit_idx(node_mask_idx, edge_mask_idx)
+    all_subcircuit_keys = []  # List of flat subcircuit indices
+    all_circuits = {}  # subcircuit_idx -> circuit
+    all_structures = {}  # subcircuit_idx -> structure
 
     for orig_idx, top_variants, stats in edge_results:
         node_mask_idx = best_node_indices[orig_idx]
         for edge_mask_idx, variant in enumerate(top_variants):
-            key = (node_mask_idx, edge_mask_idx)
-            all_subcircuit_keys.append(key)
-            all_circuits[key] = variant.circuit
+            subcircuit_idx = make_subcircuit_idx(width, depth, node_mask_idx, edge_mask_idx)
+            all_subcircuit_keys.append(subcircuit_idx)
+            all_circuits[subcircuit_idx] = variant.circuit
             # Use the node pattern's structure (edge variations share the same structure)
-            all_structures[key] = subcircuit_structures[node_mask_idx]
+            all_structures[subcircuit_idx] = subcircuit_structures[node_mask_idx]
 
-    # Store the hierarchical indices for this gate
+    # Store the flat indices for this gate
     per_gate_bests[gate_name] = all_subcircuit_keys
 
     # Store edge-masked circuits for decision boundary visualization
-    # Use string keys "node_idx,edge_idx" for JSON serialization
     trial_metrics.per_gate_circuits[gate_name] = {
-        f"{key[0]},{key[1]}": circuit.to_dict() for key, circuit in all_circuits.items()
+        subcircuit_idx: circuit.to_dict() for subcircuit_idx, circuit in all_circuits.items()
     }
 
     # Create subcircuit models for all variations
     best_subcircuit_models = {
-        key: gate_model.separate_subcircuit(all_circuits[key], gate_idx=gate_idx)
-        for key in all_subcircuit_keys
+        subcircuit_idx: gate_model.separate_subcircuit(all_circuits[subcircuit_idx], gate_idx=gate_idx)
+        for subcircuit_idx in all_subcircuit_keys
     }
 
     # Faithfulness analysis runs for ALL gates regardless of input count
@@ -209,6 +211,6 @@ def analyze_gate(
     update_status(f"FINISHED_FAITH:{gate_idx}")
 
     # Log faithfulness results for this gate
-    log_gate_faithfulness_summary(gate_name, all_subcircuit_keys, faithfulness_results)
+    log_gate_faithfulness_summary(gate_name, all_subcircuit_keys, faithfulness_results, width, depth)
 
     per_gate_bests_faith[gate_name].extend(faithfulness_results)

@@ -545,6 +545,8 @@ def save_gate_summary(
     gate_name: str,
     gate_dir: str,
     metrics: "Metrics",
+    width: int,
+    depth: int,
 ) -> str:
     """Save summary.json for a specific gate.
 
@@ -567,8 +569,7 @@ def save_gate_summary(
         faith = bests_faith[i] if i < len(bests_faith) else None
         scores = _compute_subcircuit_scores(faith)
 
-        # Get node_mask_idx (handle tuple, list, and int keys)
-        node_mask_idx, edge_mask_idx = parse_subcircuit_key(key)
+        node_mask_idx, edge_mask_idx = parse_subcircuit_key(key, width, depth)
 
         # Keep only the best edge variation per node pattern
         if node_mask_idx not in node_pattern_best:
