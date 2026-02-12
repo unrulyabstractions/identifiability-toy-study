@@ -264,9 +264,11 @@ def main() -> None:
         test_configs = ALL_TEST_GATE_CONFIGS
         print(f"Running ALL {len(test_configs)} test configurations: {test_configs}")
         for i, config_idx in enumerate(test_configs):
-            print(f"\n{'='*60}")
-            print(f"  Test Configuration {i+1}/{len(test_configs)}: --test-gates {config_idx}")
-            print(f"{'='*60}\n")
+            print(f"\n{'=' * 60}")
+            print(
+                f"  Test Configuration {i + 1}/{len(test_configs)}: --test-gates {config_idx}"
+            )
+            print(f"{'=' * 60}\n")
             set_test_mode_global(True, config_idx)
             run_single_experiment(args, output_dir)
             print_profile()
