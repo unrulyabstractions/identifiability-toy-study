@@ -265,11 +265,8 @@ def plot_decision_boundary_2d_from_data(
 
     fig, ax = plt.subplots(figsize=(8, 7))
 
-    # Contour fill
+    # Contour fill - let colors speak for themselves (no explicit boundary line)
     cf = ax.contourf(xx, yy, zz, levels=50, cmap="RdYlBu_r", alpha=0.9)
-
-    # Decision boundary line at 0.5
-    ax.contour(xx, yy, zz, levels=[0.5], colors=["black"], linewidths=[2])
 
     # Monte Carlo overlay
     if mc_data is not None:

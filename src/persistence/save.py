@@ -937,6 +937,60 @@ def _save_explanation(path: Path, content: str):
         f.write(content)
 
 
+def _compute_structural_metrics_for_rankings(trial) -> dict[int, dict]:
+    """Compute structural faithfulness metrics for all subcircuits.
+
+    Returns:
+        Dict mapping subcircuit_idx to structural metrics dict
+    """
+    from src.circuit import Circuit
+    from src.analysis.structural_faithfulness import analyze_subcircuit_structure
+
+    if not trial or not trial.subcircuits:
+        return {}
+
+    # Build full circuit from first subcircuit's dimensions
+    first_sc = trial.subcircuits[0]
+    node_masks = first_sc.get("node_masks", [])
+    if not node_masks:
+        return {}
+
+    layer_sizes = [len(m) for m in node_masks]
+    full_circuit = Circuit.full(layer_sizes)
+
+    # Compute metrics for each subcircuit
+    result = {}
+    for sc_data in trial.subcircuits:
+        sc_idx = sc_data.get("idx", 0)
+        node_mask_idx = sc_data.get("node_mask_idx", sc_idx)
+        edge_mask_idx = sc_data.get("edge_mask_idx", 0)
+
+        node_masks_arr = [np.array(m) for m in sc_data.get("node_masks", [])]
+        edge_masks_arr = [np.array(m) for m in sc_data.get("edge_masks", [])]
+
+        if not node_masks_arr or not edge_masks_arr:
+            continue
+
+        subcircuit = Circuit(node_masks=node_masks_arr, edge_masks=edge_masks_arr)
+        metrics = analyze_subcircuit_structure(
+            subcircuit, full_circuit, node_mask_idx, edge_mask_idx
+        )
+
+        result[sc_idx] = {
+            "path_coverage": metrics.faithfulness.path_coverage,
+            "bottleneck_ratio": metrics.topology.bottleneck_ratio,
+            "efficiency_score": (
+                metrics.faithfulness.path_coverage * (1 - metrics.faithfulness.node_retention_ratio)
+            ),
+            "robustness_score": (
+                metrics.faithfulness.path_coverage * metrics.topology.bottleneck_ratio
+            ),
+            "overall_structural": metrics.overall_structural,
+        }
+
+    return result
+
+
 def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
     """Save subcircuits/ folder with score rankings and mappings.
 
@@ -1249,6 +1303,16 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
                 subcircuit_all_metrics[sc_idx]["edge_sparsity"] = struct.get("edge_sparsity")
                 subcircuit_all_metrics[sc_idx]["node_sparsity"] = struct.get("node_sparsity")
                 subcircuit_all_metrics[sc_idx]["connectivity_density"] = struct.get("connectivity_density")
+
+        # 2b. Compute structural faithfulness metrics for each subcircuit
+        structural_metrics = _compute_structural_metrics_for_rankings(first_trial)
+        for sc_idx, struct_metrics in structural_metrics.items():
+            if sc_idx in subcircuit_all_metrics:
+                subcircuit_all_metrics[sc_idx]["structural_path_coverage"] = struct_metrics.get("path_coverage")
+                subcircuit_all_metrics[sc_idx]["structural_bottleneck_ratio"] = struct_metrics.get("bottleneck_ratio")
+                subcircuit_all_metrics[sc_idx]["structural_efficiency"] = struct_metrics.get("efficiency_score")
+                subcircuit_all_metrics[sc_idx]["structural_robustness"] = struct_metrics.get("robustness_score")
+                subcircuit_all_metrics[sc_idx]["structural_overall"] = struct_metrics.get("overall_structural")
 
         # 3. Get faithfulness metrics from per_gate_bests_faith
         # Map subcircuit keys to indices
@@ -1819,11 +1883,111 @@ def _save_gate_summaries(trial, trial_dir: Path):
         gate_keys = bests_keys.get(gate_name, [])
         gate_faith = bests_faith.get(gate_name, [])
         sc_metrics = getattr(gate_metrics, "subcircuit_metrics", [])
-        _save_subcircuit_samples(gate_dir, gate_keys, gate_faith, sc_metrics)
+        _save_subcircuit_samples(gate_dir, gate_keys, gate_faith, sc_metrics, trial=trial)
+
+
+def _save_subcircuit_structural(sc_dir: Path, trial, node_mask_idx: int, edge_mask_idx: int):
+    """Save structural analysis for a single subcircuit.
+
+    Creates:
+        structural/
+            summary.json - topology, centrality, and structural faithfulness metrics
+    """
+    from src.circuit import Circuit
+    from src.analysis.structural_faithfulness import analyze_subcircuit_structure
+
+    # Find the subcircuit data
+    sc_data = None
+    for sc in trial.subcircuits:
+        if sc.get("idx") == node_mask_idx:
+            sc_data = sc
+            break
+
+    if sc_data is None:
+        return
+
+    # Build full circuit reference
+    node_masks = sc_data.get("node_masks", [])
+    if not node_masks:
+        return
+
+    layer_sizes = [len(m) for m in node_masks]
+    full_circuit = Circuit.full(layer_sizes)
+
+    # Build subcircuit
+    node_masks_arr = [np.array(m) for m in sc_data.get("node_masks", [])]
+    edge_masks_arr = [np.array(m) for m in sc_data.get("edge_masks", [])]
+
+    if not node_masks_arr or not edge_masks_arr:
+        return
+
+    subcircuit = Circuit(node_masks=node_masks_arr, edge_masks=edge_masks_arr)
+
+    # Compute structural analysis
+    metrics = analyze_subcircuit_structure(
+        subcircuit, full_circuit, node_mask_idx, edge_mask_idx
+    )
+
+    # Create structural directory
+    struct_dir = sc_dir / "structural"
+    struct_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save structural summary
+    struct_summary = {
+        "node_pattern_idx": node_mask_idx,
+        "edge_variation_idx": edge_mask_idx,
+        "topology": {
+            "n_active_nodes": metrics.topology.n_active_nodes,
+            "n_total_nodes": metrics.topology.n_total_nodes,
+            "n_active_edges": metrics.topology.n_active_edges,
+            "n_total_edges": metrics.topology.n_total_edges,
+            "n_input_output_paths": metrics.topology.n_input_output_paths,
+            "avg_path_length": metrics.topology.avg_path_length,
+            "max_path_length": metrics.topology.max_path_length,
+            "min_path_length": metrics.topology.min_path_length,
+            "bottleneck_width": metrics.topology.bottleneck_width,
+            "bottleneck_layer": metrics.topology.bottleneck_layer,
+            "bottleneck_ratio": metrics.topology.bottleneck_ratio,
+            "layer_widths": metrics.topology.layer_widths,
+            "layer_densities": metrics.topology.layer_densities,
+        },
+        "centrality": {
+            "avg_betweenness": metrics.centrality.avg_betweenness,
+            "max_betweenness": metrics.centrality.max_betweenness,
+            "max_betweenness_node": metrics.centrality.max_betweenness_node,
+            "avg_in_degree": metrics.centrality.avg_in_degree,
+            "avg_out_degree": metrics.centrality.avg_out_degree,
+            "max_in_degree": metrics.centrality.max_in_degree,
+            "max_out_degree": metrics.centrality.max_out_degree,
+            "avg_importance": metrics.centrality.avg_importance,
+            "max_importance": metrics.centrality.max_importance,
+            "max_importance_node": metrics.centrality.max_importance_node,
+        },
+        "faithfulness": {
+            "node_retention_ratio": metrics.faithfulness.node_retention_ratio,
+            "edge_faithfulness": metrics.faithfulness.edge_faithfulness,
+            "edge_retention_ratio": metrics.faithfulness.edge_retention_ratio,
+            "path_coverage": metrics.faithfulness.path_coverage,
+            "abstraction_type": str(metrics.faithfulness.abstraction_type),
+        },
+        "scores": {
+            "overall_structural": metrics.overall_structural,
+            "efficiency": (
+                metrics.faithfulness.path_coverage * (1 - metrics.faithfulness.node_retention_ratio)
+            ),
+            "robustness": (
+                metrics.faithfulness.path_coverage * metrics.topology.bottleneck_ratio
+            ),
+        },
+        "interpretation": metrics.interpretation,
+    }
+
+    _save_json(struct_summary, struct_dir / "summary.json")
 
 
 def _save_subcircuit_samples(
-    gate_dir: Path, keys: list, faith_results: list, sc_metrics_list: list = None
+    gate_dir: Path, keys: list, faith_results: list, sc_metrics_list: list = None,
+    trial=None,
 ):
     """Save samples in folder structure per T1.i.
 
@@ -1832,9 +1996,11 @@ def _save_subcircuit_samples(
         keys: List of (node_mask_idx, edge_mask_idx) keys
         faith_results: List of FaithfulnessMetrics objects
         sc_metrics_list: List of SubcircuitMetrics objects for ranking
+        trial: Optional trial data for structural analysis
 
     Creates:
         {node_mask_idx}/{edge_mask_idx}/
+            summary.json
             faithfulness/
                 observational/
                     noise_perturbations/samples.json
@@ -1849,6 +2015,8 @@ def _save_subcircuit_samples(
                     completeness/samples.json
                     necessity/samples.json
                     independence/samples.json
+            structural/
+                summary.json (topology, centrality, faithfulness metrics)
     """
     from dataclasses import asdict
 
@@ -1881,7 +2049,7 @@ def _save_subcircuit_samples(
             "node_pattern": node_mask_idx,
             "edge_variation": edge_mask_idx,
             "ranked_metrics": ranked,
-            "subfolders": ["faithfulness"],
+            "subfolders": ["faithfulness", "structural"],
         }
         sc_dir.mkdir(parents=True, exist_ok=True)
         _save_json(sc_summary, sc_dir / "summary.json")
@@ -2084,3 +2252,7 @@ def _save_subcircuit_samples(
 
         # Save faithfulness summary
         _save_json(faith_summary, faith_dir / "summary.json")
+
+        # Structural analysis folder
+        if trial and trial.subcircuits:
+            _save_subcircuit_structural(sc_dir, trial, node_mask_idx, edge_mask_idx)

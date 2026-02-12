@@ -39,6 +39,12 @@ ALL_SUBCIRCUIT_METRICS = [
     "independence",
     # Overall faithfulness
     "overall_faithfulness",
+    # Structural faithfulness metrics (from structural_faithfulness analysis)
+    "structural_path_coverage",      # Fraction of I/O paths preserved (key metric)
+    "structural_bottleneck_ratio",   # bottleneck_width / max_width (robustness)
+    "structural_efficiency",         # High path coverage with low node retention
+    "structural_robustness",         # High path coverage with high bottleneck
+    "structural_overall",            # Combined structural score
 ]
 
 # =============================================================================
@@ -94,6 +100,12 @@ def extract_all_metrics(
         all_metrics["edge_sparsity"] = structure_data.get("edge_sparsity")
         all_metrics["node_sparsity"] = structure_data.get("node_sparsity")
         all_metrics["connectivity_density"] = structure_data.get("connectivity_density")
+        # Structural faithfulness metrics
+        all_metrics["structural_path_coverage"] = structure_data.get("structural_path_coverage")
+        all_metrics["structural_bottleneck_ratio"] = structure_data.get("structural_bottleneck_ratio")
+        all_metrics["structural_efficiency"] = structure_data.get("structural_efficiency")
+        all_metrics["structural_robustness"] = structure_data.get("structural_robustness")
+        all_metrics["structural_overall"] = structure_data.get("structural_overall")
 
     # From FaithfulnessMetrics
     if faithfulness_data:
