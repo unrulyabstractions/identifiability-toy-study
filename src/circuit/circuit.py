@@ -31,6 +31,7 @@ from .grounding import Grounding, compute_local_tts, enumerate_tts
 class CircuitStructure:
     node_sparsity: float
     edge_sparsity: float
+    connectivity_density: float  # active_edges / max_possible_edges_between_active_nodes
     in_patches: list[PatchShape]
     out_patches: list[PatchShape]
     in_circuit: PatchShape
@@ -45,6 +46,7 @@ class CircuitStructure:
         return {
             "node_sparsity": self.node_sparsity,
             "edge_sparsity": self.edge_sparsity,
+            "connectivity_density": self.connectivity_density,
             "in_patches": [p.to_dict() for p in self.in_patches],
             "out_patches": [p.to_dict() for p in self.out_patches],
             "in_circuit": self.in_circuit.to_dict() if self.in_circuit else None,
@@ -61,6 +63,7 @@ class CircuitStructure:
         return cls(
             node_sparsity=data["node_sparsity"],
             edge_sparsity=data["edge_sparsity"],
+            connectivity_density=data.get("connectivity_density", 0.0),
             in_patches=[PatchShape.from_dict(p) for p in data["in_patches"]],
             out_patches=[PatchShape.from_dict(p) for p in data["out_patches"]],
             in_circuit=PatchShape.from_dict(data["in_circuit"])
@@ -223,9 +226,26 @@ class Circuit:
             self.get_all_possible_intervention_patches()
         )
 
+        # Compute connectivity_density: active_edges / max_possible_edges_between_active_nodes
+        # For each layer transition, max edges = (active_nodes_in_layer_i) * (active_nodes_in_layer_i+1)
+        total_active_edges = 0
+        total_max_possible = 0
+        for layer_idx, edge_mask in enumerate(self.edge_masks):
+            active_in = int(np.sum(self.node_masks[layer_idx]))
+            active_out = int(np.sum(self.node_masks[layer_idx + 1]))
+            max_possible = active_in * active_out
+            active_edges = int(np.sum(edge_mask))
+            total_active_edges += active_edges
+            total_max_possible += max_possible
+
+        connectivity_density = (
+            total_active_edges / total_max_possible if total_max_possible > 0 else 0.0
+        )
+
         return CircuitStructure(
             node_sparsity=node_sparsity,
             edge_sparsity=edge_sparsity,
+            connectivity_density=connectivity_density,
             in_patches=in_patches,
             out_patches=out_patches,
             in_circuit=in_circuit,

@@ -216,6 +216,21 @@ def calculate_observational_metrics(
         n_samples=n_noise,
     )
 
+    # Compute per-type OOD metrics
+    def _type_agreement(samples, sample_type):
+        type_samples = [s for s in samples if s.sample_type == sample_type]
+        if not type_samples:
+            return 0.0, 0
+        agreement = sum(1 for s in type_samples if s.agreement_bit) / len(type_samples)
+        return float(agreement), len(type_samples)
+
+    mult_pos_agree, mult_pos_n = _type_agreement(ood_samples, SampleType.MULTIPLY_POSITIVE)
+    mult_neg_agree, mult_neg_n = _type_agreement(ood_samples, SampleType.MULTIPLY_NEGATIVE)
+    add_agree, add_n = _type_agreement(ood_samples, SampleType.ADD)
+    sub_agree, sub_n = _type_agreement(ood_samples, SampleType.SUBTRACT)
+    bimodal_agree, bimodal_n = _type_agreement(ood_samples, SampleType.BIMODAL)
+    bimodal_inv_agree, bimodal_inv_n = _type_agreement(ood_samples, SampleType.BIMODAL_INV)
+
     ood_metrics = OutOfDistributionMetrics(
         samples=ood_samples,
         gate_accuracy=float(ood_gate_acc),
@@ -225,6 +240,18 @@ def calculate_observational_metrics(
             logit=1.0 - float(ood_mse),
             best=float(ood_agree_best),
         ),
+        multiply_positive_agreement=mult_pos_agree,
+        multiply_positive_n_samples=mult_pos_n,
+        multiply_negative_agreement=mult_neg_agree,
+        multiply_negative_n_samples=mult_neg_n,
+        add_agreement=add_agree,
+        add_n_samples=add_n,
+        subtract_agreement=sub_agree,
+        subtract_n_samples=sub_n,
+        bimodal_agreement=bimodal_agree,
+        bimodal_n_samples=bimodal_n,
+        bimodal_inv_agreement=bimodal_inv_agree,
+        bimodal_inv_n_samples=bimodal_inv_n,
     )
 
     return ObservationalMetrics(

@@ -189,7 +189,7 @@ def experiment_run(
                 logger and logger.error(f"Trial {idx + 1} failed: {e}")
 
     return trial_iterator(), master_data
-            # Continue with next trial rather than stopping
+    # Continue with next trial rather than stopping
 
 
 def run_experiment(

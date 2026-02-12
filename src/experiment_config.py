@@ -170,9 +170,16 @@ class FaithfulnessConfig(SchemaClass):
         if self.n_counterfactual_pairs < 1:
             raise ValueError("n_counterfactual_pairs must be at least 1")
         if self.min_subcircuits_per_gate > self.max_subcircuits_per_gate:
-            raise ValueError("min_subcircuits_per_gate cannot exceed max_subcircuits_per_gate")
-        if self.min_edge_variations_per_subcircuit > self.max_edge_variations_per_subcircuit:
-            raise ValueError("min_edge_variations_per_subcircuit cannot exceed max_edge_variations_per_subcircuit")
+            raise ValueError(
+                "min_subcircuits_per_gate cannot exceed max_subcircuits_per_gate"
+            )
+        if (
+            self.min_edge_variations_per_subcircuit
+            > self.max_edge_variations_per_subcircuit
+        ):
+            raise ValueError(
+                "min_edge_variations_per_subcircuit cannot exceed max_edge_variations_per_subcircuit"
+            )
 
 
 @dataclass
