@@ -298,9 +298,10 @@ def _save_trial_organization(result: ExperimentResult, run_dir: Path):
 def _save_decision_boundary_visualizations(
     result: ExperimentResult, run_dir: Path, logger=None
 ):
-    """Save decision boundary visualizations for each gate using Monte Carlo sampling.
+    """Save decision boundary visualizations for each gate using pre-computed data.
 
-    Data generation happens here (calling generate_* functions), then plotting reads the data.
+    Uses pre-computed data from trial.decision_boundary_data (computed during trial execution).
+    NO model inference happens here - only visualization from pre-computed data.
 
     Creates:
         visualizations/
@@ -309,48 +310,29 @@ def _save_decision_boundary_visualizations(
                 {gate_name}_decision_boundary_3d.png (for 3D)
                 {gate_name}_decision_boundary_proj_*.png (2D projections for 3D+)
     """
-    from src.domain import get_max_n_inputs
-    from src.visualization.decision_boundary import (
-        generate_grid_data,
-        generate_monte_carlo_data,
-        visualize_all_gates_from_data,
-    )
+    from src.visualization.decision_boundary import visualize_all_gates_from_data
 
-    # Get first trial with a model
-    first_trial = next((t for t in result.trials.values() if t.model is not None), None)
+    # Get first trial with pre-computed decision boundary data
+    first_trial = next(
+        (t for t in result.trials.values() if t.decision_boundary_data is not None),
+        None,
+    )
     if first_trial is None:
+        logger and logger.debug(
+            "No pre-computed decision boundary data found, skipping visualization"
+        )
         return
 
-    gate_names = first_trial.setup.model_params.logic_gates
-    n_inputs = get_max_n_inputs(gate_names)
+    gate_data = first_trial.decision_boundary_data
+    if not gate_data:
+        return
 
     viz_dir = run_dir / "visualizations" / "decision_boundaries"
     viz_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Generate data for each gate
-        gate_data = {}
-        for gate_idx, gate_name in enumerate(gate_names):
-            if n_inputs <= 2:
-                # Use grid data for clean contour plots
-                data = generate_grid_data(
-                    model=first_trial.model,
-                    n_inputs=n_inputs,
-                    gate_idx=gate_idx,
-                    resolution=100,
-                )
-            else:
-                # Use Monte Carlo for higher dimensions
-                data = generate_monte_carlo_data(
-                    model=first_trial.model,
-                    n_inputs=n_inputs,
-                    gate_idx=gate_idx,
-                    n_samples=5000,
-                )
-            gate_data[gate_name] = data
-
-        # Save visualizations from data
-        paths = visualize_all_gates_from_data(
+        # Save visualizations from pre-computed data
+        visualize_all_gates_from_data(
             gate_data=gate_data,
             output_dir=str(viz_dir),
         )
@@ -366,8 +348,8 @@ def _save_subcircuit_decision_boundaries(
 ):
     """Save decision boundary visualizations for each analyzed subcircuit.
 
-    For each gate's best subcircuits (after filtering), generates Monte Carlo
-    decision boundary data and visualizations.
+    Uses pre-computed data from trial.subcircuit_decision_boundary_data.
+    NO model inference happens here - only visualization from pre-computed data.
 
     Creates:
         visualizations/
@@ -375,78 +357,38 @@ def _save_subcircuit_decision_boundaries(
                 {gate_name}/
                     subcircuit_{node_mask_idx}_{edge_idx}_decision_boundary.png
     """
-    import torch
+    from src.domain import resolve_gate
+    from src.visualization.decision_boundary import plot_decision_boundary_from_data
 
-    from src.domain import get_max_n_inputs, resolve_gate
-    from src.visualization.decision_boundary import (
-        generate_grid_data,
-        generate_monte_carlo_data,
-        plot_decision_boundary_from_data,
-    )
-
-    # Get first trial with metrics
+    # Get first trial with pre-computed subcircuit decision boundary data
     first_trial = next(
         (
             t
             for t in result.trials.values()
-            if t.model is not None and t.metrics.per_gate_bests
+            if t.subcircuit_decision_boundary_data is not None
         ),
         None,
     )
     if first_trial is None:
+        logger and logger.debug(
+            "No pre-computed subcircuit decision boundary data found, skipping visualization"
+        )
         return
 
-    gate_names = first_trial.setup.model_params.logic_gates
-    model = first_trial.model
-    per_gate_bests = first_trial.metrics.per_gate_bests
-    max_n_inputs = get_max_n_inputs(gate_names)
+    subcircuit_db_data = first_trial.subcircuit_decision_boundary_data
+    if not subcircuit_db_data:
+        return
 
     viz_dir = run_dir / "visualizations" / "subcircuit_boundaries"
 
-    # Create a wrapper that pads inputs for gates with fewer inputs than max
-    class _PaddedGateModel:
-        def __init__(self, gate_model, gate_n_inputs, max_n_inputs, device):
-            self.gate_model = gate_model
-            self.gate_n_inputs = gate_n_inputs
-            self.max_n_inputs = max_n_inputs
-            self.device = device
-
-        def __call__(self, x):
-            # Pad input to max_n_inputs if needed
-            if x.shape[1] < self.max_n_inputs:
-                padding = torch.zeros(
-                    x.shape[0], self.max_n_inputs - x.shape[1], device=x.device
-                )
-                x = torch.cat([x, padding], dim=1)
-            return self.gate_model(x)
-
-        def eval(self):
-            self.gate_model.eval()
-            return self
-
-        def parameters(self):
-            return self.gate_model.parameters()
-
     try:
-        for gate_idx, gate_name in enumerate(gate_names):
+        for gate_name, subcircuit_data in subcircuit_db_data.items():
             gate_dir = viz_dir / gate_name
             gate_dir.mkdir(parents=True, exist_ok=True)
 
-            # Get the best subcircuit keys for this gate
-            best_keys = per_gate_bests.get(gate_name, [])
-            if not best_keys:
-                continue
-
             gate_n_inputs = resolve_gate(gate_name).n_inputs
 
-            # Get the gate model with input padding wrapper
-            gate_model = model.separate_into_k_mlps()[gate_idx]
-            device = str(next(gate_model.parameters()).device)
-            wrapped_model = _PaddedGateModel(
-                gate_model, gate_n_inputs, max_n_inputs, device
-            )
-
-            for key in best_keys[:5]:  # Limit to top 5 subcircuits per gate
+            for key, data in subcircuit_data.items():
                 # Key format is (node_mask_idx, edge_mask_idx)
                 if isinstance(key, (tuple, list)):
                     node_mask_idx, edge_mask_idx = key
@@ -454,26 +396,8 @@ def _save_subcircuit_decision_boundaries(
                 else:
                     subcircuit_name = f"subcircuit_{key}"
 
-                # Generate decision boundary data using the gate's actual input size
                 try:
-                    if gate_n_inputs <= 2:
-                        data = generate_grid_data(
-                            model=wrapped_model,
-                            n_inputs=gate_n_inputs,
-                            gate_idx=0,  # Single gate model has output index 0
-                            resolution=100,
-                            device=device,
-                        )
-                    else:
-                        data = generate_monte_carlo_data(
-                            model=wrapped_model,
-                            n_inputs=gate_n_inputs,
-                            gate_idx=0,
-                            n_samples=2000,
-                            device=device,
-                        )
-
-                    # Save visualization
+                    # Save visualization from pre-computed data
                     output_path = str(gate_dir / f"{subcircuit_name}_decision_boundary")
                     if gate_n_inputs <= 2:
                         output_path += ".png"
@@ -484,7 +408,7 @@ def _save_subcircuit_decision_boundaries(
                     )
                 except Exception as e:
                     logger and logger.debug(
-                        f"Failed to generate subcircuit boundary for {gate_name}/{subcircuit_name}: {e}"
+                        f"Failed to save subcircuit boundary for {gate_name}/{subcircuit_name}: {e}"
                     )
 
         logger and logger.info(

@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
-from mpl_toolkits.mplot3d import Axes3D
 
 if TYPE_CHECKING:
     pass
@@ -126,7 +125,9 @@ def generate_grid_data(
         raise ValueError(f"Grid data only supports n_inputs <= 2, got {n_inputs}")
 
     # Create grid
-    axes = [torch.linspace(low, high, resolution, device=device) for _ in range(n_inputs)]
+    axes = [
+        torch.linspace(low, high, resolution, device=device) for _ in range(n_inputs)
+    ]
 
     if n_inputs == 1:
         grid_points = axes[0].unsqueeze(1)
@@ -202,7 +203,13 @@ def plot_decision_boundary_1d_from_data(
     for i, (cx, cy) in enumerate(zip(corners.flatten(), corner_preds)):
         color = "blue" if cy < 0.5 else "red"
         ax.scatter([cx], [cy], c=color, s=150, marker="s", edgecolors="black", zorder=5)
-        ax.annotate(f"({int(cx)})\n{cy:.2f}", (cx, cy), textcoords="offset points", xytext=(10, 10), fontsize=9)
+        ax.annotate(
+            f"({int(cx)})\n{cy:.2f}",
+            (cx, cy),
+            textcoords="offset points",
+            xytext=(10, 10),
+            fontsize=9,
+        )
 
     ax.set_xlabel("Input")
     ax.set_ylabel("P(output=1)")
@@ -215,7 +222,10 @@ def plot_decision_boundary_1d_from_data(
     plt.tight_layout()
 
     if output_path:
-        os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
+        os.makedirs(
+            os.path.dirname(output_path) if os.path.dirname(output_path) else ".",
+            exist_ok=True,
+        )
         plt.savefig(output_path, dpi=150, bbox_inches="tight")
 
     if show:
@@ -265,7 +275,9 @@ def plot_decision_boundary_2d_from_data(
     if mc_data is not None:
         samples = mc_data["samples"]
         preds = mc_data["predictions"]
-        ax.scatter(samples[:, 0], samples[:, 1], c=preds, cmap="RdYlBu_r", s=5, alpha=0.3)
+        ax.scatter(
+            samples[:, 0], samples[:, 1], c=preds, cmap="RdYlBu_r", s=5, alpha=0.3
+        )
 
     # Mark binary corners
     for i in range(len(corners)):
@@ -273,7 +285,13 @@ def plot_decision_boundary_2d_from_data(
         pred = corner_preds[i]
         color = "blue" if pred < 0.5 else "red"
         ax.scatter([cx], [cy], c=color, s=200, marker="s", edgecolors="black", zorder=5)
-        ax.annotate(f"({int(cx)},{int(cy)})\n{pred:.2f}", (cx, cy), textcoords="offset points", xytext=(10, 10), fontsize=8)
+        ax.annotate(
+            f"({int(cx)},{int(cy)})\n{pred:.2f}",
+            (cx, cy),
+            textcoords="offset points",
+            xytext=(10, 10),
+            fontsize=8,
+        )
 
     plt.colorbar(cf, ax=ax, label="P(output=1)")
     ax.set_xlabel("Input 1")
@@ -286,7 +304,10 @@ def plot_decision_boundary_2d_from_data(
     plt.tight_layout()
 
     if output_path:
-        os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
+        os.makedirs(
+            os.path.dirname(output_path) if os.path.dirname(output_path) else ".",
+            exist_ok=True,
+        )
         plt.savefig(output_path, dpi=150, bbox_inches="tight")
 
     if show:
@@ -333,14 +354,30 @@ def plot_decision_boundary_3d_from_data(
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection="3d")
 
-    scatter = ax.scatter(samples[:, 0], samples[:, 1], samples[:, 2], c=predictions, cmap="RdYlBu_r", s=10, alpha=0.6)
+    scatter = ax.scatter(
+        samples[:, 0],
+        samples[:, 1],
+        samples[:, 2],
+        c=predictions,
+        cmap="RdYlBu_r",
+        s=10,
+        alpha=0.6,
+    )
 
     # Mark binary corners
     for i in range(len(corners)):
         corner = corners[i]
         pred = corner_preds[i]
         color = "blue" if pred < 0.5 else "red"
-        ax.scatter([corner[0]], [corner[1]], [corner[2]], c=color, s=100, marker="s", edgecolors="black")
+        ax.scatter(
+            [corner[0]],
+            [corner[1]],
+            [corner[2]],
+            c=color,
+            s=100,
+            marker="s",
+            edgecolors="black",
+        )
 
     plt.colorbar(scatter, ax=ax, label="P(output=1)", shrink=0.6)
     ax.set_xlabel("Input 1")
@@ -368,14 +405,29 @@ def plot_decision_boundary_3d_from_data(
     for dim1, dim2, xlabel, ylabel, suffix in projections:
         fig, ax = plt.subplots(figsize=(8, 7))
 
-        scatter = ax.scatter(samples[:, dim1], samples[:, dim2], c=predictions, cmap="RdYlBu_r", s=10, alpha=0.5)
+        scatter = ax.scatter(
+            samples[:, dim1],
+            samples[:, dim2],
+            c=predictions,
+            cmap="RdYlBu_r",
+            s=10,
+            alpha=0.5,
+        )
 
         # Mark projected corners
         for i in range(len(corners)):
             corner = corners[i]
             pred = corner_preds[i]
             color = "blue" if pred < 0.5 else "red"
-            ax.scatter([corner[dim1]], [corner[dim2]], c=color, s=150, marker="s", edgecolors="black", zorder=5)
+            ax.scatter(
+                [corner[dim1]],
+                [corner[dim2]],
+                c=color,
+                s=150,
+                marker="s",
+                edgecolors="black",
+                zorder=5,
+            )
 
         plt.colorbar(scatter, ax=ax, label="P(output=1)")
         ax.set_xlabel(xlabel)
@@ -434,7 +486,14 @@ def plot_decision_boundary_nd_from_data(
         for j in range(i + 1, n_inputs):
             fig, ax = plt.subplots(figsize=(7, 6))
 
-            scatter = ax.scatter(samples[:, i], samples[:, j], c=predictions, cmap="RdYlBu_r", s=8, alpha=0.4)
+            scatter = ax.scatter(
+                samples[:, i],
+                samples[:, j],
+                c=predictions,
+                cmap="RdYlBu_r",
+                s=8,
+                alpha=0.4,
+            )
 
             plt.colorbar(scatter, ax=ax, label="P(output=1)")
             ax.set_xlabel(f"Input {i + 1}")
@@ -466,13 +525,23 @@ def plot_decision_boundary_nd_from_data(
         fig = plt.figure(figsize=(9, 7))
         ax = fig.add_subplot(111, projection="3d")
 
-        scatter = ax.scatter(samples[:, dim1], samples[:, dim2], samples[:, dim3], c=predictions, cmap="RdYlBu_r", s=8, alpha=0.5)
+        scatter = ax.scatter(
+            samples[:, dim1],
+            samples[:, dim2],
+            samples[:, dim3],
+            c=predictions,
+            cmap="RdYlBu_r",
+            s=8,
+            alpha=0.5,
+        )
 
         plt.colorbar(scatter, ax=ax, label="P(output=1)", shrink=0.6)
         ax.set_xlabel(f"Input {dim1 + 1}")
         ax.set_ylabel(f"Input {dim2 + 1}")
         ax.set_zlabel(f"Input {dim3 + 1}")
-        ax.set_title(f"{gate_name}: 3D Projection (x{dim1 + 1}_x{dim2 + 1}_x{dim3 + 1})")
+        ax.set_title(
+            f"{gate_name}: 3D Projection (x{dim1 + 1}_x{dim2 + 1}_x{dim3 + 1})"
+        )
 
         plt.tight_layout()
         suffix = f"x{dim1 + 1}_x{dim2 + 1}_x{dim3 + 1}"

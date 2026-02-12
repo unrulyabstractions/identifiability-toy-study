@@ -34,6 +34,7 @@ __all__ = [
     "batch_compute_metrics",
     "batch_evaluate_edge_variants",
     "compute_activations_phase",
+    "decision_boundary_phase",
     "enumerate_circuits_phase",
     "faithfulness_phase",
     "precompute_masks_phase",
@@ -199,3 +200,116 @@ def faithfulness_phase(
                 results.append(compute_single_faithfulness(key))
         trace("faithfulness_phase complete", n_results=len(results))
         return results
+
+
+@profile_fn("Decision Boundary Data")
+def decision_boundary_phase(
+    model,
+    gate_models,
+    gate_names,
+    subcircuits,
+    trial_metrics,
+    device,
+):
+    """Generate decision boundary data for visualization.
+
+    Pre-computes all data needed for decision boundary plots so no
+    model inference is needed during visualization.
+
+    Args:
+        model: Full model
+        gate_models: List of single-gate models
+        gate_names: List of gate names
+        subcircuits: List of subcircuit dicts
+        trial_metrics: Metrics with per_gate_bests containing best subcircuit keys
+        device: Compute device
+
+    Returns:
+        Tuple of (gate_db_data, subcircuit_db_data) where:
+        - gate_db_data: dict mapping gate_name -> decision boundary data
+        - subcircuit_db_data: dict mapping gate_name -> {(nm_idx, em_idx): data}
+    """
+    from src.circuit import Circuit
+    from src.domain import resolve_gate
+    from src.visualization.decision_boundary import (
+        generate_grid_data,
+        generate_monte_carlo_data,
+    )
+
+    gate_db_data = {}
+    subcircuit_db_data = {}
+
+    for gate_idx, gate_name in enumerate(gate_names):
+        gate = resolve_gate(gate_name)
+        n_inputs = gate.n_inputs
+
+        # Generate data for full model
+        if n_inputs <= 2:
+            gate_db_data[gate_name] = generate_grid_data(
+                model=model,
+                n_inputs=n_inputs,
+                gate_idx=gate_idx,
+                device=device,
+            )
+        else:
+            gate_db_data[gate_name] = generate_monte_carlo_data(
+                model=model,
+                n_inputs=n_inputs,
+                gate_idx=gate_idx,
+                device=device,
+            )
+
+        # Generate data for best subcircuits
+        per_gate_bests = trial_metrics.per_gate_bests
+        if gate_name not in per_gate_bests:
+            continue
+
+        subcircuit_db_data[gate_name] = {}
+        gate_model = gate_models[gate_idx]
+
+        for key in per_gate_bests[gate_name]:
+            # Extract node_mask_idx and edge_mask_idx
+            if isinstance(key, (tuple, list)) and len(key) >= 2:
+                node_mask_idx, edge_mask_idx = key[0], key[1]
+            else:
+                node_mask_idx, edge_mask_idx = key, 0
+
+            # Find the subcircuit
+            sc_data = None
+            for sc in subcircuits:
+                if isinstance(sc, dict):
+                    if sc.get("idx") == node_mask_idx:
+                        sc_data = sc
+                        break
+                else:
+                    # Circuit object
+                    sc_data = sc.to_dict() if hasattr(sc, "to_dict") else None
+                    break
+
+            if sc_data is None:
+                continue
+
+            try:
+                circuit = Circuit.from_dict(sc_data)
+                subcircuit_model = gate_model.separate_subcircuit(circuit, gate_idx=gate_idx)
+
+                if n_inputs <= 2:
+                    data = generate_grid_data(
+                        model=subcircuit_model,
+                        n_inputs=n_inputs,
+                        gate_idx=0,  # Subcircuit model has single output
+                        device=device,
+                    )
+                else:
+                    data = generate_monte_carlo_data(
+                        model=subcircuit_model,
+                        n_inputs=n_inputs,
+                        gate_idx=0,
+                        device=device,
+                    )
+
+                subcircuit_db_data[gate_name][(node_mask_idx, edge_mask_idx)] = data
+            except Exception:
+                pass  # Skip failures silently
+
+    return gate_db_data, subcircuit_db_data

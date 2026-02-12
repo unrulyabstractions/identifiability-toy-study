@@ -1,12 +1,53 @@
 """Main visualization entry point.
 
 Contains the main visualize_experiment function that orchestrates all visualizations.
+
+IMPORTANT: NO PyTorch model inference should happen during visualization.
+All data must be pre-computed during trial execution (in run_trial/decision_boundary_phase).
+The @no_pytorch decorator enforces this by blocking torch operations.
 """
 
+import functools
 import os
+import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.circuit import Circuit
+from src.domain import resolve_gate
+
+if TYPE_CHECKING:
+    from src.schemas import FaithfulnessMetrics
+
+
+def no_pytorch(func):
+    """Decorator that blocks PyTorch usage during function execution.
+
+    This ensures visualization functions cannot accidentally run model inference.
+    All data should be pre-computed in trial execution phases.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        torch_mod = sys.modules.get("torch")
+
+        class TorchBlocker:
+            def __getattr__(self, name):
+                raise RuntimeError(
+                    f"PyTorch usage detected: torch.{name}. "
+                    "Visualization must use pre-computed data only."
+                )
+
+        sys.modules["torch"] = TorchBlocker()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            if torch_mod is not None:
+                sys.modules["torch"] = torch_mod
+
+    return wrapper
+
+
 from src.infra import (
     get_memory_mb,
     log_memory,
@@ -15,21 +56,23 @@ from src.infra import (
     timed_phase,
 )
 from src.schemas import ExperimentResult
+from src.visualization.decision_boundary import plot_decision_boundary_from_data
+
 from .activation_viz import (
     visualize_circuit_activations_from_data,
     visualize_circuit_activations_mean,
 )
 from .constants import _layout_cache
-from .faithfulness_viz import (
-    visualize_faithfulness_circuit_samples,
-    visualize_faithfulness_intervention_effects,
-)
 from .export import (
     save_all_samples,
     save_faithfulness_json,
     save_gate_summary,
     save_node_pattern_summary,
     save_summary,
+)
+from .faithfulness_viz import (
+    visualize_faithfulness_circuit_samples,
+    visualize_faithfulness_intervention_effects,
 )
 from .observational_viz import (
     visualize_observational_circuits,
@@ -40,12 +83,6 @@ from .profiling_viz import (
     visualize_profiling_summary,
     visualize_profiling_timeline,
 )
-from src.visualization.decision_boundary import (
-    generate_grid_data,
-    generate_monte_carlo_data,
-    plot_decision_boundary_from_data,
-)
-from src.domain import resolve_gate
 
 
 def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) -> None:
@@ -92,12 +129,16 @@ def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) ->
         try:
             circuit.visualize(file_path=str(sc_path), node_size="small")
         except Exception as e:
-            print(f"  Warning: Failed to generate subcircuit diagram {subcircuit_idx}: {e}")
+            print(
+                f"  Warning: Failed to generate subcircuit diagram {subcircuit_idx}: {e}"
+            )
 
         # Track unique node patterns for node_masks/
         node_masks = sc_data.get("node_masks", [])
         # Serialize node pattern (exclude input/output which are always full)
-        hidden_masks = tuple(tuple(m) for m in node_masks[1:-1]) if len(node_masks) > 2 else ()
+        hidden_masks = (
+            tuple(tuple(m) for m in node_masks[1:-1]) if len(node_masks) > 2 else ()
+        )
         if hidden_masks not in seen_node_patterns:
             seen_node_patterns[hidden_masks] = node_mask_idx_counter
             # Generate node_masks/{node_mask_idx}.png
@@ -105,7 +146,9 @@ def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) ->
             try:
                 circuit.visualize(file_path=str(nm_path), node_size="small")
             except Exception as e:
-                print(f"  Warning: Failed to generate node_mask diagram {node_mask_idx_counter}: {e}")
+                print(
+                    f"  Warning: Failed to generate node_mask diagram {node_mask_idx_counter}: {e}"
+                )
             node_mask_idx_counter += 1
 
     # For edge_masks, generate diagrams for a few representative edge configurations
@@ -116,16 +159,20 @@ def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) ->
         dst = edge_masks_dir / f"{node_mask_idx}.png"
         if src.exists() and not dst.exists():
             import shutil
+
             try:
                 shutil.copy(src, dst)
             except Exception:
                 pass
 
-    print(f"  Generated {len(list(subcircuit_masks_dir.glob('*.png')))} subcircuit diagrams")
+    print(
+        f"  Generated {len(list(subcircuit_masks_dir.glob('*.png')))} subcircuit diagrams"
+    )
     print(f"  Generated {len(list(node_masks_dir.glob('*.png')))} node_mask diagrams")
     print(f"  Generated {len(list(edge_masks_dir.glob('*.png')))} edge_mask diagrams")
 
 
+@no_pytorch
 def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
     """
     Generate all visualizations for experiment using pre-computed data.
@@ -134,6 +181,10 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
     - trial.canonical_activations: Pre-computed activations for binary inputs
     - trial.layer_weights: Weight matrices from the trained model
     - trial.metrics: Robustness and faithfulness results
+    - trial.decision_boundary_data: Pre-computed decision boundary grid data
+    - trial.subcircuit_decision_boundary_data: Pre-computed subcircuit boundary data
+
+    The @no_pytorch decorator enforces that no model inference happens here.
 
     Returns paths dict.
     """
@@ -143,7 +194,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
     viz_start = time.time()
     viz_mem_start = get_memory_mb()
     print(f"\n{'~' * 60}")
-    print(f"  VISUALIZATION PHASE")
+    print("  VISUALIZATION PHASE")
     print(f"  Memory before: {viz_mem_start:.1f} MB")
     print(f"{'~' * 60}")
 
@@ -243,7 +294,9 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                         layer_biases=layer_biases if layer_biases else None,
                         gate_idx=gate_idx,
                     )
-                    viz_paths[trial_id][gname]["full"]["activations_mean"] = mean_act_path
+                    viz_paths[trial_id][gname]["full"]["activations_mean"] = (
+                        mean_act_path
+                    )
 
                 # Save gate summary.json
                 gate_folder = os.path.join(trial_dir, gname)
@@ -256,17 +309,19 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
             if not best_keys:
                 continue
 
-            print(
-                f"[VIZ] Gate {gname}: {len(best_keys)} best subcircuits to visualize"
-            )
+            print(f"[VIZ] Gate {gname}: {len(best_keys)} best subcircuits to visualize")
             bests_faith = trial.metrics.per_gate_bests_faith.get(gname, [])
 
             # Group edge variations by node pattern for summary generation
-            node_pattern_edges: dict[int, list[tuple[int, int, "FaithfulnessMetrics"]]] = {}
+            node_pattern_edges: dict[
+                int, list[tuple[int, int, FaithfulnessMetrics]]
+            ] = {}
             for i, sc_key in enumerate(best_keys):
                 faith = bests_faith[i] if i < len(bests_faith) else None
                 node_mask_idx, edge_mask_idx = parse_subcircuit_key(sc_key)
-                node_pattern_edges.setdefault(node_mask_idx, []).append((edge_mask_idx, i, faith))
+                node_pattern_edges.setdefault(node_mask_idx, []).append(
+                    (edge_mask_idx, i, faith)
+                )
 
             for i, sc_key in enumerate(best_keys):
                 # Convert list to tuple for hashability (JSON loads as list)
@@ -277,7 +332,9 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
 
                 # Build folder path and label based on key type
                 if isinstance(sc_key, (tuple, list)):
-                    folder = os.path.join(trial_dir, gname, str(node_mask_idx), str(edge_mask_idx))
+                    folder = os.path.join(
+                        trial_dir, gname, str(node_mask_idx), str(edge_mask_idx)
+                    )
                     sc_label = f"{gname} (Node#{node_mask_idx}/Edge#{edge_mask_idx})"
                 else:
                     folder = os.path.join(trial_dir, gname, str(sc_key))
@@ -314,76 +371,48 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                         layer_biases=layer_biases if layer_biases else None,
                         gate_idx=gate_idx,
                     )
-                    viz_paths[trial_id][gname][sc_key]["activations_mean"] = mean_act_path
+                    viz_paths[trial_id][gname][sc_key]["activations_mean"] = (
+                        mean_act_path
+                    )
 
-                # Subcircuit decision boundary visualization
-                if trial.model is not None:
-                    try:
-                        import torch
-                        gate_n_inputs = resolve_gate(gname).n_inputs
-                        model_n_inputs = trial.model.layers[0][0].in_features
-                        gate_model = trial.model.separate_into_k_mlps()[gate_idx]
-                        subcircuit_model = gate_model.separate_subcircuit(circuit, gate_idx=gate_idx)
-                        device = str(next(subcircuit_model.parameters()).device)
-
-                        # Create wrapper to pad inputs for mixed-input models
-                        class _PaddedSubcircuit:
-                            def __init__(self, model, gate_n_inputs, model_n_inputs, device):
-                                self.model = model
-                                self.gate_n_inputs = gate_n_inputs
-                                self.model_n_inputs = model_n_inputs
-                                self.device = device
-                            def __call__(self, x):
-                                if x.shape[1] < self.model_n_inputs:
-                                    padding = torch.zeros(x.shape[0], self.model_n_inputs - x.shape[1], device=x.device)
-                                    x = torch.cat([x, padding], dim=1)
-                                return self.model(x)
-                            def eval(self):
-                                self.model.eval()
-                                return self
-                            def parameters(self):
-                                return self.model.parameters()
-
-                        wrapped_model = _PaddedSubcircuit(subcircuit_model, gate_n_inputs, model_n_inputs, device)
-
-                        # Generate decision boundary data using gate's actual input size
-                        if gate_n_inputs <= 2:
-                            db_data = generate_grid_data(
-                                model=wrapped_model,
-                                n_inputs=gate_n_inputs,
-                                gate_idx=0,  # Single output subcircuit
-                                resolution=50,
-                                device=device,
+                # Subcircuit decision boundary visualization from pre-computed data
+                # NO model inference here - uses trial.subcircuit_decision_boundary_data
+                if trial.subcircuit_decision_boundary_data:
+                    gate_db_data = trial.subcircuit_decision_boundary_data.get(
+                        gname, {}
+                    )
+                    # Convert to tuple for lookup (stored as tuple keys)
+                    lookup_key = (node_mask_idx, edge_mask_idx)
+                    db_data = gate_db_data.get(lookup_key)
+                    if db_data:
+                        try:
+                            gate_n_inputs = resolve_gate(gname).n_inputs
+                            # Create viz subfolder and save
+                            viz_folder = os.path.join(folder, "viz")
+                            os.makedirs(viz_folder, exist_ok=True)
+                            db_output = os.path.join(viz_folder, "decision_boundary")
+                            if gate_n_inputs <= 2:
+                                db_output += ".png"
+                            db_paths = plot_decision_boundary_from_data(
+                                data=db_data,
+                                gate_name=sc_label,
+                                output_path=db_output,
                             )
-                        else:
-                            db_data = generate_monte_carlo_data(
-                                model=wrapped_model,
-                                n_inputs=gate_n_inputs,
-                                gate_idx=0,
-                                n_samples=1000,
-                                device=device,
+                            viz_paths[trial_id][gname][sc_key]["decision_boundary"] = (
+                                db_paths
                             )
-
-                        # Create viz subfolder and save
-                        viz_folder = os.path.join(folder, "viz")
-                        os.makedirs(viz_folder, exist_ok=True)
-                        db_output = os.path.join(viz_folder, "decision_boundary")
-                        if gate_n_inputs <= 2:
-                            db_output += ".png"
-                        db_paths = plot_decision_boundary_from_data(
-                            data=db_data,
-                            gate_name=sc_label,
-                            output_path=db_output,
-                        )
-                        viz_paths[trial_id][gname][sc_key]["decision_boundary"] = db_paths
-                    except Exception as e:
-                        print(f"[VIZ] Warning: Failed to generate decision boundary for {sc_label}: {e}")
+                        except Exception as e:
+                            print(
+                                f"[VIZ] Warning: Failed to save decision boundary for {sc_label}: {e}"
+                            )
 
                 # Robustness and Faithfulness visualization
                 # Robustness is now inside faithfulness.observational
                 has_faith = i < len(bests_faith)
                 faithfulness_data = bests_faith[i] if has_faith else None
-                observational_data = faithfulness_data.observational if faithfulness_data else None
+                observational_data = (
+                    faithfulness_data.observational if faithfulness_data else None
+                )
                 has_observational = observational_data is not None
 
                 # Create directories upfront
@@ -394,37 +423,47 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
 
                 # Observational dir (renamed from robustness) - lives inside faithfulness/
                 observational_dir = (
-                    os.path.join(faithfulness_dir, "observational") if has_observational else None
+                    os.path.join(faithfulness_dir, "observational")
+                    if has_observational
+                    else None
                 )
                 if observational_dir:
                     os.makedirs(observational_dir, exist_ok=True)
-                    viz_paths[trial_id][gname][sc_key]["faithfulness"]["observational"] = {}
+                    viz_paths[trial_id][gname][sc_key]["faithfulness"][
+                        "observational"
+                    ] = {}
 
                 # Run quick visualizations sequentially (matplotlib is not thread-safe)
                 if has_observational and observational_dir:
                     with timed_phase("Observational Curves"):
-                        viz_paths[trial_id][gname][sc_key]["faithfulness"]["observational"]["stats"] = (
-                            visualize_observational_curves(
-                                observational_data, observational_dir, sc_label
-                            )
+                        viz_paths[trial_id][gname][sc_key]["faithfulness"][
+                            "observational"
+                        ]["stats"] = visualize_observational_curves(
+                            observational_data, observational_dir, sc_label
                         )
 
                 # Run expensive circuit visualizations sequentially (they use ProcessPoolExecutor internally)
                 if has_observational and observational_dir:
                     with timed_phase("Observational Circuit Viz"):
                         circuit_paths = visualize_observational_circuits(
-                            observational_data, circuit, layer_weights, observational_dir,
+                            observational_data,
+                            circuit,
+                            layer_weights,
+                            observational_dir,
                             canonical_activations=canonical_activations,
                             layer_biases=layer_biases if layer_biases else None,
                         )
-                    viz_paths[trial_id][gname][sc_key]["faithfulness"]["observational"]["circuit_viz"] = (
-                        circuit_paths
-                    )
+                    viz_paths[trial_id][gname][sc_key]["faithfulness"]["observational"][
+                        "circuit_viz"
+                    ] = circuit_paths
 
                 if has_faith:
                     with timed_phase("Faithfulness Circuit Viz"):
                         circuit_paths = visualize_faithfulness_circuit_samples(
-                            faithfulness_data, circuit, layer_weights, faithfulness_dir,
+                            faithfulness_data,
+                            circuit,
+                            layer_weights,
+                            faithfulness_dir,
                             layer_biases=layer_biases if layer_biases else None,
                         )
                     viz_paths[trial_id][gname][sc_key]["faithfulness"][
@@ -433,16 +472,26 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
 
                     # Add intervention effect plots (like noise_by_input for robustness)
                     with timed_phase("Intervention Effects"):
-                        intervention_paths = visualize_faithfulness_intervention_effects(
-                            faithfulness_data, faithfulness_dir, sc_label
+                        intervention_paths = (
+                            visualize_faithfulness_intervention_effects(
+                                faithfulness_data, faithfulness_dir, sc_label
+                            )
                         )
                     viz_paths[trial_id][gname][sc_key]["faithfulness"][
                         "intervention_effects"
                     ] = intervention_paths
 
                 # Save result.json files in each subfolder and summary.json in faithfulness/
-                interventional_dir = os.path.join(faithfulness_dir, "interventional") if has_faith else None
-                counterfactual_dir = os.path.join(faithfulness_dir, "counterfactual") if has_faith else None
+                interventional_dir = (
+                    os.path.join(faithfulness_dir, "interventional")
+                    if has_faith
+                    else None
+                )
+                counterfactual_dir = (
+                    os.path.join(faithfulness_dir, "counterfactual")
+                    if has_faith
+                    else None
+                )
                 # Create directories if they don't exist
                 if interventional_dir:
                     os.makedirs(interventional_dir, exist_ok=True)
@@ -467,7 +516,9 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
             # After processing all edge variations, save node pattern summaries
             for node_mask_idx, edge_list in node_pattern_edges.items():
                 node_dir = os.path.join(trial_dir, gname, str(node_mask_idx))
-                edge_variations = [(edge_mask_idx, faith) for edge_mask_idx, _, faith in edge_list]
+                edge_variations = [
+                    (edge_mask_idx, faith) for edge_mask_idx, _, faith in edge_list
+                ]
                 save_node_pattern_summary(node_mask_idx, node_dir, edge_variations)
 
     # Final viz profiling summary
@@ -476,7 +527,7 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
     viz_mem_delta = viz_mem_end - viz_mem_start
     log_memory("after_visualization")
     print(f"\n{'~' * 60}")
-    print(f"  VISUALIZATION COMPLETE")
+    print("  VISUALIZATION COMPLETE")
     print(f"  Total time: {viz_elapsed_ms:.0f}ms")
     print(f"  Memory after: {viz_mem_end:.1f} MB (delta: {viz_mem_delta:+.1f} MB)")
     print(f"{'~' * 60}")

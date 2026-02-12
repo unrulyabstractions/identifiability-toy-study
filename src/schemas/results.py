@@ -92,6 +92,14 @@ class TrialResult(SchemaClass):
     # Dict mapping range_label (e.g., "0_1", "-1_0") -> list of mean activations per layer
     mean_activations_by_range: Optional[dict[str, list[torch.Tensor]]] = None
 
+    # Decision boundary data for full model (per gate)
+    # Dict mapping gate_name -> data dict from generate_grid_data/generate_monte_carlo_data
+    decision_boundary_data: Optional[dict[str, dict]] = None
+
+    # Decision boundary data for subcircuits
+    # Dict mapping gate_name -> {(node_mask_idx, edge_mask_idx): data dict}
+    subcircuit_decision_boundary_data: Optional[dict[str, dict]] = None
+
     # Models stored at runtime (saved as model.pt, not in JSON)
     model: Optional["MLP"] = None
     subcircuits: list = field(default_factory=list)

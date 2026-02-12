@@ -14,6 +14,7 @@ from src.training_analysis import do_training_analysis
 from .gate_analysis import analyze_gate
 from .phases import (
     compute_activations_phase,
+    decision_boundary_phase,
     enumerate_circuits_phase,
     precompute_masks_phase,
 )
@@ -150,8 +151,12 @@ def run_trial(
     precomputed_masks_per_gate = {}
     if parallel_config.precompute_masks:
         precomputed_masks_per_gate = precompute_masks_phase(
-            subcircuits, model, gate_names, eval_device, output_size,
-            gate_n_inputs_list=gate_n_inputs_list
+            subcircuits,
+            model,
+            gate_names,
+            eval_device,
+            output_size,
+            gate_n_inputs_list=gate_n_inputs_list,
         )
 
     # ===== Gate Analysis =====
@@ -186,6 +191,21 @@ def run_trial(
             )
 
     update_status("FINISHED_GATE_ANALYSIS")
+
+    # ===== Decision Boundary Data =====
+    update_status("STARTED_DECISION_BOUNDARY")
+    db_data, subcircuit_db_data = decision_boundary_phase(
+        model=model,
+        gate_models=gate_models,
+        gate_names=gate_names,
+        subcircuits=subcircuits,
+        trial_metrics=trial_metrics,
+        device=device,
+    )
+    trial_result.decision_boundary_data = db_data
+    trial_result.subcircuit_decision_boundary_data = subcircuit_db_data
+    update_status("FINISHED_DECISION_BOUNDARY")
+
     update_status("SUCCESSFUL_TRIAL")
     trace("run_trial complete", trial_id=trial_result.trial_id)
     return trial_result
