@@ -1226,47 +1226,102 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
     edge_mask_metrics = {}  # edge_mask_idx -> {metric_name -> list of values}
 
     if first_trial and first_trial.subcircuits:
-        # Build comprehensive metrics for each subcircuit (averaged across gates)
-        subcircuit_all_metrics = {}  # sc_idx -> {metric_name -> list of values across gates}
+        # Build comprehensive metrics for each subcircuit from trial data
+        # Sources: SubcircuitMetrics, FaithfulnessMetrics, structure analysis
+        subcircuit_all_metrics = {}  # sc_idx -> {metric_name -> value}
 
-        for gate, rankings in averaged_rankings.items():
-            for r in rankings:
-                sc_idx = r["subcircuit_idx"]
+        # 1. Get basic metrics from SubcircuitMetrics (per_gate_metrics)
+        for gate_name, gate_metrics in first_trial.metrics.per_gate_metrics.items():
+            for sm in gate_metrics.subcircuit_metrics:
+                sc_idx = sm.idx
                 if sc_idx not in subcircuit_all_metrics:
-                    subcircuit_all_metrics[sc_idx] = {m: [] for m in SUBCIRCUIT_METRICS_RANKING}
+                    subcircuit_all_metrics[sc_idx] = {m: None for m in SUBCIRCUIT_METRICS_RANKING}
+                subcircuit_all_metrics[sc_idx]["accuracy"] = sm.accuracy
+                subcircuit_all_metrics[sc_idx]["bit_similarity"] = sm.bit_similarity
+                subcircuit_all_metrics[sc_idx]["logit_similarity"] = sm.logit_similarity
+                subcircuit_all_metrics[sc_idx]["best_similarity"] = sm.best_similarity
 
-                # Extract metrics from the ranking entry
-                subcircuit_all_metrics[sc_idx]["accuracy"].append(r.get("avg_accuracy"))
-                if r.get("observational") and r["observational"].get("avg") is not None:
-                    subcircuit_all_metrics[sc_idx]["overall_observational"].append(
-                        r["observational"]["avg"]
-                    )
-                if r.get("interventional") and r["interventional"].get("avg") is not None:
-                    subcircuit_all_metrics[sc_idx]["overall_interventional"].append(
-                        r["interventional"]["avg"]
-                    )
-                if r.get("counterfactual") and r["counterfactual"].get("avg") is not None:
-                    subcircuit_all_metrics[sc_idx]["overall_counterfactual"].append(
-                        r["counterfactual"]["avg"]
-                    )
+        # 2. Get structure metrics from subcircuit_structure_analysis
+        for struct in first_trial.subcircuit_structure_analysis:
+            sc_idx = struct.get("idx")
+            if sc_idx is not None and sc_idx in subcircuit_all_metrics:
+                subcircuit_all_metrics[sc_idx]["edge_sparsity"] = struct.get("edge_sparsity")
+                subcircuit_all_metrics[sc_idx]["node_sparsity"] = struct.get("node_sparsity")
+                subcircuit_all_metrics[sc_idx]["connectivity_density"] = struct.get("connectivity_density")
 
-        # Average each metric across gates for each subcircuit
-        def _avg_valid(values):
-            valid = [v for v in values if v is not None and not (isinstance(v, float) and math.isnan(v))]
-            return sum(valid) / len(valid) if valid else None
+        # 3. Get faithfulness metrics from per_gate_bests_faith
+        # Map subcircuit keys to indices
+        best_keys_to_idx = {}
+        for gate_name, best_keys in first_trial.metrics.per_gate_bests.items():
+            for key in best_keys:
+                if isinstance(key, (tuple, list)):
+                    node_idx, edge_idx = key[0], key[1]
+                else:
+                    node_idx, edge_idx = key, 0
+                best_keys_to_idx[(gate_name, node_idx, edge_idx)] = node_idx
 
-        subcircuit_avg_metrics = {}
-        for sc_idx, metrics_dict in subcircuit_all_metrics.items():
-            subcircuit_avg_metrics[sc_idx] = {
-                name: _avg_valid(values) for name, values in metrics_dict.items()
-            }
+        for gate_name, faith_list in first_trial.metrics.per_gate_bests_faith.items():
+            best_keys = first_trial.metrics.per_gate_bests.get(gate_name, [])
+            for i, faith in enumerate(faith_list):
+                if i >= len(best_keys):
+                    break
+                key = best_keys[i]
+                if isinstance(key, (tuple, list)):
+                    sc_idx = key[0]
+                else:
+                    sc_idx = key
+
+                if sc_idx not in subcircuit_all_metrics:
+                    subcircuit_all_metrics[sc_idx] = {m: None for m in SUBCIRCUIT_METRICS_RANKING}
+
+                # Observational metrics
+                if faith.observational:
+                    subcircuit_all_metrics[sc_idx]["overall_observational"] = faith.observational.overall_observational
+                    if faith.observational.noise:
+                        subcircuit_all_metrics[sc_idx]["noise_perturbations_agreement_bit"] = faith.observational.noise.similarity.bit
+                        subcircuit_all_metrics[sc_idx]["noise_perturbations_agreement_logit"] = faith.observational.noise.similarity.logit
+                    if faith.observational.ood:
+                        # Average the OOD agreements
+                        ood = faith.observational.ood
+                        ood_vals = [
+                            ood.multiply_positive_agreement if ood.multiply_positive_n_samples > 0 else None,
+                            ood.multiply_negative_agreement if ood.multiply_negative_n_samples > 0 else None,
+                            ood.add_agreement if ood.add_n_samples > 0 else None,
+                            ood.subtract_agreement if ood.subtract_n_samples > 0 else None,
+                        ]
+                        valid_ood = [v for v in ood_vals if v is not None]
+                        if valid_ood:
+                            subcircuit_all_metrics[sc_idx]["out_distribution_transformations_agreement"] = sum(valid_ood) / len(valid_ood)
+                        subcircuit_all_metrics[sc_idx]["out_distribution_multiply_agreement"] = (
+                            (ood.multiply_positive_agreement + ood.multiply_negative_agreement) / 2
+                            if ood.multiply_positive_n_samples > 0 and ood.multiply_negative_n_samples > 0
+                            else None
+                        )
+                        subcircuit_all_metrics[sc_idx]["out_distribution_bimodal_agreement"] = ood.bimodal_agreement if ood.bimodal_n_samples > 0 else None
+
+                # Interventional metrics
+                if faith.interventional:
+                    subcircuit_all_metrics[sc_idx]["overall_interventional"] = faith.interventional.overall_interventional
+                    subcircuit_all_metrics[sc_idx]["mean_in_circuit_effect"] = faith.interventional.mean_in_circuit_similarity
+                    subcircuit_all_metrics[sc_idx]["mean_out_circuit_effect"] = faith.interventional.mean_out_circuit_similarity
+
+                # Counterfactual metrics
+                if faith.counterfactual:
+                    subcircuit_all_metrics[sc_idx]["overall_counterfactual"] = faith.counterfactual.overall_counterfactual
+                    subcircuit_all_metrics[sc_idx]["sufficiency"] = faith.counterfactual.mean_sufficiency
+                    subcircuit_all_metrics[sc_idx]["completeness"] = faith.counterfactual.mean_completeness
+                    subcircuit_all_metrics[sc_idx]["necessity"] = faith.counterfactual.mean_necessity
+                    subcircuit_all_metrics[sc_idx]["independence"] = faith.counterfactual.mean_independence
+
+                # Overall faithfulness
+                subcircuit_all_metrics[sc_idx]["overall_faithfulness"] = faith.overall_faithfulness
 
         # Map to node_pattern and edge_variation, collecting metrics
         for entry in mask_idx_entries:
             sc_idx = entry["subcircuit_idx"]
             nm_idx = entry["node_pattern"]
             em_idx = entry["edge_variation"]
-            metrics = subcircuit_avg_metrics.get(sc_idx, {})
+            metrics = subcircuit_all_metrics.get(sc_idx, {})
 
             if nm_idx not in node_mask_metrics:
                 node_mask_metrics[nm_idx] = {m: [] for m in SUBCIRCUIT_METRICS_RANKING}
@@ -1299,7 +1354,7 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
 
         # Sort using tuple of best values for each ranking metric
         def _node_sort_key(entry):
-            return tuple(entry.get(f"best_{name}", float("-inf")) for name in SUBCIRCUIT_METRICS_RANKING)
+            return tuple(entry.get(f"best_{name}", float("-inf")) or float("-inf") for name in SUBCIRCUIT_METRICS_RANKING)
         node_mask_rankings.sort(key=_node_sort_key, reverse=True)
 
         # Compute avg for each edge_variation (avg across node patterns)
@@ -1318,7 +1373,7 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
 
         # Sort using tuple of avg values for each ranking metric
         def _edge_sort_key(entry):
-            return tuple(entry.get(f"avg_{name}", float("-inf")) for name in SUBCIRCUIT_METRICS_RANKING)
+            return tuple(entry.get(f"avg_{name}", float("-inf")) or float("-inf") for name in SUBCIRCUIT_METRICS_RANKING)
         edge_mask_rankings.sort(key=_edge_sort_key, reverse=True)
     else:
         node_mask_rankings = []
