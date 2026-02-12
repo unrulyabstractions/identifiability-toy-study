@@ -250,6 +250,7 @@ def decision_boundary_phase(
                 n_inputs=n_inputs,
                 gate_idx=gate_idx,
                 device=device,
+                resolution=200,  # Higher resolution for smoother contours
             )
         else:
             gate_db_data[gate_name] = generate_monte_carlo_data(
@@ -299,6 +300,7 @@ def decision_boundary_phase(
                         n_inputs=n_inputs,
                         gate_idx=0,  # Subcircuit model has single output
                         device=device,
+                        resolution=200,  # Higher resolution for smoother contours
                     )
                 else:
                     data = generate_monte_carlo_data(
