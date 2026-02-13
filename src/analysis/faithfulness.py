@@ -12,10 +12,12 @@ from src.infra.profiler import trace, traced
 from src.model import InterventionEffect, MLP, PatchShape
 from src.experiment_config import FaithfulnessConfig
 from src.schemas import (
+    CircuitInterventionEffects,
     CounterfactualEffect,
     CounterfactualMetrics,
     FaithfulnessMetrics,
     InterventionalMetrics,
+    InterventionStatistics,
 )
 from src.math import logits_to_binary
 
@@ -31,30 +33,28 @@ from .scoring import (
 
 
 def calculate_statistics(
-    in_circuit_effects: dict[str, dict[str, list[InterventionEffect]]],
-    out_circuit_effects: dict[str, dict[str, list[InterventionEffect]]],
+    in_circuit_effects: CircuitInterventionEffects,
+    out_circuit_effects: CircuitInterventionEffects,
     counterfactual_effects: list[CounterfactualEffect],
-) -> dict:
+) -> InterventionStatistics:
     """
     Compute statistics from intervention effects.
 
     Args:
-        in_circuit_effects: Dict with "in"/"ood" keys containing patch dicts
-        out_circuit_effects: Same format as in_circuit_effects
+        in_circuit_effects: Effects from in-circuit interventions
+        out_circuit_effects: Effects from out-circuit interventions
         counterfactual_effects: List of CounterfactualEffect
 
     Returns:
-        Dict with keys: in_circuit_stats, out_circuit_stats, in_circuit_stats_ood, out_circuit_stats_ood,
-                       mean_in_sim, mean_out_sim, mean_in_sim_ood, mean_out_sim_ood,
-                       mean_faith, std_faith
+        InterventionStatistics with all computed statistics
     """
-    in_stats, in_sims = _compute_patch_statistics(in_circuit_effects.get("in", {}))
+    in_stats, in_sims = _compute_patch_statistics(in_circuit_effects.in_distribution)
     in_stats_ood, in_sims_ood = _compute_patch_statistics(
-        in_circuit_effects.get("ood", {})
+        in_circuit_effects.out_distribution
     )
-    out_stats, out_sims = _compute_patch_statistics(out_circuit_effects.get("in", {}))
+    out_stats, out_sims = _compute_patch_statistics(out_circuit_effects.in_distribution)
     out_stats_ood, out_sims_ood = _compute_patch_statistics(
-        out_circuit_effects.get("ood", {})
+        out_circuit_effects.out_distribution
     )
 
     mean_in_sim = float(np.mean(in_sims)) if in_sims else 0.0
@@ -67,18 +67,18 @@ def calculate_statistics(
     mean_faith = float(np.mean(faith_scores)) if faith_scores else 0.0
     std_faith = float(np.std(faith_scores)) if faith_scores else 0.0
 
-    return {
-        "in_circuit_stats": in_stats,
-        "out_circuit_stats": out_stats,
-        "in_circuit_stats_ood": in_stats_ood,
-        "out_circuit_stats_ood": out_stats_ood,
-        "mean_in_sim": mean_in_sim,
-        "mean_out_sim": mean_out_sim,
-        "mean_in_sim_ood": mean_in_sim_ood,
-        "mean_out_sim_ood": mean_out_sim_ood,
-        "mean_faith": mean_faith,
-        "std_faith": std_faith,
-    }
+    return InterventionStatistics(
+        in_circuit_stats=in_stats,
+        out_circuit_stats=out_stats,
+        in_circuit_stats_ood=in_stats_ood,
+        out_circuit_stats_ood=out_stats_ood,
+        mean_in_sim=mean_in_sim,
+        mean_out_sim=mean_out_sim,
+        mean_in_sim_ood=mean_in_sim_ood,
+        mean_out_sim_ood=mean_out_sim_ood,
+        mean_faith=mean_faith,
+        std_faith=std_faith,
+    )
 
 
 def calculate_faithfulness_metrics(
@@ -265,13 +265,13 @@ def calculate_faithfulness_metrics(
     in_distribution_value_range = [-1, 1]
     out_distribution_value_range = [[-1000, -2], [2, 1000]]
 
-    in_circuit_effects = {}
-    out_circuit_effects = {}
+    in_circuit_effects = CircuitInterventionEffects()
+    out_circuit_effects = CircuitInterventionEffects()
 
     # Interventional analysis (sequential for GPU safety)
     with traced("interventional_in_circuit", n_patches=len(structure.in_patches) if structure.in_patches else 0):
         if structure.in_patches:
-            in_circuit_effects["in"] = calculate_patches_causal_effect(
+            in_circuit_effects.in_distribution = calculate_patches_causal_effect(
                 structure.in_patches,
                 x,
                 model,
@@ -281,7 +281,7 @@ def calculate_faithfulness_metrics(
                 device,
                 in_distribution_value_range,
             )
-            in_circuit_effects["ood"] = calculate_patches_causal_effect(
+            in_circuit_effects.out_distribution = calculate_patches_causal_effect(
                 structure.in_patches,
                 x,
                 model,
@@ -294,7 +294,7 @@ def calculate_faithfulness_metrics(
 
     with traced("interventional_out_circuit", n_patches=len(structure.out_patches) if structure.out_patches else 0):
         if structure.out_patches:
-            out_circuit_effects["in"] = calculate_patches_causal_effect(
+            out_circuit_effects.in_distribution = calculate_patches_causal_effect(
                 structure.out_patches,
                 x,
                 model,
@@ -304,7 +304,7 @@ def calculate_faithfulness_metrics(
                 device,
                 in_distribution_value_range,
             )
-            out_circuit_effects["ood"] = calculate_patches_causal_effect(
+            out_circuit_effects.out_distribution = calculate_patches_causal_effect(
                 structure.out_patches,
                 x,
                 model,
@@ -363,15 +363,15 @@ def calculate_faithfulness_metrics(
 
     # Build nested metrics
     interventional = InterventionalMetrics(
-        in_circuit_stats=stats["in_circuit_stats"],
-        out_circuit_stats=stats["out_circuit_stats"],
-        in_circuit_stats_ood=stats["in_circuit_stats_ood"],
-        out_circuit_stats_ood=stats["out_circuit_stats_ood"],
-        mean_in_circuit_similarity=stats["mean_in_sim"],
-        mean_out_circuit_similarity=stats["mean_out_sim"],
-        mean_in_circuit_similarity_ood=stats["mean_in_sim_ood"],
-        mean_out_circuit_similarity_ood=stats["mean_out_sim_ood"],
-        overall_interventional=(stats["mean_in_sim"] + stats["mean_out_sim"]) / 2.0,
+        in_circuit_stats=stats.in_circuit_stats,
+        out_circuit_stats=stats.out_circuit_stats,
+        in_circuit_stats_ood=stats.in_circuit_stats_ood,
+        out_circuit_stats_ood=stats.out_circuit_stats_ood,
+        mean_in_circuit_similarity=stats.mean_in_sim,
+        mean_out_circuit_similarity=stats.mean_out_sim,
+        mean_in_circuit_similarity_ood=stats.mean_in_sim_ood,
+        mean_out_circuit_similarity_ood=stats.mean_out_sim_ood,
+        overall_interventional=(stats.mean_in_sim + stats.mean_out_sim) / 2.0,
     )
 
     counterfactual = CounterfactualMetrics(

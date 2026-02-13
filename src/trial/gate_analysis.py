@@ -158,15 +158,17 @@ def analyze_gate(
         max_edge_variations=setup.faithfulness_config.max_edge_variations_per_subcircuit,
     )
 
-    # Build flat subcircuit indices using make_subcircuit_idx(node_mask_idx, edge_mask_idx)
+    # Build flat subcircuit indices using make_subcircuit_idx(node_mask_idx, edge_variant_rank)
+    # edge_variant_rank = 0 means best variant (after optimization sorting), 1 = 2nd best, etc.
     all_subcircuit_keys = []  # List of flat subcircuit indices
     all_circuits = {}  # subcircuit_idx -> circuit
     all_structures = {}  # subcircuit_idx -> structure
 
     for orig_idx, top_variants, stats in edge_results:
         node_mask_idx = best_node_indices[orig_idx]
-        for edge_mask_idx, variant in enumerate(top_variants):
-            subcircuit_idx = make_subcircuit_idx(width, depth, node_mask_idx, edge_mask_idx)
+        for edge_variant_rank, variant in enumerate(top_variants):
+            # edge_variant_rank is the OPTIMIZATION RANK (0=best), not enumeration index
+            subcircuit_idx = make_subcircuit_idx(width, depth, node_mask_idx, edge_variant_rank)
             all_subcircuit_keys.append(subcircuit_idx)
             all_circuits[subcircuit_idx] = variant.circuit
             # Use the node pattern's structure (edge variations share the same structure)

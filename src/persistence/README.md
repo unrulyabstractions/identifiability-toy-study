@@ -8,29 +8,67 @@ should be documented here.
 ```
 runs/
   run_{timestamp}/
-    config.json                       # Experiment configuration
-    log.txt                           # Training logs
-    {trial_id}/                       # One folder per trial
-      setup.json                      # Trial setup parameters
-      metrics.json                    # Training metrics, robustness, faithfulness
-      circuits.json                   # Subcircuit masks and structure analysis
-      tensors.pt                      # All tensor data (test, activations, weights)
-      all_gates/
-        model.pt                      # Trained MLP weights
-        decomposed_model.pt           # SPD decomposition
-        circuit_activations.png       # Visualization
-      {gate_name}/                    # Per-gate (e.g., XOR/)
-        full/
-          decomposed_model.pt
-          circuit_activations.png
-          robustness_summary.png
-        {subcircuit_idx}/             # Best subcircuits (e.g., 42/)
-          circuit.png
-          circuit_activations.png
-          decomposed_model.pt
-          robustness_summary.png
-          robustness_detail/
+    summary.json                      # Ranked results across all trials and gates
+    explanation.md                    # How to read this folder
+    config.json                       # ExperimentConfig
+    trial_org.json                    # Maps sweep parameters to trial IDs
+    gates.json                        # Gate name -> base gate function mapping
+    circuits.json                     # Run-level subcircuit masks and structures
+    training_data/
+      train.pt                        # Training data tensors (x, y)
+      val.pt                          # Validation data tensors
+      test.pt                         # Test data tensors
+      metadata.json                   # Data shapes and gate names
+    profiling/
+      profiling.json                  # Timing data (events, phase durations)
+    subcircuits/
+      summary.json                    # Overview of subcircuit rankings
+      explanation.md                  # How to read this folder
+      subcircuit_score_ranking.json   # Rankings by gate with faithfulness scores
+      mask_idx_map.json               # (node_mask_idx, edge_mask_idx) mapping
+      circuit_diagrams/
+        node_masks/{idx}.png          # Node pattern diagrams
+        edge_masks/{idx}.png          # Edge pattern diagrams
+        ranked_node_masks/            # Diagrams sorted by ranking
+        ranked_edge_masks/
+        structural_faithfulness/
+          summary.json                # Structural analysis overview
+          samples.json                # Per-subcircuit detailed metrics
+          structural_rankings.json    # Rankings by structural metrics
+          explanation.md              # How to read this folder
+    trials/
+      {trial_id}/
+        summary.json                  # Trial-level ranked results
+        explanation.md                # How to read this folder
+        config.json                   # Full effective config
+        setup.json                    # TrialSetup parameters
+        metrics.json                  # Metrics (training, per-gate, faithfulness)
+        tensors.pt                    # Test data, activations, weights
+        all_gates/
+          model.pt                    # Trained MLP weights
+        gates/
+          {gate_name}/
+            summary.json              # Gate-level metrics summary
+            full/
+              decomposed_model.pt
+            {subcircuit_idx}/
+              decomposed_model.pt
 ```
+
+## Key Concepts
+
+### Index Types
+
+- **node_mask_idx**: Sequential index identifying unique node connectivity patterns (0, 1, 2...)
+- **edge_mask_idx**: Sequential index identifying unique edge connectivity patterns (0, 1, 2...)
+- **edge_variant_rank**: Optimization rank (0=best, 1=2nd best...) - used during optimization only
+- **subcircuit_idx**: Flat index encoding (node_mask_idx, edge_mask_idx) pair
+
+### Architecture
+
+Architecture is defined in `base_trial.model_params`:
+- `width`: Hidden layer width (all layers have same width)
+- `depth`: Number of hidden layers
 
 ## File Formats
 
@@ -39,23 +77,13 @@ Experiment-level configuration:
 ```json
 {
   "device": "cpu",
-  "widths": [3],
-  "depths": [2],
-  "target_logic_gates": ["XOR"],
-  ...
-}
-```
-
-### setup.json
-Trial-specific parameters:
-```json
-{
-  "seed": 0,
-  "data_params": {"n_samples_train": 2048, ...},
-  "model_params": {"logic_gates": ["XOR"], "width": 3, "depth": 2},
-  "train_params": {"learning_rate": 0.001, ...},
-  "constraints": {"epsilon": 0.1},
-  "spd_config": {...}
+  "base_trial": {
+    "model_params": {"width": 3, "depth": 2, "logic_gates": ["XOR"]},
+    "train_params": {"learning_rate": 0.001},
+    "constraints": {"epsilon": 0.1}
+  },
+  "activations": ["leaky_relu"],
+  "learning_rates": [0.001]
 }
 ```
 
@@ -74,27 +102,25 @@ Training and analysis results:
     }
   },
   "per_gate_bests": {"XOR": [0, 5, 12]},
-  "per_gate_bests_faith": {...}  // Contains observational, interventional, counterfactual metrics
+  "per_gate_bests_faith": {...}
 }
 ```
 
-### circuits.json
-Subcircuit data:
+### mask_idx_map.json
+Mapping between index types:
 ```json
 {
+  "n_unique_edge_patterns": 1,
+  "n_unique_node_patterns": 48,
   "subcircuits": [
-    {"idx": 0, "node_masks": [[1,1], [1,0,1], [1]], "edge_masks": [...]},
-    ...
-  ],
-  "subcircuit_structure_analysis": [
     {
-      "idx": 0,
-      "node_sparsity": 0.5,
-      "in_patches": [{"layers": [1], "indices": [0], "axis": "neuron"}],
-      ...
+      "subcircuit_idx": 0,
+      "node_mask_idx": 0,
+      "edge_mask_idx": 0,
+      "node_sparsity": 0.67,
+      "edge_sparsity": 1.0
     }
-  ],
-  "decomposed_subcircuit_indices": {"XOR": [0, 5]}
+  ]
 }
 ```
 
@@ -105,20 +131,7 @@ PyTorch file containing:
 - `test_y_pred`: Model predictions `[N, output_dim]`
 - `activations`: List of per-layer activations `[N, layer_width]`
 - `canonical_activations`: Dict for visualization
-  - `"0_0"`, `"0_1"`, `"1_0"`, `"1_1"`: Activations for each binary input
 - `layer_weights`: Weight matrices per layer
-
-### model.pt
-MLP configuration and weights:
-```
-{
-  "hidden_sizes": [3, 3],
-  "input_size": 2,
-  "output_size": 1,
-  "activation": "leaky_relu",
-  "state_dict": {...}
-}
-```
 
 ## Usage
 
@@ -136,8 +149,6 @@ from src.persistence import (
     load_config,
     load_trial_setup,
     load_trial_metrics,
-    load_trial_circuits,
-    load_tensors,
     load_experiment,
 )
 
@@ -145,8 +156,6 @@ from src.persistence import (
 config = load_config(run_dir)
 setup = load_trial_setup(trial_dir)
 metrics = load_trial_metrics(trial_dir)
-circuits = load_trial_circuits(trial_dir)
-tensors = load_tensors(trial_dir)
 
 # Or load everything at once
 experiment = load_experiment(run_dir)
@@ -154,14 +163,22 @@ experiment = load_experiment(run_dir)
 
 ## Design Decisions
 
-1. **Multiple JSON files**: Split by concern (config vs metrics vs circuits) for
+1. **Explanation files**: Every folder with data has an `explanation.md` describing its contents.
+
+2. **Multiple JSON files**: Split by concern (config vs metrics vs circuits) for
    easier inspection and smaller file sizes.
 
-2. **Tensors in .pt**: Large numerical data stored efficiently in PyTorch format,
+3. **Tensors in .pt**: Large numerical data stored efficiently in PyTorch format,
    not serialized to JSON.
 
-3. **Parsable data**: All JSON data uses proper nested dicts/lists, not string
-   representations. PatchShape serializes as `{"layers": [1], "indices": [0], "axis": "neuron"}`.
+4. **Parsable data**: All JSON data uses proper nested dicts/lists, not string
+   representations.
 
-4. **Hierarchical structure**: trial -> gate -> subcircuit organization makes
-   it easy to navigate results.
+5. **Hierarchical structure**: run -> subcircuits/trials -> gates -> subcircuits
+   organization makes it easy to navigate results.
+
+6. **Schema classes**: All data structures use dataclasses extending `SchemaClass`
+   for consistent serialization and validation.
+
+7. **Validation**: At the end of saving, all required folders are validated to have
+   `explanation.md` files. Missing explanations cause an assertion error.

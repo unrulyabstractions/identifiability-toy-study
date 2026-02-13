@@ -280,6 +280,42 @@ class FaithfulnessCategoryScore(SchemaClass):
     epsilon: float = 0.0  # Similarity threshold used in identifiability constraints
 
 
+# =============================================================================
+# Intermediate Data Structures (used during computation)
+# =============================================================================
+
+
+@dataclass
+class CircuitInterventionEffects(SchemaClass):
+    """Intervention effects for a circuit (in or out of circuit).
+
+    Groups effects by distribution type (in vs out of distribution).
+    Each dict maps patch keys to lists of intervention effects.
+    """
+
+    in_distribution: dict[str, list[InterventionalSample]] = field(default_factory=dict)
+    out_distribution: dict[str, list[InterventionalSample]] = field(default_factory=dict)
+
+
+@dataclass
+class InterventionStatistics(SchemaClass):
+    """Statistics computed from intervention effects.
+
+    This replaces the dict return type of calculate_statistics().
+    """
+
+    in_circuit_stats: dict[str, PatchStatistics] = field(default_factory=dict)
+    out_circuit_stats: dict[str, PatchStatistics] = field(default_factory=dict)
+    in_circuit_stats_ood: dict[str, PatchStatistics] = field(default_factory=dict)
+    out_circuit_stats_ood: dict[str, PatchStatistics] = field(default_factory=dict)
+    mean_in_sim: float = 0.0
+    mean_out_sim: float = 0.0
+    mean_in_sim_ood: float = 0.0
+    mean_out_sim_ood: float = 0.0
+    mean_faith: float = 0.0
+    std_faith: float = 0.0
+
+
 @dataclass
 class FaithfulnessSummary(SchemaClass):
     """Summary of all faithfulness metrics for summary.json.

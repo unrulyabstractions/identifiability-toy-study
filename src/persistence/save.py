@@ -74,6 +74,8 @@ from src.analysis.subcircuit_ranking import (
     get_ranking_dict,
     get_ranking_tuple,
 )
+from src.circuit.enumeration import parse_subcircuit_idx
+from src.circuit.precompute import compute_edge_mask_idx
 from src.schemas import ExperimentResult
 from src.serialization import filter_non_serializable
 
@@ -399,8 +401,8 @@ def _save_subcircuit_decision_boundaries(
 
             for key, data in subcircuit_data.items():
                 # Parse flat subcircuit index
-                node_mask_idx, edge_mask_idx = parse_subcircuit_idx(width, depth, key)
-                subcircuit_name = f"subcircuit_n{node_mask_idx}_e{edge_mask_idx}"
+                node_mask_idx, edge_variant_rank = parse_subcircuit_idx(width, depth, key)
+                subcircuit_name = f"subcircuit_n{node_mask_idx}_e{edge_variant_rank}"
 
                 try:
                     # Save visualization from pre-computed data
@@ -519,6 +521,9 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
         # 6. Models
         _save_models(trial, trial_dir, logger)
 
+    # Validate all subfolders have explanation.md
+    _validate_explanations(run_dir, logger)
+
     logger and logger.info(f"Saved results to {run_dir}")
 
 
@@ -634,8 +639,8 @@ def _save_run_level_circuits(result: ExperimentResult, run_dir: Path):
         simplified_subcircuits.append(
             {
                 "subcircuit_idx": subcircuit_idx,
-                "node_pattern": node_mask_idx,
-                "edge_variation": edge_mask_idx,
+                "node_mask_idx": node_mask_idx,
+                "edge_mask_idx": edge_mask_idx,
                 "node_masks": simplified_node_masks,
                 "edge_masks": edge_masks,
             }
@@ -728,8 +733,8 @@ def _generate_run_summary(result: ExperimentResult) -> dict:
         "n_trials": len(result.trials),
         "gates": normalized_gates,
         "architecture": {
-            "widths": result.config.widths,
-            "depths": result.config.depths,
+            "width": result.config.base_trial.model_params.width,
+            "depth": result.config.base_trial.model_params.depth,
         },
         "epsilon": epsilon,
         "best_subcircuits_by_gate": {},
@@ -891,6 +896,52 @@ def _save_explanation(path: Path, content: str):
     """Save explanation markdown file."""
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
+
+
+def _validate_explanations(run_dir: Path, logger=None):
+    """Validate that all core subfolders have explanation.md files.
+
+    Only checks folders created by save.py (not optional visualization folders).
+
+    Raises:
+        AssertionError: If any required folder is missing explanation.md
+    """
+    missing_explanations = []
+
+    # Check run-level (always required)
+    if (run_dir / "summary.json").exists() and not (run_dir / "explanation.md").exists():
+        missing_explanations.append(str(run_dir))
+
+    # Check subcircuits folder (created by save.py)
+    subcircuits_dir = run_dir / "subcircuits"
+    if subcircuits_dir.exists():
+        if not (subcircuits_dir / "explanation.md").exists():
+            missing_explanations.append(str(subcircuits_dir))
+        # Check circuit_diagrams/structural_faithfulness
+        structural_dir = subcircuits_dir / "circuit_diagrams" / "structural_faithfulness"
+        if structural_dir.exists() and not (structural_dir / "explanation.md").exists():
+            missing_explanations.append(str(structural_dir))
+
+    # Check trials (created by save.py)
+    trials_dir = run_dir / "trials"
+    if trials_dir.exists():
+        for trial_dir in trials_dir.iterdir():
+            if trial_dir.is_dir():
+                # Check trial folder
+                if (trial_dir / "summary.json").exists() and not (trial_dir / "explanation.md").exists():
+                    missing_explanations.append(str(trial_dir))
+
+    if missing_explanations:
+        error_msg = (
+            f"Missing explanation.md files in {len(missing_explanations)} folders:\n"
+            + "\n".join(f"  - {path}" for path in missing_explanations[:10])
+        )
+        if len(missing_explanations) > 10:
+            error_msg += f"\n  ... and {len(missing_explanations) - 10} more"
+        logger and logger.error(error_msg)
+        raise AssertionError(error_msg)
+
+    logger and logger.info("All required folders have explanation.md files")
 
 
 def _compute_structural_metrics_for_rankings(trial) -> dict[int, dict]:
@@ -1136,9 +1187,18 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
     # Create mask_idx_map with node_mask_idx, edge_mask_idx -> subcircuit_idx mapping
     first_trial = next(iter(result.trials.values()), None)
     if first_trial and first_trial.subcircuits:
-        # Track unique node patterns to assign node_mask_idx
+        # Get architecture params for edge_mask_idx computation
+        width = first_trial.setup.model_params.width
+        depth = first_trial.setup.model_params.depth
+        first_sc = first_trial.subcircuits[0] if first_trial.subcircuits else {}
+        sample_node_masks = first_sc.get("node_masks", [[1, 1]])
+        input_size = len(sample_node_masks[0]) if sample_node_masks else 2
+
+        # Track unique patterns to assign sequential indices
         seen_node_patterns = {}  # tuple(hidden_masks) -> node_mask_idx
+        seen_edge_bitmasks = {}  # edge_bitmask -> edge_mask_idx
         node_mask_counter = 0
+        edge_mask_counter = 0
 
         mask_idx_entries = []
         idx_mapping = {}  # (node_mask_idx, edge_mask_idx) -> subcircuit_idx
@@ -1153,17 +1213,18 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
                 tuple(tuple(m) for m in node_masks[1:-1]) if len(node_masks) > 2 else ()
             )
 
-            # Assign node_mask_idx
+            # Assign node_mask_idx (sequential)
             if hidden_masks not in seen_node_patterns:
                 seen_node_patterns[hidden_masks] = node_mask_counter
                 node_mask_counter += 1
             node_mask_idx = seen_node_patterns[hidden_masks]
 
-            # For full_edges_only=True, edge_mask_idx is always 0 for each node pattern
-            # Count how many subcircuits share this node pattern to assign edge_mask_idx
-            edge_mask_idx = sum(
-                1 for e in mask_idx_entries if e["node_pattern"] == node_mask_idx
-            )
+            # Compute edge pattern bitmask and assign sequential edge_mask_idx
+            edge_bitmask = compute_edge_mask_idx(edge_masks, width, depth, input_size)
+            if edge_bitmask not in seen_edge_bitmasks:
+                seen_edge_bitmasks[edge_bitmask] = edge_mask_counter
+                edge_mask_counter += 1
+            edge_mask_idx = seen_edge_bitmasks[edge_bitmask]
 
             # Compute structural metrics
             hidden_nodes = node_masks[1:-1] if len(node_masks) > 2 else node_masks
@@ -1182,8 +1243,8 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
             mask_idx_entries.append(
                 {
                     "subcircuit_idx": subcircuit_idx,
-                    "node_pattern": node_mask_idx,
-                    "edge_variation": edge_mask_idx,
+                    "node_mask_idx": node_mask_idx,
+                    "edge_mask_idx": edge_mask_idx,
                     "node_sparsity": round(node_sparsity, 4),
                     "edge_sparsity": round(edge_sparsity, 4),
                     "n_hidden_layers": len(hidden_nodes),
@@ -1196,13 +1257,13 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
 
         # Create readable mapping table
         mapping_table = [
-            {"node_pattern": k[0], "edge_variation": k[1], "subcircuit_idx": v}
+            {"node_mask_idx": k[0], "edge_mask_idx": k[1], "subcircuit_idx": v}
             for k, v in sorted(idx_mapping.items())
         ]
 
         _save_json(
             {
-                "description": "Mapping (node_pattern, edge_variation) -> subcircuit_idx with structural metrics",
+                "description": "Mapping (node_mask_idx, edge_mask_idx) -> subcircuit_idx with structural metrics",
                 "architecture": {"width": width, "depth": depth},
                 "n_unique_node_patterns": node_mask_counter,
                 "mapping": mapping_table,
@@ -1271,26 +1332,22 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
                 subcircuit_all_metrics[sc_idx]["structural_overall"] = struct_metrics.get("overall_structural")
 
         # 3. Get faithfulness metrics from per_gate_bests_faith
-        # Map subcircuit keys to indices
-        best_keys_to_idx = {}
-        for gate_name, best_keys in first_trial.metrics.per_gate_bests.items():
-            for key in best_keys:
-                if isinstance(key, (tuple, list)):
-                    node_idx, edge_idx = key[0], key[1]
-                else:
-                    node_idx, edge_idx = key, 0
-                best_keys_to_idx[(gate_name, node_idx, edge_idx)] = node_idx
-
+        # per_gate_bests contains flat indices from make_subcircuit_idx(node_mask_idx, edge_variant_rank)
+        # We need to parse them to get node_mask_idx, which is the position in subcircuits list
         for gate_name, faith_list in first_trial.metrics.per_gate_bests_faith.items():
             best_keys = first_trial.metrics.per_gate_bests.get(gate_name, [])
             for i, faith in enumerate(faith_list):
                 if i >= len(best_keys):
                     break
                 key = best_keys[i]
+                # Parse flat index to get node_mask_idx (position in subcircuits list)
                 if isinstance(key, (tuple, list)):
+                    # Legacy format: (node_mask_idx, edge_variant_rank)
                     sc_idx = key[0]
                 else:
-                    sc_idx = key
+                    # Flat index from make_subcircuit_idx - parse to get node_mask_idx
+                    node_mask_idx, _edge_rank = parse_subcircuit_idx(width, depth, key)
+                    sc_idx = node_mask_idx  # node_mask_idx IS the position index
 
                 if sc_idx not in subcircuit_all_metrics:
                     subcircuit_all_metrics[sc_idx] = {m: None for m in SUBCIRCUIT_METRICS_RANKING}
@@ -1337,11 +1394,11 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
                 # Overall faithfulness
                 subcircuit_all_metrics[sc_idx]["overall_faithfulness"] = faith.overall_faithfulness
 
-        # Map to node_pattern and edge_variation, collecting metrics
+        # Map to node_mask_idx and edge_mask_idx, collecting metrics
         for entry in mask_idx_entries:
             sc_idx = entry["subcircuit_idx"]
-            nm_idx = entry["node_pattern"]
-            em_idx = entry["edge_variation"]
+            nm_idx = entry["node_mask_idx"]
+            em_idx = entry["edge_mask_idx"]
             metrics = subcircuit_all_metrics.get(sc_idx, {})
 
             if nm_idx not in node_mask_metrics:
@@ -1358,44 +1415,74 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
                 if val is not None:
                     edge_mask_metrics[em_idx][name].append(val)
 
-        # Compute best/avg for each node_pattern (best across edge variations)
-        node_mask_rankings = []
+        # Build NodeMaskRanking objects
+        from src.schemas import NodeMaskRanking, EdgeMaskRanking
+
+        node_mask_rankings: list[NodeMaskRanking] = []
         for nm_idx, metrics_dict in node_mask_metrics.items():
-            ranking_entry = {"node_pattern": nm_idx}
+            # Compute best/avg for each metric
+            values_map = {}
             for name in SUBCIRCUIT_METRICS_RANKING:
                 values = metrics_dict.get(name, [])
                 valid = [v for v in values if v is not None]
                 if valid:
-                    ranking_entry[f"best_{name}"] = max(valid)
-                    ranking_entry[f"avg_{name}"] = sum(valid) / len(valid)
-                else:
-                    ranking_entry[f"best_{name}"] = None
-                    ranking_entry[f"avg_{name}"] = None
-            node_mask_rankings.append(ranking_entry)
+                    values_map[f"best_{name}"] = max(valid)
+                    values_map[f"avg_{name}"] = sum(valid) / len(valid)
 
-        # Sort using tuple of best values for each ranking metric
-        def _node_sort_key(entry):
-            return tuple(entry.get(f"best_{name}", float("-inf")) or float("-inf") for name in SUBCIRCUIT_METRICS_RANKING)
+            ranking = NodeMaskRanking(
+                node_mask_idx=nm_idx,
+                avg_accuracy=values_map.get("avg_accuracy"),
+                avg_bit_similarity=values_map.get("avg_bit_similarity"),
+                avg_faithfulness=values_map.get("avg_overall_faithfulness"),
+                n_edge_variants=len(metrics_dict.get("accuracy", [])),
+            )
+            node_mask_rankings.append(ranking)
+
+        # Sort by (accuracy, bit_similarity, faithfulness) descending
+        def _node_sort_key(r: NodeMaskRanking):
+            return (
+                r.avg_accuracy or float("-inf"),
+                r.avg_bit_similarity or float("-inf"),
+                r.avg_faithfulness or float("-inf"),
+            )
         node_mask_rankings.sort(key=_node_sort_key, reverse=True)
 
-        # Compute avg for each edge_variation (avg across node patterns)
-        edge_mask_rankings = []
+        # Assign ranks
+        for i, ranking in enumerate(node_mask_rankings):
+            ranking.rank = i
+
+        # Build EdgeMaskRanking objects
+        edge_mask_rankings: list[EdgeMaskRanking] = []
         for em_idx, metrics_dict in edge_mask_metrics.items():
-            ranking_entry = {"edge_variation": em_idx, "n_patterns": 0}
+            values_map = {}
+            n_patterns = 0
             for name in SUBCIRCUIT_METRICS_RANKING:
                 values = metrics_dict.get(name, [])
                 valid = [v for v in values if v is not None]
                 if valid:
-                    ranking_entry[f"avg_{name}"] = sum(valid) / len(valid)
-                    ranking_entry["n_patterns"] = max(ranking_entry["n_patterns"], len(valid))
-                else:
-                    ranking_entry[f"avg_{name}"] = None
-            edge_mask_rankings.append(ranking_entry)
+                    values_map[f"avg_{name}"] = sum(valid) / len(valid)
+                    n_patterns = max(n_patterns, len(valid))
 
-        # Sort using tuple of avg values for each ranking metric
-        def _edge_sort_key(entry):
-            return tuple(entry.get(f"avg_{name}", float("-inf")) or float("-inf") for name in SUBCIRCUIT_METRICS_RANKING)
+            ranking = EdgeMaskRanking(
+                edge_mask_idx=em_idx,
+                avg_accuracy=values_map.get("avg_accuracy"),
+                avg_bit_similarity=values_map.get("avg_bit_similarity"),
+                avg_faithfulness=values_map.get("avg_overall_faithfulness"),
+                n_compatible_nodes=n_patterns,
+            )
+            edge_mask_rankings.append(ranking)
+
+        # Sort by (accuracy, bit_similarity, faithfulness) descending
+        def _edge_sort_key(r: EdgeMaskRanking):
+            return (
+                r.avg_accuracy or float("-inf"),
+                r.avg_bit_similarity or float("-inf"),
+                r.avg_faithfulness or float("-inf"),
+            )
         edge_mask_rankings.sort(key=_edge_sort_key, reverse=True)
+        # Assign ranks
+        for i, ranking in enumerate(edge_mask_rankings):
+            ranking.rank = i
     else:
         node_mask_rankings = []
         edge_mask_rankings = []
@@ -1412,49 +1499,72 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
 def _generate_circuit_diagrams(
     trial,
     subcircuits_dir: Path,
-    node_mask_rankings: list = None,
-    edge_mask_rankings: list = None,
+    node_mask_rankings: list["NodeMaskRanking"] = None,
+    edge_mask_rankings: list["EdgeMaskRanking"] = None,
 ):
     """Generate circuit diagrams for all subcircuits with rankings in filenames.
 
     Creates:
         circuit_diagrams/
-            ranked_node_masks/rank{N:02d}_node{idx}.png       - ranked by best metrics across edge variations
-            ranked_edge_masks/rank{N:02d}_edge{idx}.png       - ranked by avg metrics across node patterns
-            ranked_subcircuit_masks/rank{N:02d}_sc{idx}.png   - all subcircuits ranked by node pattern rank
-            ranking_metrics.json                               - metrics used for ranking
-            node_rankings.json                                 - node pattern rankings
-            edge_rankings.json                                 - edge variation rankings
+            node_masks/{node_mask_idx}.png                    - unique node patterns
+            edge_masks/{edge_mask_idx}.png                    - unique edge patterns
+            ranked_node_masks/rank{N:02d}_node{idx}.png       - ranked by best metrics
+            ranked_edge_masks/rank{N:02d}_edge{idx}.png       - ranked by avg metrics
+            ranked_subcircuit_masks/rank{N:02d}_sc{idx}.png   - all subcircuits ranked
+            metadata.json                                      - all rankings and compatibility
     """
+    from dataclasses import asdict
+
     from src.circuit import Circuit
+    from src.schemas import (
+        CircuitDiagramsMetadata,
+        CompatibilityPair,
+        EdgeMaskRanking,
+        NodeMaskRanking,
+    )
 
     if not trial or not trial.subcircuits:
         return
 
     diagrams_dir = subcircuits_dir / "circuit_diagrams"
+    node_masks_dir = diagrams_dir / "node_masks"
+    edge_masks_dir = diagrams_dir / "edge_masks"
     ranked_node_masks_dir = diagrams_dir / "ranked_node_masks"
     ranked_edge_masks_dir = diagrams_dir / "ranked_edge_masks"
     ranked_subcircuit_masks_dir = diagrams_dir / "ranked_subcircuit_masks"
 
+    node_masks_dir.mkdir(parents=True, exist_ok=True)
+    edge_masks_dir.mkdir(parents=True, exist_ok=True)
     ranked_node_masks_dir.mkdir(parents=True, exist_ok=True)
     ranked_edge_masks_dir.mkdir(parents=True, exist_ok=True)
     ranked_subcircuit_masks_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build ranking lookup: node_mask_idx -> rank (0-indexed)
+    # Get architecture params
+    width = trial.setup.model_params.width
+    depth = trial.setup.model_params.depth
+    first_sc = trial.subcircuits[0] if trial.subcircuits else {}
+    node_masks_sample = first_sc.get("node_masks", [[1, 1]])
+    input_size = len(node_masks_sample[0]) if node_masks_sample else 2
+
+    # Build ranking lookups from schema objects
     node_mask_rank = {}
     if node_mask_rankings:
-        for rank, r in enumerate(node_mask_rankings):
-            node_mask_rank[r["node_pattern"]] = rank
+        for ranking in node_mask_rankings:
+            node_mask_rank[ranking.node_mask_idx] = ranking.rank
 
     edge_mask_rank = {}
     if edge_mask_rankings:
-        for rank, r in enumerate(edge_mask_rankings):
-            edge_mask_rank[r["edge_variation"]] = rank
+        for ranking in edge_mask_rankings:
+            edge_mask_rank[ranking.edge_mask_idx] = ranking.rank
 
-    # Track unique node patterns and subcircuit info for ranking
-    seen_node_patterns = {}  # hidden_pattern -> (node_mask_idx, circuit)
+    # Track unique patterns
+    seen_node_patterns = {}  # hidden_pattern_tuple -> (node_mask_idx, circuit)
+    seen_edge_patterns = {}  # edge_bitmask -> (edge_mask_idx, circuit)
+    edge_bitmask_to_idx = {}  # edge_bitmask -> sequential edge_mask_idx
     node_mask_idx_counter = 0
-    subcircuit_info = []  # [(subcircuit_idx, node_mask_idx, circuit), ...]
+    edge_mask_idx_counter = 0
+    subcircuit_info = []  # [(subcircuit_idx, node_mask_idx, edge_mask_idx, circuit)]
+    compatibility_pairs: list[CompatibilityPair] = []
 
     max_diagrams = min(48, len(trial.subcircuits))
 
@@ -1462,33 +1572,58 @@ def _generate_circuit_diagrams(
         subcircuit_idx = sc_data.get("idx", 0)
         try:
             circuit = Circuit.from_dict(sc_data)
-
-            # Track unique node patterns for node_masks/
             node_masks = sc_data.get("node_masks", [])
+            edge_masks = sc_data.get("edge_masks", [])
+
+            # Compute node_mask_idx from hidden layers
             hidden_masks = (
                 tuple(tuple(m) for m in node_masks[1:-1]) if len(node_masks) > 2 else ()
             )
-
             if hidden_masks not in seen_node_patterns:
                 seen_node_patterns[hidden_masks] = (node_mask_idx_counter, circuit)
                 node_mask_idx_counter += 1
-
-            # Get node_mask_idx for this subcircuit
             nm_idx = seen_node_patterns[hidden_masks][0]
-            subcircuit_info.append((subcircuit_idx, nm_idx, circuit))
-        except Exception:
-            pass  # Silently skip diagram generation failures
 
-    # Generate ranked_subcircuit_masks PNGs with ranking prefix (based on node rank)
-    for subcircuit_idx, nm_idx, circuit in subcircuit_info:
-        rank = node_mask_rank.get(nm_idx, 99)
-        sc_path = ranked_subcircuit_masks_dir / f"rank{rank:02d}_sc{subcircuit_idx}.png"
-        try:
-            circuit.visualize(file_path=str(sc_path), node_size="small")
+            # Compute edge pattern bitmask and assign sequential index
+            edge_bitmask = compute_edge_mask_idx(edge_masks, width, depth, input_size)
+            if edge_bitmask not in edge_bitmask_to_idx:
+                edge_bitmask_to_idx[edge_bitmask] = edge_mask_idx_counter
+                seen_edge_patterns[edge_bitmask] = (edge_mask_idx_counter, circuit)
+                edge_mask_idx_counter += 1
+            em_idx = edge_bitmask_to_idx[edge_bitmask]
+
+            # Record compatibility using schema class
+            existing_pairs = [(p.node_mask_idx, p.edge_mask_idx) for p in compatibility_pairs]
+            if (nm_idx, em_idx) not in existing_pairs:
+                compatibility_pairs.append(
+                    CompatibilityPair(
+                        node_mask_idx=nm_idx,
+                        edge_mask_idx=em_idx,
+                        subcircuit_idx=subcircuit_idx,
+                    )
+                )
+
+            subcircuit_info.append((subcircuit_idx, nm_idx, em_idx, circuit))
         except Exception:
             pass
 
-    # Generate ranked_node_masks PNGs with ranking prefix
+    # Generate node_masks/{idx}.png
+    for hidden_pattern, (nm_idx, circuit) in seen_node_patterns.items():
+        nm_path = node_masks_dir / f"{nm_idx}.png"
+        try:
+            circuit.visualize(file_path=str(nm_path), node_size="small")
+        except Exception:
+            pass
+
+    # Generate edge_masks/{idx}.png
+    for edge_bitmask, (em_idx, circuit) in seen_edge_patterns.items():
+        em_path = edge_masks_dir / f"{em_idx}.png"
+        try:
+            circuit.visualize(file_path=str(em_path), node_size="small")
+        except Exception:
+            pass
+
+    # Generate ranked_node_masks with ranking prefix
     for hidden_pattern, (nm_idx, circuit) in seen_node_patterns.items():
         rank = node_mask_rank.get(nm_idx, 99)
         nm_path = ranked_node_masks_dir / f"rank{rank:02d}_node{nm_idx}.png"
@@ -1497,41 +1632,8 @@ def _generate_circuit_diagrams(
         except Exception:
             pass
 
-    # Generate edge_masks PNGs with ranking prefix
-    # Use edge_mask_idx from the circuit mapping, not unique edge patterns
-    # With full_edges_only=True, edge_mask_idx is always 0
-    seen_edge_mask_idx = {}  # edge_mask_idx -> circuit (first one for visualization)
-    edge_counts_local = {}  # node_mask_idx -> count (to track edge_mask_idx)
-
-    for sc_data in trial.subcircuits[:max_diagrams]:
-        node_masks = sc_data.get("node_masks", [])
-        hidden_masks = (
-            tuple(tuple(m) for m in node_masks[1:-1]) if len(node_masks) > 2 else ()
-        )
-
-        # Compute node_mask_idx for this pattern
-        nm_idx = None
-        for hp, (idx, _) in seen_node_patterns.items():
-            if hp == hidden_masks:
-                nm_idx = idx
-                break
-
-        if nm_idx is not None:
-            # Compute edge_mask_idx (how many times we've seen this node pattern)
-            if nm_idx not in edge_counts_local:
-                edge_counts_local[nm_idx] = 0
-            em_idx = edge_counts_local[nm_idx]
-            edge_counts_local[nm_idx] += 1
-
-            # Store first circuit for each unique edge_mask_idx
-            if em_idx not in seen_edge_mask_idx:
-                try:
-                    circuit = Circuit.from_dict(sc_data)
-                    seen_edge_mask_idx[em_idx] = circuit
-                except Exception:
-                    pass
-
-    for em_idx, circuit in seen_edge_mask_idx.items():
+    # Generate ranked_edge_masks with ranking prefix
+    for edge_bitmask, (em_idx, circuit) in seen_edge_patterns.items():
         rank = edge_mask_rank.get(em_idx, 99)
         em_path = ranked_edge_masks_dir / f"rank{rank:02d}_edge{em_idx}.png"
         try:
@@ -1539,33 +1641,26 @@ def _generate_circuit_diagrams(
         except Exception:
             pass
 
-    # Save rankings as separate JSON files
-    _save_json(
-        {
-            "metrics": SUBCIRCUIT_METRICS_RANKING,
-            "description": (
-                "Metrics used for tuple-based ranking, in priority order. "
-                "Higher values are better for all metrics."
-            ),
-        },
-        diagrams_dir / "ranking_metrics.json",
+    # Generate ranked_subcircuit_masks (based on node rank)
+    for subcircuit_idx, nm_idx, em_idx, circuit in subcircuit_info:
+        rank = node_mask_rank.get(nm_idx, 99)
+        sc_path = ranked_subcircuit_masks_dir / f"rank{rank:02d}_sc{subcircuit_idx}.png"
+        try:
+            circuit.visualize(file_path=str(sc_path), node_size="small")
+        except Exception:
+            pass
+
+    # Build metadata using schema class
+    metadata = CircuitDiagramsMetadata(
+        node_rankings=node_mask_rankings or [],
+        edge_rankings=edge_mask_rankings or [],
+        compatibility_pairs=sorted(compatibility_pairs, key=lambda p: (p.node_mask_idx, p.edge_mask_idx)),
+        ranking_metrics=list(SUBCIRCUIT_METRICS_RANKING),
+        description="Circuit diagram metadata with rankings and compatibility",
     )
 
-    _save_json(
-        {
-            "rankings": node_mask_rankings or [],
-            "description": "Node patterns ranked by best metrics across edge variations. Files: rank{N}_node{idx}.png",
-        },
-        diagrams_dir / "node_rankings.json",
-    )
-
-    _save_json(
-        {
-            "rankings": edge_mask_rankings or [],
-            "description": "Edge variations ranked by avg metrics across node patterns. Files: rank{N}_edge{idx}.png",
-        },
-        diagrams_dir / "edge_rankings.json",
-    )
+    # Save as JSON
+    _save_json(asdict(metadata), diagrams_dir / "metadata.json")
 
     # Generate structural faithfulness analysis
     _save_structural_faithfulness(trial, diagrams_dir)
@@ -1631,8 +1726,8 @@ def _save_structural_faithfulness(trial, diagrams_dir: Path):
         # Convert to dict for JSON serialization
         sample = {
             "subcircuit_idx": sc_idx,
-            "node_pattern_idx": node_mask_idx,
-            "edge_variation_idx": edge_mask_idx,
+            "node_mask_idx": node_mask_idx,
+            "edge_mask_idx": edge_mask_idx,
             # Topology metrics
             "topology": {
                 "n_active_nodes": metrics.topology.n_active_nodes,
@@ -1688,8 +1783,8 @@ def _save_structural_faithfulness(trial, diagrams_dir: Path):
     rankings = compute_structural_rankings(subcircuits, full_circuit, subcircuit_indices)
     rankings_data = [
         {
-            "node_pattern_idx": r.node_pattern_idx,
-            "edge_variation_idx": r.edge_variation_idx,
+            "node_mask_idx": r.node_pattern_idx,
+            "edge_mask_idx": r.edge_variation_idx,
             "overall_structural": r.overall_structural,
             "path_coverage": r.path_coverage,
             "node_retention_ratio": r.node_retention_ratio,
@@ -1735,6 +1830,54 @@ def _save_structural_faithfulness(trial, diagrams_dir: Path):
     _save_json({"samples": samples}, structural_dir / "samples.json")
     _save_json({"rankings": rankings_data}, structural_dir / "structural_rankings.json")
 
+    # Save explanation
+    _save_explanation(structural_dir / "explanation.md", STRUCTURAL_FAITHFULNESS_EXPLANATION)
+
+
+STRUCTURAL_FAITHFULNESS_EXPLANATION = """# Structural Faithfulness Analysis
+
+Analysis of subcircuit topology and structure compared to the full circuit.
+Based on concepts from Zennaro's "Abstraction between Structural Causal Models".
+
+## Files
+
+- `summary.json`: Overview statistics for all subcircuits
+- `samples.json`: Per-subcircuit detailed metrics
+- `structural_rankings.json`: Rankings by structural metrics
+
+## Key Metrics
+
+### Topology
+- **n_input_output_paths**: Number of distinct paths from input to output
+- **bottleneck_width**: Minimum active nodes in any hidden layer
+- **bottleneck_ratio**: bottleneck_width / max_width (higher = more robust)
+- **avg_path_length**: Average path length through the circuit
+
+### Centrality
+- **avg_betweenness**: Mean betweenness centrality across nodes
+- **max_betweenness_node**: Most critical node for information flow
+- **avg_importance**: PageRank-style importance propagated from outputs
+
+### Structural Faithfulness (vs Full Circuit)
+- **path_coverage**: Fraction of I/O paths preserved (primary metric)
+- **node_retention_ratio**: Fraction of hidden nodes kept active
+- **edge_faithfulness**: Active edges / max possible between active nodes
+- **abstraction_type**: IDENTITY, NODE_DROPPING, EDGE_DROPPING, or MIXED
+
+### Derived Scores
+- **efficiency_score**: High path coverage with low node retention (parsimonious)
+- **robustness_score**: High path coverage with high bottleneck ratio (robust to noise)
+- **overall_structural**: Combined structural faithfulness score
+
+## Interpretation
+
+A faithful subcircuit should:
+1. Preserve most I/O paths (high path_coverage)
+2. Maintain sufficient width (high bottleneck_ratio)
+3. Use minimal nodes (high efficiency_score) OR
+4. Be robust to perturbations (high robustness_score)
+"""
+
 
 SUBCIRCUITS_EXPLANATION = """# Subcircuits Analysis
 
@@ -1742,7 +1885,7 @@ SUBCIRCUITS_EXPLANATION = """# Subcircuits Analysis
 
 - `subcircuit_score_ranking.json`: Rankings by gate with faithfulness scores
 - `subcircuit_score_ranking_per_trial.json`: Per-trial granular rankings
-- `mask_idx_map.json`: (node_pattern, edge_variation) → subcircuit_idx mapping
+- `mask_idx_map.json`: (node_mask_idx, edge_mask_idx) → subcircuit_idx mapping
 - `circuit_diagrams/`: Visual diagrams and analysis
   - `ranking_metrics.json`: Metrics used for ranking (in priority order)
   - `node_rankings.json`: Node pattern rankings with all metrics
@@ -1789,9 +1932,10 @@ Inspired by Zennaro's "Abstraction between Structural Causal Models":
 
 subcircuit_idx = f(node_mask_idx, edge_mask_idx)
 
-- **node_mask_idx**: Identifies which hidden nodes are active
-- **edge_mask_idx**: Identifies edge configuration for that node pattern
-- With full_edges_only=True, typically edge_mask_idx=0
+- **node_mask_idx**: Unique index identifying which hidden nodes are active
+- **edge_mask_idx**: Unique index identifying edge connectivity pattern
+- A (node_mask_idx, edge_mask_idx) pair uniquely identifies a subcircuit
+- Not all edge patterns are compatible with all node patterns (edges require active nodes)
 
 ## Key Metrics
 
@@ -1861,8 +2005,8 @@ def _save_subcircuit_structural(sc_dir: Path, trial, node_mask_idx: int, edge_ma
 
     # Save structural summary
     struct_summary = {
-        "node_pattern_idx": node_mask_idx,
-        "edge_variation_idx": edge_mask_idx,
+        "node_mask_idx": node_mask_idx,
+        "edge_mask_idx": edge_mask_idx,
         "topology": {
             "n_active_nodes": metrics.topology.n_active_nodes,
             "n_total_nodes": metrics.topology.n_total_nodes,

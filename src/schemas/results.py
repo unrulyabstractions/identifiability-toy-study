@@ -97,7 +97,8 @@ class TrialResult(SchemaClass):
     decision_boundary_data: Optional[dict[str, dict]] = None
 
     # Decision boundary data for subcircuits
-    # Dict mapping gate_name -> {(node_mask_idx, edge_mask_idx): data dict}
+    # Dict mapping gate_name -> {subcircuit_idx: data dict}
+    # subcircuit_idx is from make_subcircuit_idx(node_mask_idx, edge_variant_rank)
     subcircuit_decision_boundary_data: Optional[dict[str, dict]] = None
 
     # Models stored at runtime (saved as model.pt, not in JSON)
@@ -142,14 +143,14 @@ class ExperimentResult(SchemaClass):
                 viz = viz_paths.get(trial_id, {}).get(gate, {})
                 best_list = []
                 for key in bests:
-                    node_mask_idx, edge_mask_idx = parse_subcircuit_key(key, width, depth)
+                    node_mask_idx, edge_variant_rank = parse_subcircuit_key(key, width, depth)
                     if node_mask_idx not in by_idx:
                         continue
                     sm = by_idx[node_mask_idx]
 
                     entry = {
                         "node_pattern": node_mask_idx,
-                        "edge_variation": edge_mask_idx,
+                        "edge_variant_rank": edge_variant_rank,
                         "acc": sm.accuracy,
                         "sim": sm.bit_similarity,
                     }

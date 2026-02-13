@@ -300,35 +300,40 @@ def enumerate_subcircuits_with_constraint(
 # =============================================================================
 # Subcircuit Index Utilities
 # =============================================================================
-# A subcircuit is uniquely identified by (node_mask_idx, edge_mask_idx).
+# A subcircuit is uniquely identified by (node_mask_idx, edge_variant_rank).
 # The flat subcircuit_idx is computed using the architecture (width, depth).
 
 
-def make_subcircuit_idx(width: int, depth: int, node_mask_idx: int, edge_mask_idx: int) -> int:
-    """Create a flat subcircuit index from node and edge mask indices.
+def make_subcircuit_idx(width: int, depth: int, node_mask_idx: int, edge_variant_rank: int) -> int:
+    """Create a flat subcircuit index from node pattern and edge variant rank.
 
     This is the canonical way to create a unique identifier for a subcircuit.
-    Use parse_subcircuit_idx() to decompose back to (node_mask_idx, edge_mask_idx).
+    Use parse_subcircuit_idx() to decompose back to (node_mask_idx, edge_variant_rank).
+
+    IMPORTANT: edge_variant_rank is the OPTIMIZATION RANK (0=best, 1=2nd best, ...),
+    NOT the original enumeration index. After edge optimization, variants are sorted
+    by metrics, so rank 0 is always the best performing edge configuration.
+    With full_edges_only=True, edge_variant_rank is always 0.
 
     The index space is deterministic based on architecture:
-    - max_edge_configs = 2^(width * width * (depth - 1))
-    - subcircuit_idx = node_mask_idx * max_edge_configs + edge_mask_idx
+    - max_edge_variants = 2^(width * width * (depth - 1))
+    - subcircuit_idx = node_mask_idx * max_edge_variants + edge_variant_rank
 
     Args:
         width: Width of hidden layers
         depth: Number of hidden layers
-        node_mask_idx: Index of the node mask pattern
-        edge_mask_idx: Index of the edge mask configuration (0 = best)
+        node_mask_idx: Index of the node mask pattern in enumeration order
+        edge_variant_rank: Rank of edge variant (0=best, 1=2nd best, ...)
 
     Returns:
         Flat subcircuit index
     """
-    max_edge_configs = 2 ** (width * width * (depth - 1))
-    return node_mask_idx * max_edge_configs + edge_mask_idx
+    max_edge_variants = 2 ** (width * width * (depth - 1))
+    return node_mask_idx * max_edge_variants + edge_variant_rank
 
 
 def parse_subcircuit_idx(width: int, depth: int, subcircuit_idx: int) -> tuple[int, int]:
-    """Extract node and edge mask indices from a flat subcircuit index.
+    """Extract node pattern and edge variant rank from a flat subcircuit index.
 
     Args:
         width: Width of hidden layers
@@ -336,9 +341,11 @@ def parse_subcircuit_idx(width: int, depth: int, subcircuit_idx: int) -> tuple[i
         subcircuit_idx: Flat subcircuit index from make_subcircuit_idx()
 
     Returns:
-        Tuple of (node_mask_idx, edge_mask_idx)
+        Tuple of (node_mask_idx, edge_variant_rank) where:
+        - node_mask_idx: Index of the node pattern in enumeration order
+        - edge_variant_rank: Rank of edge variant (0=best, 1=2nd best, ...)
     """
-    max_edge_configs = 2 ** (width * width * (depth - 1))
-    node_mask_idx = subcircuit_idx // max_edge_configs
-    edge_mask_idx = subcircuit_idx % max_edge_configs
-    return node_mask_idx, edge_mask_idx
+    max_edge_variants = 2 ** (width * width * (depth - 1))
+    node_mask_idx = subcircuit_idx // max_edge_variants
+    edge_variant_rank = subcircuit_idx % max_edge_variants
+    return node_mask_idx, edge_variant_rank

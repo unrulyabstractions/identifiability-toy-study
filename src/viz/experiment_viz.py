@@ -97,11 +97,12 @@ def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) ->
     Creates:
         subcircuits/circuit_diagrams/
             node_masks/
-                {node_mask_idx}.png - Diagram for each node mask (with full edges)
-            edge_masks/
-                {edge_mask_idx}.png - Diagram showing edge mask variations
+                {node_mask_idx}.png - Diagram for each unique node pattern
             subcircuit_masks/
                 {subcircuit_idx}.png - Diagram for each subcircuit
+
+    Note: edge_masks folder is omitted because with full_edges_only=True,
+    edge configuration is fully determined by the node pattern.
     """
     # Get circuits from first trial
     first_trial = next(iter(result.trials.values()), None)
@@ -110,13 +111,11 @@ def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) ->
 
     diagrams_dir = Path(run_dir) / "subcircuits" / "circuit_diagrams"
 
-    # Create all three diagram folders
+    # Create diagram folders (no edge_masks since it's redundant with full_edges_only)
     node_masks_dir = diagrams_dir / "node_masks"
-    edge_masks_dir = diagrams_dir / "edge_masks"
     subcircuit_masks_dir = diagrams_dir / "subcircuit_masks"
 
     node_masks_dir.mkdir(parents=True, exist_ok=True)
-    edge_masks_dir.mkdir(parents=True, exist_ok=True)
     subcircuit_masks_dir.mkdir(parents=True, exist_ok=True)
 
     # Track unique node patterns (by their serialized form)
@@ -157,25 +156,10 @@ def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) ->
                 )
             node_mask_idx_counter += 1
 
-    # For edge_masks, generate diagrams for a few representative edge configurations
-    # Since we use full_edges_only=True, each node pattern has one edge config
-    # Generate edge_masks as copies of node_masks (they're equivalent with full edges)
-    for node_mask_idx in range(min(node_mask_idx_counter, 20)):
-        src = node_masks_dir / f"{node_mask_idx}.png"
-        dst = edge_masks_dir / f"{node_mask_idx}.png"
-        if src.exists() and not dst.exists():
-            import shutil
-
-            try:
-                shutil.copy(src, dst)
-            except Exception:
-                pass
-
     print(
         f"  Generated {len(list(subcircuit_masks_dir.glob('*.png')))} subcircuit diagrams"
     )
     print(f"  Generated {len(list(node_masks_dir.glob('*.png')))} node_mask diagrams")
-    print(f"  Generated {len(list(edge_masks_dir.glob('*.png')))} edge_mask diagrams")
 
 
 @no_pytorch_inference
@@ -326,20 +310,21 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
             ] = {}
             for i, sc_key in enumerate(best_keys):
                 faith = bests_faith[i] if i < len(bests_faith) else None
-                node_mask_idx, edge_mask_idx = parse_subcircuit_key(sc_key, width, depth)
+                node_mask_idx, edge_variant_rank = parse_subcircuit_key(sc_key, width, depth)
                 node_pattern_edges.setdefault(node_mask_idx, []).append(
-                    (edge_mask_idx, i, faith)
+                    (edge_variant_rank, i, faith)
                 )
 
             for i, sc_key in enumerate(best_keys):
-                node_mask_idx, edge_mask_idx = parse_subcircuit_key(sc_key, width, depth)
+                node_mask_idx, edge_variant_rank = parse_subcircuit_key(sc_key, width, depth)
                 circuit = subcircuits[node_mask_idx]
 
-                # Build folder path and label
+                # Build folder path and label with clear naming
+                # Use node{X}_edge{Y} format for clarity
                 folder = os.path.join(
-                    trial_dir, gname, str(node_mask_idx), str(edge_mask_idx)
+                    trial_dir, gname, f"node{node_mask_idx}_edge{edge_variant_rank}"
                 )
-                sc_label = f"{gname} (Node#{node_mask_idx}/Edge#{edge_mask_idx})"
+                sc_label = f"{gname} (Node#{node_mask_idx}/EdgeVariant#{edge_variant_rank})"
 
                 os.makedirs(folder, exist_ok=True)
                 viz_paths[trial_id].setdefault(gname, {})[sc_key] = {}
@@ -515,9 +500,10 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
 
             # After processing all edge variations, save node pattern summaries
             for node_mask_idx, edge_list in node_pattern_edges.items():
-                node_dir = os.path.join(trial_dir, gname, str(node_mask_idx))
+                # Save summary in a node{X} folder (parent of node{X}_edge{Y} folders)
+                node_dir = os.path.join(trial_dir, gname, f"node{node_mask_idx}")
                 edge_variations = [
-                    (edge_mask_idx, faith) for edge_mask_idx, _, faith in edge_list
+                    (edge_variant_rank, faith) for edge_variant_rank, _, faith in edge_list
                 ]
                 save_node_pattern_summary(node_mask_idx, node_dir, edge_variations)
 

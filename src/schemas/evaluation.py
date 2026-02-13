@@ -60,9 +60,55 @@ class ProfilingData(SchemaClass):
     phase_durations_ms: dict[str, float] = field(default_factory=dict)
 
 
-# Type alias for subcircuit keys: flat index from make_subcircuit_idx(node_mask_idx, edge_mask_idx)
-# Use parse_subcircuit_idx() to decompose back to (node_mask_idx, edge_mask_idx)
+# Type alias for subcircuit keys: flat index from make_subcircuit_idx(node_mask_idx, edge_variant_rank)
+# Use parse_subcircuit_idx() to decompose back to (node_mask_idx, edge_variant_rank)
 SubcircuitKey = int
+
+
+@dataclass
+class NodeMaskRanking(SchemaClass):
+    """Ranking entry for a node pattern."""
+
+    node_mask_idx: int
+    rank: int = 0
+    # Metrics (optional, populated during ranking)
+    avg_accuracy: float | None = None
+    avg_bit_similarity: float | None = None
+    avg_faithfulness: float | None = None
+    n_edge_variants: int = 1
+
+
+@dataclass
+class EdgeMaskRanking(SchemaClass):
+    """Ranking entry for an edge pattern."""
+
+    edge_mask_idx: int
+    rank: int = 0
+    # Metrics (optional, populated during ranking)
+    avg_accuracy: float | None = None
+    avg_bit_similarity: float | None = None
+    avg_faithfulness: float | None = None
+    n_compatible_nodes: int = 1
+
+
+@dataclass
+class CompatibilityPair(SchemaClass):
+    """A compatible (node_mask_idx, edge_mask_idx) pair."""
+
+    node_mask_idx: int
+    edge_mask_idx: int
+    subcircuit_idx: int | None = None  # The resulting subcircuit index
+
+
+@dataclass
+class CircuitDiagramsMetadata(SchemaClass):
+    """Metadata for circuit diagrams folder."""
+
+    node_rankings: list[NodeMaskRanking] = field(default_factory=list)
+    edge_rankings: list[EdgeMaskRanking] = field(default_factory=list)
+    compatibility_pairs: list[CompatibilityPair] = field(default_factory=list)
+    ranking_metrics: list[str] = field(default_factory=list)
+    description: str = ""
 
 
 @dataclass

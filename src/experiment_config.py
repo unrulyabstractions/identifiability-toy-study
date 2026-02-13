@@ -213,8 +213,9 @@ class ExperimentConfig(SchemaClass):
 
     base_trial: TrialSetup = field(default_factory=TrialSetup)
 
-    widths: list[int] = field(default_factory=lambda: [ModelParams().width])
-    depths: list[int] = field(default_factory=lambda: [ModelParams().depth])
+    # Architecture is defined in base_trial.model_params.width/depth
+    # Sweep over activations/learning_rates only
+
     activations: list[str] = field(default_factory=get_default_activations)
     learning_rates: list[float] = field(
         default_factory=lambda: [TrainParams().learning_rate]

@@ -12,13 +12,11 @@ Supports different input dimensions:
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-if TYPE_CHECKING:
-    pass
+from src.schemas import GridData, MonteCarloData
 
 
 # =============================================================================
@@ -34,7 +32,7 @@ def generate_monte_carlo_data(
     low: float = -3.0,
     high: float = 3.0,
     device: str = "cpu",
-) -> dict:
+) -> MonteCarloData:
     """Generate Monte Carlo samples and model predictions for decision boundary visualization.
 
     This should be called during experiment execution to pre-compute all data.
@@ -49,11 +47,7 @@ def generate_monte_carlo_data(
         device: Device for computation
 
     Returns:
-        Dict containing:
-            - samples: np.ndarray [n_samples, n_inputs] - input samples
-            - predictions: np.ndarray [n_samples] - model predictions (probabilities)
-            - corners: np.ndarray [2^n_inputs, n_inputs] - binary corner coordinates
-            - corner_predictions: np.ndarray [2^n_inputs] - predictions at corners
+        MonteCarloData with samples, predictions, and corner data
     """
     import torch
 
@@ -78,16 +72,16 @@ def generate_monte_carlo_data(
         corner_logits = model(corners)
         corner_predictions = torch.sigmoid(corner_logits[:, gate_idx])
 
-    return {
-        "samples": samples.cpu().numpy(),
-        "predictions": predictions.cpu().numpy(),
-        "corners": corners.cpu().numpy(),
-        "corner_predictions": corner_predictions.cpu().numpy(),
-        "n_inputs": n_inputs,
-        "gate_idx": gate_idx,
-        "low": low,
-        "high": high,
-    }
+    return MonteCarloData(
+        samples=samples.cpu().numpy(),
+        predictions=predictions.cpu().numpy(),
+        corners=corners.cpu().numpy(),
+        corner_predictions=corner_predictions.cpu().numpy(),
+        n_inputs=n_inputs,
+        gate_idx=gate_idx,
+        low=low,
+        high=high,
+    )
 
 
 def generate_grid_data(
@@ -98,7 +92,7 @@ def generate_grid_data(
     low: float = -3.0,
     high: float = 3.0,
     device: str = "cpu",
-) -> dict:
+) -> GridData:
     """Generate grid samples and model predictions for 1D/2D decision boundary visualization.
 
     Only works for n_inputs <= 2 (grid is too large for higher dimensions).
@@ -113,11 +107,7 @@ def generate_grid_data(
         device: Device for computation
 
     Returns:
-        Dict containing:
-            - grid_axes: list of np.ndarray - axes for each dimension
-            - grid_predictions: np.ndarray - predictions on the grid
-            - corners: np.ndarray [2^n_inputs, n_inputs] - binary corner coordinates
-            - corner_predictions: np.ndarray [2^n_inputs] - predictions at corners
+        GridData with grid axes, predictions, and corner data
     """
     import torch
 
@@ -153,17 +143,17 @@ def generate_grid_data(
         corner_logits = model(corners)
         corner_predictions = torch.sigmoid(corner_logits[:, gate_idx])
 
-    return {
-        "grid_axes": [ax.cpu().numpy() for ax in axes],
-        "grid_predictions": predictions.cpu().numpy().reshape([resolution] * n_inputs),
-        "corners": corners.cpu().numpy(),
-        "corner_predictions": corner_predictions.cpu().numpy(),
-        "n_inputs": n_inputs,
-        "gate_idx": gate_idx,
-        "resolution": resolution,
-        "low": low,
-        "high": high,
-    }
+    return GridData(
+        grid_axes=[ax.cpu().numpy() for ax in axes],
+        grid_predictions=predictions.cpu().numpy().reshape([resolution] * n_inputs),
+        corners=corners.cpu().numpy(),
+        corner_predictions=corner_predictions.cpu().numpy(),
+        n_inputs=n_inputs,
+        gate_idx=gate_idx,
+        resolution=resolution,
+        low=low,
+        high=high,
+    )
 
 
 # =============================================================================
@@ -172,7 +162,7 @@ def generate_grid_data(
 
 
 def plot_decision_boundary_1d_from_data(
-    data: dict,
+    data: GridData,
     gate_name: str = "Gate",
     output_path: str = None,
     show: bool = False,
@@ -181,7 +171,7 @@ def plot_decision_boundary_1d_from_data(
     """Plot decision boundary for 1-input case from pre-computed data.
 
     Args:
-        data: Dict from generate_grid_data with n_inputs=1
+        data: GridData from generate_grid_data with n_inputs=1
         gate_name: Name for title
         output_path: Path to save figure
         show: Whether to display
@@ -190,10 +180,10 @@ def plot_decision_boundary_1d_from_data(
     Returns:
         Path to saved figure
     """
-    x = data["grid_axes"][0]
-    y = data["grid_predictions"]
-    corners = data["corners"]
-    corner_preds = data["corner_predictions"]
+    x = data.grid_axes[0]
+    y = data.grid_predictions
+    corners = data.corners
+    corner_preds = data.corner_predictions
 
     fig, ax = plt.subplots(figsize=(8, 5))
 
@@ -229,7 +219,7 @@ def plot_decision_boundary_1d_from_data(
             fontfamily="monospace",
         )
 
-    ax.set_xlim(data["low"], data["high"])
+    ax.set_xlim(data.low, data.high)
     ax.set_ylim(-0.05, 1.05)
     ax.legend()
     ax.grid(True, alpha=0.3)
@@ -252,31 +242,31 @@ def plot_decision_boundary_1d_from_data(
 
 
 def plot_decision_boundary_2d_from_data(
-    data: dict,
+    data: GridData,
     gate_name: str = "Gate",
     output_path: str = None,
     show: bool = False,
-    mc_data: dict = None,
+    mc_data: MonteCarloData = None,
     loss: float = None,
 ) -> str:
     """Plot decision boundary for 2-input case from pre-computed data.
 
     Args:
-        data: Dict from generate_grid_data with n_inputs=2
+        data: GridData from generate_grid_data with n_inputs=2
         gate_name: Name for title
         output_path: Path to save figure
         show: Whether to display
-        mc_data: Optional Monte Carlo data for overlay
+        mc_data: Optional MonteCarloData for overlay
         loss: Optional loss value to display in title (for full circuit)
 
     Returns:
         Path to saved figure
     """
-    x_axis = data["grid_axes"][0]
-    y_axis = data["grid_axes"][1]
-    zz = data["grid_predictions"]
-    corners = data["corners"]
-    corner_preds = data["corner_predictions"]
+    x_axis = data.grid_axes[0]
+    y_axis = data.grid_axes[1]
+    zz = data.grid_predictions
+    corners = data.corners
+    corner_preds = data.corner_predictions
 
     xx, yy = np.meshgrid(x_axis, y_axis, indexing="ij")
 
@@ -287,8 +277,8 @@ def plot_decision_boundary_2d_from_data(
 
     # Monte Carlo overlay
     if mc_data is not None:
-        samples = mc_data["samples"]
-        preds = mc_data["predictions"]
+        samples = mc_data.samples
+        preds = mc_data.predictions
         ax.scatter(
             samples[:, 0], samples[:, 1], c=preds, cmap="RdYlBu_r", s=5, alpha=0.3
         )
@@ -324,8 +314,8 @@ def plot_decision_boundary_2d_from_data(
             fontfamily="monospace",
         )
 
-    ax.set_xlim(data["low"], data["high"])
-    ax.set_ylim(data["low"], data["high"])
+    ax.set_xlim(data.low, data.high)
+    ax.set_ylim(data.low, data.high)
     ax.set_aspect("equal")
 
     plt.tight_layout()
@@ -346,7 +336,7 @@ def plot_decision_boundary_2d_from_data(
 
 
 def plot_decision_boundary_3d_from_data(
-    data: dict,
+    data: MonteCarloData,
     gate_name: str = "Gate",
     output_path: str = None,
     show: bool = False,
@@ -358,7 +348,7 @@ def plot_decision_boundary_3d_from_data(
     - 2D projections onto each pair of axes
 
     Args:
-        data: Dict from generate_monte_carlo_data with n_inputs=3
+        data: MonteCarloData from generate_monte_carlo_data with n_inputs=3
         gate_name: Name for title
         output_path: Base path for figures
         show: Whether to display
@@ -366,10 +356,10 @@ def plot_decision_boundary_3d_from_data(
     Returns:
         Dict of paths to saved figures
     """
-    samples = data["samples"]
-    predictions = data["predictions"]
-    corners = data["corners"]
-    corner_preds = data["corner_predictions"]
+    samples = data.samples
+    predictions = data.predictions
+    corners = data.corners
+    corner_preds = data.corner_predictions
 
     paths = {}
     base_path = Path(output_path) if output_path else Path(".")
@@ -460,8 +450,8 @@ def plot_decision_boundary_3d_from_data(
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(f"{gate_name}: 2D Projection ({suffix})")
-        ax.set_xlim(data["low"], data["high"])
-        ax.set_ylim(data["low"], data["high"])
+        ax.set_xlim(data.low, data.high)
+        ax.set_ylim(data.low, data.high)
         ax.set_aspect("equal")
 
         plt.tight_layout()
@@ -478,7 +468,7 @@ def plot_decision_boundary_3d_from_data(
 
 
 def plot_decision_boundary_nd_from_data(
-    data: dict,
+    data: MonteCarloData,
     gate_name: str = "Gate",
     output_path: str = None,
     show: bool = False,
@@ -490,7 +480,7 @@ def plot_decision_boundary_nd_from_data(
     - 3D projections for selected triplets
 
     Args:
-        data: Dict from generate_monte_carlo_data with n_inputs >= 4
+        data: MonteCarloData from generate_monte_carlo_data with n_inputs >= 4
         gate_name: Name for title
         output_path: Base path for figures
         show: Whether to display
@@ -498,9 +488,9 @@ def plot_decision_boundary_nd_from_data(
     Returns:
         Dict of paths to saved figures
     """
-    samples = data["samples"]
-    predictions = data["predictions"]
-    n_inputs = data["n_inputs"]
+    samples = data.samples
+    predictions = data.predictions
+    n_inputs = data.n_inputs
 
     paths = {}
     base_path = Path(output_path) if output_path else Path(".")
@@ -526,8 +516,8 @@ def plot_decision_boundary_nd_from_data(
             ax.set_xlabel(f"Input {i + 1}")
             ax.set_ylabel(f"Input {j + 1}")
             ax.set_title(f"{gate_name}: 2D Projection (x{i + 1}_x{j + 1})")
-            ax.set_xlim(data["low"], data["high"])
-            ax.set_ylim(data["low"], data["high"])
+            ax.set_xlim(data.low, data.high)
+            ax.set_ylim(data.low, data.high)
             ax.set_aspect("equal")
 
             plt.tight_layout()
@@ -590,7 +580,7 @@ def plot_decision_boundary_nd_from_data(
 
 
 def plot_decision_boundary_from_data(
-    data: dict,
+    data: GridData | MonteCarloData,
     gate_name: str = "Gate",
     output_path: str = None,
     show: bool = False,
@@ -599,7 +589,7 @@ def plot_decision_boundary_from_data(
     """Plot decision boundary from pre-computed data - dispatches based on n_inputs.
 
     Args:
-        data: Dict from generate_grid_data (1D/2D) or generate_monte_carlo_data (3D+)
+        data: GridData (1D/2D) or MonteCarloData (3D+)
         gate_name: Name for title
         output_path: Path to save figure(s)
         show: Whether to display
@@ -608,7 +598,7 @@ def plot_decision_boundary_from_data(
     Returns:
         Path (for 1D/2D) or dict of paths (for 3D+)
     """
-    n_inputs = data["n_inputs"]
+    n_inputs = data.n_inputs
 
     if n_inputs == 1:
         return plot_decision_boundary_1d_from_data(data, gate_name, output_path, show, loss=loss)
@@ -621,7 +611,7 @@ def plot_decision_boundary_from_data(
 
 
 def visualize_all_gates_from_data(
-    gate_data: dict[str, dict],
+    gate_data: dict[str, GridData | MonteCarloData],
     output_dir: str,
     show: bool = False,
     loss: float = None,
@@ -629,7 +619,7 @@ def visualize_all_gates_from_data(
     """Visualize decision boundaries for all gates from pre-computed data.
 
     Args:
-        gate_data: Dict mapping gate_name -> data dict
+        gate_data: Dict mapping gate_name -> GridData or MonteCarloData
         output_dir: Directory to save figures
         show: Whether to display
         loss: Optional loss value to display in title (for full circuit plots)
@@ -642,7 +632,7 @@ def visualize_all_gates_from_data(
 
     for gate_name, data in gate_data.items():
         output_path = os.path.join(output_dir, f"{gate_name}_decision_boundary")
-        n_inputs = data["n_inputs"]
+        n_inputs = data.n_inputs
         if n_inputs <= 2:
             output_path += ".png"
         results[gate_name] = plot_decision_boundary_from_data(

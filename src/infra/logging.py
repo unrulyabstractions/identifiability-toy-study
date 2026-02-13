@@ -93,7 +93,7 @@ def log_edge_variant_summary(
 
 
 def parse_subcircuit_key(key: int, width: int, depth: int) -> tuple[int, int]:
-    """Parse a flat subcircuit index into (node_mask_idx, edge_mask_idx).
+    """Parse a flat subcircuit index into (node_mask_idx, edge_variant_rank).
 
     Args:
         key: Flat subcircuit index from make_subcircuit_idx()
@@ -101,7 +101,8 @@ def parse_subcircuit_key(key: int, width: int, depth: int) -> tuple[int, int]:
         depth: Number of hidden layers
 
     Returns:
-        Tuple of (node_mask_idx, edge_mask_idx)
+        Tuple of (node_mask_idx, edge_variant_rank) where edge_variant_rank
+        is the optimization rank (0=best, 1=2nd best, ...)
     """
     from src.circuit import parse_subcircuit_idx
 
@@ -110,8 +111,8 @@ def parse_subcircuit_key(key: int, width: int, depth: int) -> tuple[int, int]:
 
 def format_subcircuit_key(key: int, width: int, depth: int) -> str:
     """Format a subcircuit key for display."""
-    node_mask_idx, edge_mask_idx = parse_subcircuit_key(key, width, depth)
-    return f"Node#{node_mask_idx}/Edge#{edge_mask_idx}"
+    node_mask_idx, edge_variant_rank = parse_subcircuit_key(key, width, depth)
+    return f"Node#{node_mask_idx}/EdgeVariant#{edge_variant_rank}"
 
 
 def log_faithfulness_metrics(

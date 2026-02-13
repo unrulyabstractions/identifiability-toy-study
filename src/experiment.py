@@ -10,7 +10,7 @@ import random
 from collections.abc import Iterator
 from itertools import combinations, product
 
-from src.circuit.precompute import precompute_circuits_for_architectures
+from src.circuit.precompute import precompute_circuits_for_architecture
 from src.domain import get_max_n_inputs, normalize_gate_names
 from src.experiment_config import ExperimentConfig, TrialSetting, TrialSetup
 from src.infra import parallel_map
@@ -75,8 +75,9 @@ def build_trial_settings(
     # Determine input size from gates - use max across all gates to support mixed sizes
     input_size = get_max_n_inputs(normalized_gates)
 
-    # Determine output size for circuits (max gates across all combinations)
-    output_size = max(len(combo) for combo in gates_combinations)
+    # Get architecture from base_trial.model_params
+    width = cfg.base_trial.model_params.width
+    depth = cfg.base_trial.model_params.depth
 
     # Generate data ONCE for ALL gates
     logger and logger.info("\nGenerating data for all gates...")
@@ -85,10 +86,10 @@ def build_trial_settings(
         data_params, normalized_gates, cfg.device, logger=logger, debug=cfg.debug
     )
 
-    # Pre-compute circuits for all architectures
-    logger and logger.info("\nPre-computing circuits for all architectures...")
-    circuits_cache = precompute_circuits_for_architectures(
-        cfg.widths, cfg.depths, input_size, output_size, logger
+    # Pre-compute circuits for the single architecture
+    logger and logger.info("\nPre-computing circuits...")
+    subcircuits, subcircuit_structures = precompute_circuits_for_architecture(
+        width, depth, input_size, logger
     )
 
     # Collect all trial settings
@@ -102,17 +103,14 @@ def build_trial_settings(
             # Compute which columns this trial needs from master data
             gate_indices = [gate_to_index[gate] for gate in logic_gates]
 
-            for width, depth, activation, lr in product(
-                cfg.widths, cfg.depths, cfg.activations, cfg.learning_rates
-            ):
+            for activation, lr in product(cfg.activations, cfg.learning_rates):
                 # Each trial should have its independent set of params
                 model_params = copy.deepcopy(cfg.base_trial.model_params)
                 train_params = copy.deepcopy(cfg.base_trial.train_params)
                 constraints = copy.deepcopy(cfg.base_trial.constraints)
 
                 train_params.learning_rate = lr
-                model_params.width = width
-                model_params.depth = depth
+                # width and depth come from base_trial.model_params (already set)
                 model_params.activation = activation
                 model_params.logic_gates = list(logic_gates)
 
@@ -123,9 +121,6 @@ def build_trial_settings(
                     train_params=train_params,
                     constraints=constraints,
                 )
-
-                # Get pre-computed circuits for this architecture
-                subcircuits, subcircuit_structures = circuits_cache[(width, depth)]
 
                 trial_settings.append(
                     TrialSetting(
@@ -155,8 +150,8 @@ def experiment_run(
     """
     trace(
         "experiment_run starting",
-        widths=cfg.widths,
-        depths=cfg.depths,
+        width=cfg.base_trial.model_params.width,
+        depth=cfg.base_trial.model_params.depth,
         activations=cfg.activations,
     )
     logger and logger.info(f"\n\n ExperimentConfig: \n {cfg} \n\n")
@@ -208,8 +203,8 @@ def run_experiment(
     """
     trace(
         "run_experiment starting",
-        widths=cfg.widths,
-        depths=cfg.depths,
+        width=cfg.base_trial.model_params.width,
+        depth=cfg.base_trial.model_params.depth,
         activations=cfg.activations,
     )
     logger and logger.info(f"\n\n ExperimentConfig: \n {cfg} \n\n")

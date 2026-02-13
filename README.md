@@ -103,18 +103,25 @@ Each gate folder contains a `summary.json` with:
 
 ```
 runs/run_TIMESTAMP/
-  config.json              # Experiment configuration
-  trial_001/
-    setup.json             # Trial parameters
-    metrics.json           # All computed metrics
-    circuits.json          # Identified subcircuits
-    tensors.pt             # Saved activations/weights
-    AND/                   # Per-gate results
-      summary.json         # Gate-level metrics summary
-      activations_*.png    # Circuit activation visualizations
-      ...
-    spd/                   # SPD decomposition results
-      ...
+  summary.json              # Ranked results across all trials
+  explanation.md            # How to read this folder
+  config.json               # Experiment configuration
+  subcircuits/
+    summary.json            # Subcircuit rankings overview
+    explanation.md          # How to read this folder
+    mask_idx_map.json       # Index mapping (node_mask_idx, edge_mask_idx)
+    circuit_diagrams/
+      ranked_node_masks/    # Diagrams sorted by ranking
+      structural_faithfulness/
+        summary.json        # Structural analysis
+        explanation.md
+  trials/
+    {trial_id}/
+      summary.json          # Trial-level results
+      explanation.md        # How to read this folder
+      config.json           # Trial configuration
+      metrics.json          # All computed metrics
+      tensors.pt            # Saved activations/weights
 ```
 
 ## Attribution

@@ -163,8 +163,8 @@ def faithfulness_phase(
 
     Args:
         subcircuit_keys: List of keys identifying subcircuits. Can be:
-            - Integers (legacy: node pattern indices)
-            - Tuples of (node_mask_idx, edge_mask_idx) for hierarchical structure
+            - Integers (flat indices from make_subcircuit_idx)
+            - Tuples of (node_mask_idx, edge_variant_rank) for hierarchical structure
         subcircuit_models: Dict mapping keys to subcircuit models
         subcircuit_structures: Dict mapping keys to circuit structures
     """
@@ -279,8 +279,8 @@ def decision_boundary_phase(
         gate_circuits = trial_metrics.per_gate_circuits.get(gate_name, {})
 
         for subcircuit_idx in per_gate_bests[gate_name]:
-            # Parse flat index to get node and edge indices
-            node_mask_idx, edge_mask_idx = parse_subcircuit_idx(width, depth, subcircuit_idx)
+            # Parse flat index to get node pattern and edge variant rank
+            node_mask_idx, edge_variant_rank = parse_subcircuit_idx(width, depth, subcircuit_idx)
 
             # Look up the edge-masked circuit (stored during gate analysis)
             sc_data = gate_circuits.get(subcircuit_idx)

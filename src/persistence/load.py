@@ -420,12 +420,11 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                     noise_metrics = None
                     if noise_data:
                         noise_samples = [ObservationalSample(**s) for s in noise_data.get("samples", [])]
-                        # Load similarity from nested structure or legacy flat fields
                         sim_data = noise_data.get("similarity", {})
                         similarity = Similarity(
-                            bit=sim_data.get("bit", noise_data.get("agreement_bit", 0)),
-                            logit=sim_data.get("logit", 1.0 - noise_data.get("mse_mean", 0)),
-                            best=sim_data.get("best", noise_data.get("agreement_best", 0)),
+                            bit=sim_data.get("bit", 0.0),
+                            logit=sim_data.get("logit", 0.0),
+                            best=sim_data.get("best", 0.0),
                         )
                         noise_metrics = NoiseRobustnessMetrics(
                             samples=noise_samples,
@@ -439,12 +438,11 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                     ood_metrics = None
                     if ood_data:
                         ood_samples = [ObservationalSample(**s) for s in ood_data.get("samples", [])]
-                        # Load similarity from nested structure or legacy flat fields
                         sim_data = ood_data.get("similarity", {})
                         similarity = Similarity(
-                            bit=sim_data.get("bit", ood_data.get("agreement_bit", 0)),
-                            logit=sim_data.get("logit", 1.0 - ood_data.get("mse_mean", 0)),
-                            best=sim_data.get("best", ood_data.get("agreement_best", 0)),
+                            bit=sim_data.get("bit", 0.0),
+                            logit=sim_data.get("logit", 0.0),
+                            best=sim_data.get("best", 0.0),
                         )
                         ood_metrics = OutOfDistributionMetrics(
                             samples=ood_samples,
@@ -465,23 +463,22 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                     # Helper to load PatchStatistics with Similarity
                     def _load_patch_stats(ps_data):
                         samples = [InterventionalSample(**s) for s in ps_data.get("samples", [])]
-                        # Load from nested structure or legacy flat fields
                         mean_data = ps_data.get("mean", {})
                         std_data = ps_data.get("std", {})
                         mean = Similarity(
-                            bit=mean_data.get("bit", ps_data.get("mean_bit_similarity", 0)),
-                            logit=mean_data.get("logit", ps_data.get("mean_logit_similarity", 0)),
-                            best=mean_data.get("best", ps_data.get("mean_best_similarity", 0)),
+                            bit=mean_data.get("bit", 0.0),
+                            logit=mean_data.get("logit", 0.0),
+                            best=mean_data.get("best", 0.0),
                         )
                         std = Similarity(
-                            bit=std_data.get("bit", ps_data.get("std_bit_similarity", 0)),
-                            logit=std_data.get("logit", ps_data.get("std_logit_similarity", 0)),
-                            best=std_data.get("best", ps_data.get("std_best_similarity", 0)),
+                            bit=std_data.get("bit", 0.0),
+                            logit=std_data.get("logit", 0.0),
+                            best=std_data.get("best", 0.0),
                         )
                         return PatchStatistics(
                             mean=mean,
                             std=std,
-                            n_samples=ps_data.get("n_samples", ps_data.get("n_interventions", 0)),
+                            n_samples=ps_data.get("n_samples", 0),
                             samples=samples,
                         )
 
