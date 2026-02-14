@@ -243,28 +243,36 @@ def decision_boundary_phase(
     width = setup.model_params.width
     depth = setup.model_params.depth
 
+    # Get model's expected input size (may differ from individual gate n_inputs)
+    model_n_inputs = model.layers[0][0].in_features
+
     gate_db_data = {}
     subcircuit_db_data = {}
 
     for gate_idx, gate_name in enumerate(gate_names):
         gate = resolve_gate(gate_name)
         n_inputs = gate.n_inputs
+        gate_model = gate_models[gate_idx]
 
-        # Generate data for full model
+        # Generate data for this gate's separated model
+        # We visualize only n_inputs dimensions but pad to model_n_inputs for model
+        # (e.g., XOR visualizes 2D but model may expect 3 inputs due to MAJORITY)
         if n_inputs <= 2:
             gate_db_data[gate_name] = generate_grid_data(
-                model=model,
+                model=gate_model,
                 n_inputs=n_inputs,
-                gate_idx=gate_idx,
+                gate_idx=0,  # gate_model has single output
                 device=device,
-                resolution=400,  # Higher resolution for smoother contours (-3 to 3 range)
+                resolution=400,  # Higher resolution for smoother contours
+                model_n_inputs=model_n_inputs,
             )
         else:
             gate_db_data[gate_name] = generate_monte_carlo_data(
-                model=model,
+                model=gate_model,
                 n_inputs=n_inputs,
-                gate_idx=gate_idx,
+                gate_idx=0,  # gate_model has single output
                 device=device,
+                model_n_inputs=model_n_inputs,
             )
 
         # Generate data for best subcircuits
@@ -309,7 +317,8 @@ def decision_boundary_phase(
                         n_inputs=n_inputs,
                         gate_idx=0,  # Subcircuit model has single output
                         device=device,
-                        resolution=400,  # Higher resolution for smoother contours (-3 to 3 range)
+                        resolution=400,  # Higher resolution for smoother contours
+                        model_n_inputs=model_n_inputs,
                     )
                 else:
                     data = generate_monte_carlo_data(
@@ -317,6 +326,7 @@ def decision_boundary_phase(
                         n_inputs=n_inputs,
                         gate_idx=0,
                         device=device,
+                        model_n_inputs=model_n_inputs,
                     )
 
                 subcircuit_db_data[gate_name][subcircuit_idx] = data

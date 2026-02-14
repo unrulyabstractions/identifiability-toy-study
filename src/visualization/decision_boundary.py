@@ -32,6 +32,7 @@ def generate_monte_carlo_data(
     low: float = -3.0,
     high: float = 3.0,
     device: str = "cpu",
+    model_n_inputs: int = None,
 ) -> MonteCarloData:
     """Generate Monte Carlo samples and model predictions for decision boundary visualization.
 
@@ -39,37 +40,56 @@ def generate_monte_carlo_data(
 
     Args:
         model: MLP model to evaluate
-        n_inputs: Number of input dimensions
+        n_inputs: Number of input dimensions to visualize
         gate_idx: Which gate output to evaluate
         n_samples: Number of Monte Carlo samples
         low: Lower bound for sampling
         high: Upper bound for sampling
         device: Device for computation
+        model_n_inputs: Number of inputs the model expects (for padding when model
+            expects more inputs than we're visualizing). If None, uses n_inputs.
 
     Returns:
         MonteCarloData with samples, predictions, and corner data
     """
     import torch
 
-    # Generate random samples
+    if model_n_inputs is None:
+        model_n_inputs = n_inputs
+
+    # Generate random samples for visualization dimensions
     samples = torch.rand(n_samples, n_inputs, device=device) * (high - low) + low
+
+    # Pad samples if model expects more inputs
+    if model_n_inputs > n_inputs:
+        padding = torch.zeros(n_samples, model_n_inputs - n_inputs, device=device)
+        model_samples = torch.cat([samples, padding], dim=1)
+    else:
+        model_samples = samples
 
     # Evaluate model
     model.eval()
     with torch.no_grad():
-        logits = model(samples)
+        logits = model(model_samples)
         predictions = torch.sigmoid(logits[:, gate_idx])
 
-    # Generate binary corners
+    # Generate binary corners for visualization dimensions
     n_corners = 2**n_inputs
     corners = torch.zeros(n_corners, n_inputs, device=device)
     for i in range(n_corners):
         for j in range(n_inputs):
             corners[i, j] = (i >> j) & 1
 
+    # Pad corners if model expects more inputs
+    if model_n_inputs > n_inputs:
+        corner_padding = torch.zeros(n_corners, model_n_inputs - n_inputs, device=device)
+        model_corners = torch.cat([corners, corner_padding], dim=1)
+    else:
+        model_corners = corners
+
     # Evaluate corners
     with torch.no_grad():
-        corner_logits = model(corners)
+        corner_logits = model(model_corners)
         corner_predictions = torch.sigmoid(corner_logits[:, gate_idx])
 
     return MonteCarloData(
@@ -92,6 +112,7 @@ def generate_grid_data(
     low: float = -3.0,
     high: float = 3.0,
     device: str = "cpu",
+    model_n_inputs: int = None,
 ) -> GridData:
     """Generate grid samples and model predictions for 1D/2D decision boundary visualization.
 
@@ -99,12 +120,14 @@ def generate_grid_data(
 
     Args:
         model: MLP model to evaluate
-        n_inputs: Number of input dimensions (must be 1 or 2)
+        n_inputs: Number of input dimensions to visualize (must be 1 or 2)
         gate_idx: Which gate output to evaluate
         resolution: Number of points per dimension
         low: Lower bound
         high: Upper bound
         device: Device for computation
+        model_n_inputs: Number of inputs the model expects (for padding when model
+            expects more inputs than we're visualizing). If None, uses n_inputs.
 
     Returns:
         GridData with grid axes, predictions, and corner data
@@ -114,7 +137,10 @@ def generate_grid_data(
     if n_inputs > 2:
         raise ValueError(f"Grid data only supports n_inputs <= 2, got {n_inputs}")
 
-    # Create grid
+    if model_n_inputs is None:
+        model_n_inputs = n_inputs
+
+    # Create grid for visualization dimensions
     axes = [
         torch.linspace(low, high, resolution, device=device) for _ in range(n_inputs)
     ]
@@ -125,22 +151,37 @@ def generate_grid_data(
         xx, yy = torch.meshgrid(axes[0], axes[1], indexing="ij")
         grid_points = torch.stack([xx.flatten(), yy.flatten()], dim=1)
 
+    # Pad grid points if model expects more inputs
+    if model_n_inputs > n_inputs:
+        n_grid_points = grid_points.shape[0]
+        padding = torch.zeros(n_grid_points, model_n_inputs - n_inputs, device=device)
+        model_grid_points = torch.cat([grid_points, padding], dim=1)
+    else:
+        model_grid_points = grid_points
+
     # Evaluate model on grid
     model.eval()
     with torch.no_grad():
-        logits = model(grid_points)
+        logits = model(model_grid_points)
         predictions = torch.sigmoid(logits[:, gate_idx])
 
-    # Generate binary corners
+    # Generate binary corners for visualization dimensions
     n_corners = 2**n_inputs
     corners = torch.zeros(n_corners, n_inputs, device=device)
     for i in range(n_corners):
         for j in range(n_inputs):
             corners[i, j] = (i >> j) & 1
 
+    # Pad corners if model expects more inputs
+    if model_n_inputs > n_inputs:
+        corner_padding = torch.zeros(n_corners, model_n_inputs - n_inputs, device=device)
+        model_corners = torch.cat([corners, corner_padding], dim=1)
+    else:
+        model_corners = corners
+
     # Evaluate corners
     with torch.no_grad():
-        corner_logits = model(corners)
+        corner_logits = model(model_corners)
         corner_predictions = torch.sigmoid(corner_logits[:, gate_idx])
 
     return GridData(
