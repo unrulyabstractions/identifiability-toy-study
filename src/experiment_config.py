@@ -91,7 +91,7 @@ def get_default_epsilon():
 
 def get_default_faith_n_samples():
     if _FAST_TEST_MODE:
-        return 5
+        return 200
     return 200
 
 
@@ -240,7 +240,7 @@ class ExperimentConfig(SchemaClass):
 
     # If total trials > this threshold, use iterative mode (save after each trial)
     # Set to 0 to always use iterative mode, or a large number to always use monolith
-    max_num_trials_in_monolith: int = 10
+    max_num_trials_in_monolith: int = 0
 
     def __str__(self) -> str:
         setup_dict = asdict(self)

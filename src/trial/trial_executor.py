@@ -36,8 +36,6 @@ def run_trial(
     3. Uses pre-computed subcircuits (or enumerates if not provided)
     4. Runs robustness and faithfulness analysis on best subcircuits
 
-    Note: SPD decomposition is now run separately via src.spd.run_spd()
-
     Args:
         setup: Trial configuration (model params, training params, etc.)
         data: Training, validation, and test data
@@ -138,7 +136,8 @@ def run_trial(
         {"idx": idx, **s.to_dict()} for idx, s in enumerate(subcircuits)
     ]
     trial_result.subcircuit_structure_analysis = [
-        {"node_mask_idx": idx, **s.to_dict()} for idx, s in enumerate(subcircuit_structures)
+        {"node_mask_idx": idx, **s.to_dict()}
+        for idx, s in enumerate(subcircuit_structures)
     ]
     update_status("FINISHED_CIRCUIT_FINDING")
 

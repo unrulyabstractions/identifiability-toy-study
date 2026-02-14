@@ -74,11 +74,6 @@ def get_args() -> Any:
         default=None,
         help="Specific trial ID to process across runs (for --analysis-only or --spd-only)",
     )
-    parser.add_argument(
-        "--iterative",
-        action="store_true",
-        help="Force iterative mode (save after each trial)",
-    )
     args = parser.parse_args()
 
     # args.spd_only should turn on args.spd
@@ -212,7 +207,7 @@ def run_single_experiment(args: Any, output_dir: Path) -> None:
     trial_settings, _ = build_trial_settings(cfg, logger)
     n_trials = len(trial_settings)
 
-    use_iterative = args.iterative or n_trials > cfg.max_num_trials_in_monolith
+    use_iterative = n_trials > cfg.max_num_trials_in_monolith
     mode_name = "iterative" if use_iterative else "monolith"
     logger.info(f"\nRunning {n_trials} trials in {mode_name} mode\n")
 
@@ -264,7 +259,9 @@ def main() -> None:
         print(f"Running ALL {len(test_configs)} test configurations: {test_configs}")
         for i, config_idx in enumerate(test_configs):
             print(f"\n{'=' * 60}")
-            print(f"  Test Configuration {i + 1}/{len(test_configs)}: --test {config_idx}")
+            print(
+                f"  Test Configuration {i + 1}/{len(test_configs)}: --test {config_idx}"
+            )
             print(f"{'=' * 60}\n")
             set_test_mode_global(True, config_idx)
             run_single_experiment(args, output_dir)
