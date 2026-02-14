@@ -342,16 +342,32 @@ def save_faithfulness_json(
         if cf_valid_scores:
             cf_epsilon = abs(min(1.0 - s for s in cf_valid_scores))
 
-    # Summary.json in faithfulness/ with nested structure
-    summary = FaithfulnessSummary(
-        observational=FaithfulnessCategoryScore(score=obs_overall, epsilon=obs_epsilon),
-        interventional=FaithfulnessCategoryScore(score=int_overall, epsilon=int_epsilon),
-        counterfactual=FaithfulnessCategoryScore(score=cf_overall, epsilon=cf_epsilon),
-        overall=(obs_overall + int_overall + cf_overall) / 3.0 if (obs_overall + int_overall + cf_overall) > 0 else 0.0,
-    )
+    # Summary.json in faithfulness/ with detailed nested structure
+    overall_score = (obs_overall + int_overall + cf_overall) / 3.0 if (obs_overall + int_overall + cf_overall) > 0 else 0.0
+
+    # Build detailed summary with all metrics
+    detailed_summary = {
+        "observational": {
+            "score": obs_overall,
+            "epsilon": obs_epsilon,
+            "details": obs_metrics if observational else None,
+        },
+        "interventional": {
+            "score": int_overall,
+            "epsilon": int_epsilon,
+            "details": int_metrics if faithfulness and faithfulness.interventional else None,
+        },
+        "counterfactual": {
+            "score": cf_overall,
+            "epsilon": cf_epsilon,
+            "details": cf_metrics if faithfulness and faithfulness.counterfactual else None,
+        },
+        "overall": overall_score,
+    }
+
     summary_path = os.path.join(faithfulness_dir, "summary.json")
     with open(summary_path, "w") as f:
-        json.dump(asdict(summary), f, indent=2)
+        json.dump(detailed_summary, f, indent=2)
     paths["summary.json"] = summary_path
 
     # Generate explanation.md

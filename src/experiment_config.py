@@ -114,10 +114,14 @@ def get_default_activations():
 
 @dataclass
 class DataParams(SchemaClass):
-    n_samples_train: int = get_default_train_n_samples()
-    n_samples_val: int = get_default_train_n_samples() // 8
-    n_samples_test: int = get_default_train_n_samples() // 8
-    noise_std: float = get_default_train_noise()
+    n_samples_train: int = field(default_factory=get_default_train_n_samples)
+    n_samples_val: int = field(
+        default_factory=lambda: get_default_train_n_samples() // 8
+    )
+    n_samples_test: int = field(
+        default_factory=lambda: get_default_train_n_samples() // 8
+    )
+    noise_std: float = field(default_factory=get_default_train_noise)
     skewed_distribution: bool = False
 
 
@@ -132,14 +136,14 @@ class ModelParams(SchemaClass):
 @dataclass
 class TrainParams(SchemaClass):
     learning_rate: float = 1e-2
-    batch_size: int = DataParams().n_samples_train // 8
+    batch_size: int = field(default_factory=lambda: get_default_train_n_samples() // 8)
     epochs: int = 4000
     val_frequency: int = 10
 
 
 @dataclass
 class IdentifiabilityConstraints(SchemaClass):
-    epsilon: float = get_default_epsilon()
+    epsilon: float = field(default_factory=get_default_epsilon)
 
 
 @dataclass
@@ -147,13 +151,15 @@ class FaithfulnessConfig(SchemaClass):
     """Configuration for faithfulness analysis."""
 
     min_subcircuits_per_gate: int = 1
-    max_subcircuits_per_gate: int = get_default_max_subcircuits_per_gate()
-    min_edge_variations_per_subcircuit: int = 1
-    max_edge_variations_per_subcircuit: int = (
-        get_default_max_edge_variations_per_subcircuits()
+    max_subcircuits_per_gate: int = field(
+        default_factory=get_default_max_subcircuits_per_gate
     )
-    n_interventions_per_patch: int = get_default_faith_n_samples()
-    n_counterfactual_pairs: int = get_default_faith_n_samples()
+    min_edge_variations_per_subcircuit: int = 1
+    max_edge_variations_per_subcircuit: int = field(
+        default_factory=get_default_max_edge_variations_per_subcircuits
+    )
+    n_interventions_per_patch: int = field(default_factory=get_default_faith_n_samples)
+    n_counterfactual_pairs: int = field(default_factory=get_default_faith_n_samples)
 
     def __post_init__(self):
         super().__post_init__()

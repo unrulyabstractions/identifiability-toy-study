@@ -128,20 +128,23 @@ def _save_gates_registry(result, run_dir: Path):
 
 def _save_summary_by_gate(result, run_dir: Path):
     """Save summary_by_gate.json with per-gate aggregated metrics across all trials."""
+    from src.circuit import parse_subcircuit_idx
     from src.domain import get_base_gate_name
 
     gate_summaries = {}
 
     for trial_id, trial in result.trials.items():
+        # Get architecture for parsing flat indices
+        width = trial.setup.model_params.width
+        depth = trial.setup.model_params.depth
+
         for gate_name, gate_metrics in trial.metrics.per_gate_metrics.items():
             if gate_name not in gate_summaries:
                 gate_summaries[gate_name] = {
                     "gate_name": gate_name,
                     "base_gate": get_base_gate_name(gate_name),
                     "n_trials": 0,
-                    "test_accuracies": [],
-                    "best_subcircuit_accuracies": [],
-                    "trial_results": [],
+                    "per_trial": [],
                 }
 
             summary = gate_summaries[gate_name]
@@ -149,42 +152,111 @@ def _save_summary_by_gate(result, run_dir: Path):
 
             # Get test accuracy for this gate
             gate_test_acc = getattr(gate_metrics, "test_acc", None)
-            if gate_test_acc is not None:
-                summary["test_accuracies"].append(gate_test_acc)
 
-            # Get best subcircuit metrics
+            # Get best subcircuit by accuracy
             sc_metrics = getattr(gate_metrics, "subcircuit_metrics", [])
             sorted_by_acc = sorted(
                 sc_metrics, key=lambda x: getattr(x, "accuracy", 0) or 0, reverse=True
             )
 
+            # Get faithfulness metrics and their flat indices
+            bests_indices = trial.metrics.per_gate_bests.get(gate_name, [])
+            faith_list = trial.metrics.per_gate_bests_faith.get(gate_name, [])
+
+            # Build mapping from node_mask_idx to (edge_variant_rank, faithfulness)
+            faith_by_node_idx = {}
+            for flat_idx, faith in zip(bests_indices, faith_list):
+                node_mask_idx, edge_variant_rank = parse_subcircuit_idx(width, depth, flat_idx)
+                # Store by node_mask_idx (prefer edge_variant_rank 0 if multiple)
+                if node_mask_idx not in faith_by_node_idx or edge_variant_rank == 0:
+                    faith_by_node_idx[node_mask_idx] = (edge_variant_rank, faith)
+
             if sorted_by_acc:
                 best = sorted_by_acc[0]
-                summary["best_subcircuit_accuracies"].append(best.accuracy or 0)
-                summary["trial_results"].append(
-                    {
-                        "trial_id": trial_id,
-                        "test_acc": gate_test_acc,
-                        "best_subcircuit_idx": best.idx,
-                        "best_subcircuit_accuracy": best.accuracy,
-                        "best_subcircuit_bit_similarity": best.bit_similarity,
+
+                # Get edge_variant_rank for this node_mask_idx
+                edge_info = faith_by_node_idx.get(best.idx)
+                edge_variant_rank = edge_info[0] if edge_info else 0
+
+                trial_entry = {
+                    "trial_id": trial_id,
+                    "gate_test_acc": gate_test_acc,
+                    "top_subcircuit": {
+                        "_description": "Subcircuit with highest accuracy for this gate",
+                        "node_mask_idx": best.idx,
+                        "edge_variant_rank": edge_variant_rank,
+                        "accuracy": best.accuracy,
+                        "bit_similarity": best.bit_similarity,
+                    },
+                }
+
+                # Add faithfulness if available for this subcircuit
+                if edge_info:
+                    _, top_ranked_faith = edge_info
+                    trial_entry["top_subcircuit"]["faithfulness"] = {
+                        "_description": "Faithfulness scores for the top-ranked subcircuit",
+                        "observational": (
+                            top_ranked_faith.observational.overall_observational
+                            if top_ranked_faith.observational else None
+                        ),
+                        "interventional": (
+                            top_ranked_faith.interventional.overall_interventional
+                            if top_ranked_faith.interventional else None
+                        ),
+                        "counterfactual": (
+                            top_ranked_faith.counterfactual.overall_counterfactual
+                            if top_ranked_faith.counterfactual else None
+                        ),
+                        "overall": top_ranked_faith.overall_faithfulness,
                     }
-                )
+
+                summary["per_trial"].append(trial_entry)
+
+    # Helper to safely compute mean
+    def safe_mean(lst):
+        valid = [x for x in lst if x is not None and not (isinstance(x, float) and x != x)]
+        return sum(valid) / len(valid) if valid else None
 
     # Compute aggregate statistics
     for gate_name, summary in gate_summaries.items():
-        accs = summary["test_accuracies"]
-        sc_accs = summary["best_subcircuit_accuracies"]
-        summary["avg_test_accuracy"] = sum(accs) / len(accs) if accs else None
-        summary["avg_best_subcircuit_accuracy"] = (
-            sum(sc_accs) / len(sc_accs) if sc_accs else None
-        )
-        summary["min_best_subcircuit_accuracy"] = min(sc_accs) if sc_accs else None
-        summary["max_best_subcircuit_accuracy"] = max(sc_accs) if sc_accs else None
+        # Extract values from per_trial for aggregation
+        test_accs = [t["gate_test_acc"] for t in summary["per_trial"] if t.get("gate_test_acc") is not None]
+        sc_accs = [t["top_subcircuit"]["accuracy"] for t in summary["per_trial"] if t.get("top_subcircuit", {}).get("accuracy") is not None]
+
+        obs_scores = []
+        int_scores = []
+        cf_scores = []
+        overall_scores = []
+        for t in summary["per_trial"]:
+            faith = t.get("top_subcircuit", {}).get("faithfulness", {})
+            if faith.get("observational") is not None:
+                obs_scores.append(faith["observational"])
+            if faith.get("interventional") is not None:
+                int_scores.append(faith["interventional"])
+            if faith.get("counterfactual") is not None:
+                cf_scores.append(faith["counterfactual"])
+            if faith.get("overall") is not None:
+                overall_scores.append(faith["overall"])
+
+        summary["aggregated"] = {
+            "_description": "Statistics aggregated across all trials for this gate",
+            "avg_gate_test_acc": safe_mean(test_accs),
+            "avg_top_subcircuit_acc": safe_mean(sc_accs),
+            "min_top_subcircuit_acc": min(sc_accs) if sc_accs else None,
+            "max_top_subcircuit_acc": max(sc_accs) if sc_accs else None,
+            "avg_observational": safe_mean(obs_scores),
+            "avg_interventional": safe_mean(int_scores),
+            "avg_counterfactual": safe_mean(cf_scores),
+            "avg_overall_faithfulness": safe_mean(overall_scores),
+        }
 
     _save_json(
         {
-            "description": "Per-gate summary aggregated across all trials",
+            "_description": (
+                "Per-gate summary aggregated across all trials. "
+                "For each gate, shows the top subcircuit (ranked by accuracy) from each trial, "
+                "along with its faithfulness scores if available."
+            ),
             "gates": gate_summaries,
         },
         run_dir / "summary_by_gate.json",
@@ -647,10 +719,24 @@ def _save_run_level_circuits(result: ExperimentResult, run_dir: Path):
         )
 
     circuits_data = {
+        "_description": (
+            "Subcircuit masks for all enumerated node patterns. "
+            "subcircuit_idx is the flat index, node_mask_idx identifies the node pattern, "
+            "edge_mask_idx identifies the edge variant within a node pattern."
+        ),
         "subcircuits": simplified_subcircuits,
-        "subcircuit_structure_analysis": first_trial.subcircuit_structure_analysis,
     }
     _save_json(circuits_data, run_dir / "circuits.json")
+
+    # Save structure analysis separately with clear naming
+    structure_data = {
+        "_description": (
+            "Structural analysis of each node pattern (indexed by node_mask_idx). "
+            "Includes sparsity metrics, connectivity, and intervention patch shapes."
+        ),
+        "structures": first_trial.subcircuit_structure_analysis,
+    }
+    _save_json(structure_data, run_dir / "structure_analysis.json")
 
 
 def _save_run_level_profiling(result: ExperimentResult, run_dir: Path):
@@ -729,6 +815,11 @@ def _generate_run_summary(result: ExperimentResult) -> dict:
     )
 
     summary = {
+        "_description": (
+            "Run-level summary aggregating results across all trials. "
+            "top_subcircuits_by_gate shows top 10 subcircuits per gate ranked by accuracy. "
+            "ranked_metrics contains all metrics used for ranking (accuracy first)."
+        ),
         "experiment_id": result.experiment_id,
         "n_trials": len(result.trials),
         "gates": normalized_gates,
@@ -737,8 +828,8 @@ def _generate_run_summary(result: ExperimentResult) -> dict:
             "depth": result.config.base_trial.model_params.depth,
         },
         "epsilon": epsilon,
-        "best_subcircuits_by_gate": {},
-        "trial_results": [],
+        "top_subcircuits_by_gate": {},
+        "trial_summaries": [],
     }
 
     # Aggregate results by gate across all trials
@@ -790,13 +881,13 @@ def _generate_run_summary(result: ExperimentResult) -> dict:
                 )
 
             trial_summary["gates"][gate] = {
-                "best_idx": sorted_by_acc[0].idx if sorted_by_acc else None,
-                "best_acc": sorted_by_acc[0].accuracy if sorted_by_acc else None,
+                "top_subcircuit_idx": sorted_by_acc[0].idx if sorted_by_acc else None,
+                "top_subcircuit_acc": sorted_by_acc[0].accuracy if sorted_by_acc else None,
             }
 
-        summary["trial_results"].append(trial_summary)
+        summary["trial_summaries"].append(trial_summary)
 
-    # Rank and store best subcircuits per gate (by first metric value, typically accuracy)
+    # Rank and store top subcircuits per gate (by first metric value = accuracy)
     for gate, results in gate_results.items():
 
         def get_first_metric(r):
@@ -804,17 +895,23 @@ def _generate_run_summary(result: ExperimentResult) -> dict:
             return vals[0] if vals else 0
 
         sorted_results = sorted(results, key=get_first_metric, reverse=True)
-        summary["best_subcircuits_by_gate"][gate] = sorted_results[:10]
+        summary["top_subcircuits_by_gate"][gate] = sorted_results[:10]
 
     return summary
 
 
 def _generate_trial_summary(trial) -> dict:
     """Generate trial-level summary with ranked results per gate."""
+    from src.circuit import parse_subcircuit_idx
+
     # Get epsilon from trial setup
     epsilon = 0.2
     if hasattr(trial, "setup") and hasattr(trial.setup, "constraints"):
         epsilon = getattr(trial.setup.constraints, "epsilon", 0.2)
+
+    # Get architecture for parsing flat indices
+    width = trial.setup.model_params.width
+    depth = trial.setup.model_params.depth
 
     gates_summary = {}
     for gate, gate_metrics in trial.metrics.per_gate_metrics.items():
@@ -822,25 +919,76 @@ def _generate_trial_summary(trial) -> dict:
         sorted_by_acc = sorted(
             sc_metrics, key=lambda x: getattr(x, "accuracy", 0) or 0, reverse=True
         )
+
+        # Build mapping from node_mask_idx to (edge_variant_rank, faithfulness)
+        # per_gate_bests contains flat indices, per_gate_bests_faith has corresponding metrics
+        faith_by_node_idx = {}
+        bests_indices = trial.metrics.per_gate_bests.get(gate, [])
+        bests_faith = trial.metrics.per_gate_bests_faith.get(gate, [])
+        for flat_idx, faith in zip(bests_indices, bests_faith):
+            # Parse flat index to get node_mask_idx
+            node_mask_idx, edge_variant_rank = parse_subcircuit_idx(width, depth, flat_idx)
+            # Store by node_mask_idx (prefer edge_variant_rank 0 if multiple)
+            if node_mask_idx not in faith_by_node_idx or edge_variant_rank == 0:
+                faith_by_node_idx[node_mask_idx] = (edge_variant_rank, faith)
+
+        top_subcircuits = []
+        for rank, sm in enumerate(sorted_by_acc[:5], start=1):
+            # Get edge_variant_rank for this node_mask_idx
+            faith_info = faith_by_node_idx.get(sm.idx)
+            edge_variant_rank = faith_info[0] if faith_info else 0
+
+            entry = {
+                "rank": rank,
+                "node_mask_idx": sm.idx,
+                "edge_variant_rank": edge_variant_rank,
+                "accuracy": sm.accuracy,
+                "bit_similarity": sm.bit_similarity,
+                "passes_epsilon": (sm.accuracy or 0) >= (1 - epsilon),
+            }
+
+            # Add faithfulness metrics if available (sm.idx is node_mask_idx)
+            # Note: Only subcircuits that passed initial filtering have faithfulness analysis
+            if faith_info:
+                _, faith = faith_info
+                entry["faithfulness"] = {
+                    "observational": (
+                        faith.observational.overall_observational
+                        if faith.observational else None
+                    ),
+                    "interventional": (
+                        faith.interventional.overall_interventional
+                        if faith.interventional else None
+                    ),
+                    "counterfactual": (
+                        faith.counterfactual.overall_counterfactual
+                        if faith.counterfactual else None
+                    ),
+                    "overall": faith.overall_faithfulness,
+                }
+
+            top_subcircuits.append(entry)
+
         gates_summary[gate] = {
             "gate_accuracy": getattr(gate_metrics, "test_acc", None),
-            "best_subcircuits": [
-                {
-                    "subcircuit_idx": sm.idx,
-                    "accuracy": sm.accuracy,
-                    "bit_similarity": sm.bit_similarity,
-                    "passes_epsilon": (sm.accuracy or 0) >= (1 - epsilon),
-                }
-                for sm in sorted_by_acc[:5]
-            ],
+            "top_5_subcircuits_by_accuracy": top_subcircuits,
+            "_note": "Faithfulness metrics only available for subcircuits that passed epsilon filtering",
         }
 
     return {
+        "_description": (
+            "Trial summary showing top 5 subcircuits per gate, ranked by accuracy. "
+            "Subcircuits that passed epsilon threshold have faithfulness analysis."
+        ),
         "trial_id": trial.trial_id,
         "status": trial.status,
-        "test_acc": trial.metrics.test_acc,
-        "val_acc": trial.metrics.val_acc,
-        "avg_loss": trial.metrics.avg_loss,
+        "model_accuracy": {
+            "test": trial.metrics.test_acc,
+            "val": trial.metrics.val_acc,
+        },
+        "training": {
+            "avg_loss": trial.metrics.avg_loss,
+        },
         "epsilon": epsilon,
         "gates": gates_summary,
     }
@@ -1315,7 +1463,7 @@ def _save_subcircuits_folder(result: ExperimentResult, run_dir: Path):
 
         # 2. Get structure metrics from subcircuit_structure_analysis
         for struct in first_trial.subcircuit_structure_analysis:
-            sc_idx = struct.get("idx")
+            sc_idx = struct.get("node_mask_idx")
             if sc_idx is not None and sc_idx in subcircuit_all_metrics:
                 subcircuit_all_metrics[sc_idx]["edge_sparsity"] = struct.get("edge_sparsity")
                 subcircuit_all_metrics[sc_idx]["node_sparsity"] = struct.get("node_sparsity")

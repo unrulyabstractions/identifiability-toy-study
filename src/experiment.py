@@ -166,7 +166,8 @@ def experiment_run(
 
             try:
                 # Adapt master data for this trial's gates
-                trial_data = master_data.select_gates(setting.gate_indices)
+                n_inputs = get_max_n_inputs(setting.setup.model_params.logic_gates)
+                trial_data = master_data.select_gates(setting.gate_indices, n_inputs)
 
                 trial_result = run_trial(
                     setting.setup,
@@ -239,7 +240,8 @@ def run_experiment(
 def run_trial_from_setting_parallel(ctx):
     """Run trial from TrialSetting context (for parallel execution)."""
     setting, master_data, cfg, logger = ctx
-    trial_data = master_data.select_gates(setting.gate_indices)
+    n_inputs = get_max_n_inputs(setting.setup.model_params.logic_gates)
+    trial_data = master_data.select_gates(setting.gate_indices, n_inputs)
     return run_trial(
         setting.setup,
         trial_data,
@@ -253,7 +255,8 @@ def run_trial_from_setting_parallel(ctx):
 def run_trial_from_setting_series(ctx):
     """Run trial from TrialSetting context (for serial execution)."""
     setting, master_data, cfg, logger = ctx
-    trial_data = master_data.select_gates(setting.gate_indices)
+    n_inputs = get_max_n_inputs(setting.setup.model_params.logic_gates)
+    trial_data = master_data.select_gates(setting.gate_indices, n_inputs)
     return run_trial(
         setting.setup,
         trial_data,

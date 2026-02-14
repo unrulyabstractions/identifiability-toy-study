@@ -147,6 +147,31 @@ def load_run_circuits(run_dir: str | Path) -> dict:
     return {}
 
 
+def load_run_structure_analysis(run_dir: str | Path) -> list:
+    """Load structure_analysis.json from run directory.
+
+    Returns list of structure dicts, each with node_mask_idx and metrics.
+    Falls back to circuits.json for legacy format.
+    """
+    run_dir = Path(run_dir)
+
+    # Try new format first
+    structure_path = run_dir / "structure_analysis.json"
+    if structure_path.exists():
+        with open(structure_path, encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("structures", [])
+
+    # Fall back to legacy format in circuits.json
+    circuits_path = run_dir / "circuits.json"
+    if circuits_path.exists():
+        with open(circuits_path, encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("subcircuit_structure_analysis", [])
+
+    return []
+
+
 def load_trial_circuits(trial_dir: str | Path) -> dict:
     """Load circuits.json from trial directory (legacy structure).
 
@@ -385,7 +410,12 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
         # Load circuits (reconstruct full node_masks from simplified storage)
         raw_subcircuits = circuits_data.get("subcircuits", [])
         trial.subcircuits = [_reconstruct_full_subcircuit(sc) for sc in raw_subcircuits]
-        trial.subcircuit_structure_analysis = circuits_data.get("subcircuit_structure_analysis", [])
+
+        # Load structure analysis (try new format first, fall back to legacy in circuits_data)
+        trial.subcircuit_structure_analysis = load_run_structure_analysis(run_dir)
+        if not trial.subcircuit_structure_analysis:
+            # Legacy fallback: check circuits_data
+            trial.subcircuit_structure_analysis = circuits_data.get("subcircuit_structure_analysis", [])
 
         # Load metrics (reconstruct nested structures)
         trial.metrics.avg_loss = metrics_data.get("avg_loss", 0)

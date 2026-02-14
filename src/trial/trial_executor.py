@@ -138,7 +138,7 @@ def run_trial(
         {"idx": idx, **s.to_dict()} for idx, s in enumerate(subcircuits)
     ]
     trial_result.subcircuit_structure_analysis = [
-        {"idx": idx, **s.to_dict()} for idx, s in enumerate(subcircuit_structures)
+        {"node_mask_idx": idx, **s.to_dict()} for idx, s in enumerate(subcircuit_structures)
     ]
     update_status("FINISHED_CIRCUIT_FINDING")
 

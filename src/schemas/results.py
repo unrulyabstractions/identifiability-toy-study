@@ -35,26 +35,27 @@ class TrialData:
     val: Dataset
     test: Dataset
 
-    def select_gates(self, gate_indices: list[int]) -> "TrialData":
-        """Create a new TrialData with only the specified gate columns.
+    def select_gates(self, gate_indices: list[int], n_inputs: int) -> "TrialData":
+        """Create a new TrialData with only the specified gate columns and input size.
 
         Args:
             gate_indices: Which columns to select from y (e.g., [0, 2] for gates 0 and 2)
+            n_inputs: Number of input columns to use (slices x to [:, :n_inputs])
 
         Returns:
-            New TrialData with y tensors sliced to only the requested columns
+            New TrialData with x sliced to n_inputs columns and y sliced to gate columns
         """
         return TrialData(
             train=Dataset(
-                x=self.train.x,
+                x=self.train.x[:, :n_inputs],
                 y=self.train.y[:, gate_indices],
             ),
             val=Dataset(
-                x=self.val.x,
+                x=self.val.x[:, :n_inputs],
                 y=self.val.y[:, gate_indices],
             ),
             test=Dataset(
-                x=self.test.x,
+                x=self.test.x[:, :n_inputs],
                 y=self.test.y[:, gate_indices],
             ),
         )
