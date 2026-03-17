@@ -208,3 +208,4 @@ temp/
 
 # External libraries (not tracked)
 external/
+out/
