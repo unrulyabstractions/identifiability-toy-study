@@ -534,6 +534,10 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                         mean_out_circuit_similarity=interv_data.get("mean_out_circuit_similarity", 0),
                         mean_in_circuit_similarity_ood=interv_data.get("mean_in_circuit_similarity_ood", 0),
                         mean_out_circuit_similarity_ood=interv_data.get("mean_out_circuit_similarity_ood", 0),
+                        overall_interventional=interv_data.get("overall_interventional", 0),
+                        component_scores=interv_data.get("component_scores", {}),
+                        component_n=interv_data.get("component_n", {}),
+                        n_components_averaged=interv_data.get("n_components_averaged", 0),
                     )
 
                 # Load counterfactual metrics
