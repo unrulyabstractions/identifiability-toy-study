@@ -16,6 +16,20 @@ import torch
 # Configure matplotlib backend BEFORE importing pyplot (critical for batch rendering)
 matplotlib.use("Agg")
 
+# Global DPI configuration (reduced from 300 for smaller file sizes)
+_VIZ_DPI = 150
+
+
+def get_dpi() -> int:
+    """Get the current DPI setting for visualizations."""
+    return _VIZ_DPI
+
+
+def set_dpi(dpi: int) -> None:
+    """Set the DPI for visualizations."""
+    global _VIZ_DPI
+    _VIZ_DPI = dpi
+
 # Configure matplotlib for performance
 plt.rcParams["path.simplify"] = True
 plt.rcParams["path.simplify_threshold"] = 1.0

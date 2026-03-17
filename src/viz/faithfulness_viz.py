@@ -25,8 +25,22 @@ from .constants import (
     TITLE_Y,
     _layout_cache,
     finalize_figure,
+    get_dpi,
 )
 from .circuit_drawing import draw_intervened_circuit
+
+
+def _ensure_list(obj):
+    """Convert tensors to lists for multiprocessing serialization.
+
+    ProcessPoolExecutor uses pickle, and torch tensors use shared memory
+    which can fail under memory pressure. Converting to plain lists avoids this.
+    """
+    if isinstance(obj, torch.Tensor):
+        return obj.tolist()
+    elif isinstance(obj, list):
+        return [_ensure_list(item) for item in obj]
+    return obj
 
 
 def _patch_key_to_filename(patch_key: str) -> str:
@@ -215,7 +229,7 @@ def visualize_faithfulness_intervention_effects(
 
         # Adapt y-axis based on distribution type
         # OOD may have lower scores, so auto-scale with some padding
-        if distribution_type == "out_of_distribution":
+        if distribution_type == "out_distribution":
             all_scores = bit_sim + logit_sim + best_sim
             y_min = min(0, min(all_scores) - 0.1) if all_scores else -0.15
             y_max = max(1.0, max(all_scores) + 0.1) if all_scores else 1.15
@@ -241,7 +255,7 @@ def visualize_faithfulness_intervention_effects(
 
         filename = f"{distribution_type}_stats.png"
         path = os.path.join(out_dir, filename)
-        plt.savefig(path, dpi=300, bbox_inches="tight")
+        plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
         plt.close(fig)
         return path
 
@@ -254,9 +268,9 @@ def visualize_faithfulness_intervention_effects(
 
     if faithfulness.interventional.in_circuit_stats_ood if faithfulness.interventional else {}:
         path = _create_circuit_distribution_summary(
-            faithfulness.interventional.in_circuit_stats_ood if faithfulness.interventional else {}, "in_circuit", "out_of_distribution", interventional_base)
+            faithfulness.interventional.in_circuit_stats_ood if faithfulness.interventional else {}, "in_circuit", "out_distribution", interventional_base)
         if path:
-            paths["interventional/in_circuit/out_of_distribution_stats"] = path
+            paths["interventional/in_circuit/out_distribution_stats"] = path
 
     # Out-circuit stats
     if faithfulness.interventional.out_circuit_stats if faithfulness.interventional else {}:
@@ -267,9 +281,9 @@ def visualize_faithfulness_intervention_effects(
 
     if faithfulness.interventional.out_circuit_stats_ood if faithfulness.interventional else {}:
         path = _create_circuit_distribution_summary(
-            faithfulness.interventional.out_circuit_stats_ood if faithfulness.interventional else {}, "out_circuit", "out_of_distribution", interventional_base)
+            faithfulness.interventional.out_circuit_stats_ood if faithfulness.interventional else {}, "out_circuit", "out_distribution", interventional_base)
         if path:
-            paths["interventional/out_circuit/out_of_distribution_stats"] = path
+            paths["interventional/out_circuit/out_distribution_stats"] = path
 
     # === 2. Combined Intervention Summaries (bar charts at interventional/ level) ===
     interventional_dir = interventional_base
@@ -335,7 +349,7 @@ def visualize_faithfulness_intervention_effects(
 
         plt.tight_layout()
         path = os.path.join(interventional_dir, filename)
-        plt.savefig(path, dpi=300, bbox_inches="tight")
+        plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
         plt.close(fig)
         return path
 
@@ -526,7 +540,7 @@ def visualize_faithfulness_intervention_effects(
         counterfactual_dir = os.path.join(output_dir, "counterfactual")
         os.makedirs(counterfactual_dir, exist_ok=True)
         path = os.path.join(counterfactual_dir, "counterfact_summary.png")
-        plt.savefig(path, dpi=300, bbox_inches="tight")
+        plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
         plt.close(fig)
         paths["counterfactual/counterfact_summary"] = path
 
@@ -636,7 +650,7 @@ def visualize_faithfulness_intervention_effects(
             counterfactual_dir = os.path.join(output_dir, "counterfactual")
             os.makedirs(counterfactual_dir, exist_ok=True)
             path = os.path.join(counterfactual_dir, filename)
-            plt.savefig(path, dpi=300, bbox_inches="tight")
+            plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
             plt.close(fig)
             return path
 
@@ -693,8 +707,12 @@ def _generate_faithfulness_circuit_figure(args):
     # Use slightly taller figure to avoid title occlusion
     fig, axes = plt.subplots(1, 3, figsize=(15, 5.5))
 
+    # The intervened_nodes represent the subcircuit - show them in all panels
+    # so users can see which nodes are in vs out of circuit
+    subcircuit_nodes = intervened_nodes
+
     # Simplified panel labels
-    # Panel 1: Clean
+    # Panel 1: Clean (show subcircuit membership with blue borders)
     clean_label = "Clean (source)" if is_denoising else "Clean (base)"
     draw_intervened_circuit(
         axes[0],
@@ -706,9 +724,11 @@ def _generate_faithfulness_circuit_figure(args):
         circuit=circuit,
         title=f"{clean_label}: {effect_dict['expected_clean_output']:.2f}",
         biases=biases,
+        subcircuit_nodes=subcircuit_nodes,
+        show_legend=True,  # Show legend in first panel
     )
 
-    # Panel 2: Corrupted
+    # Panel 2: Corrupted (show subcircuit membership with blue borders)
     corrupt_label = "Corrupted (base)" if is_denoising else "Corrupted (source)"
     draw_intervened_circuit(
         axes[1],
@@ -720,6 +740,7 @@ def _generate_faithfulness_circuit_figure(args):
         circuit=circuit,
         title=f"{corrupt_label}: {effect_dict['expected_corrupted_output']:.2f}",
         biases=biases,
+        subcircuit_nodes=subcircuit_nodes,
     )
 
     # Panel 3: Intervened
@@ -742,6 +763,7 @@ def _generate_faithfulness_circuit_figure(args):
         circuit=circuit,
         title=f"{intervened_label}: {effect_dict['actual_output']:.2f}",
         biases=biases,
+        subcircuit_nodes=subcircuit_nodes,
     )
 
     clean_str = ",".join(f"{v:.0f}" for v in effect_dict["clean_input"])
@@ -770,7 +792,7 @@ def _generate_faithfulness_circuit_figure(args):
         fontsize=11
     )
 
-    plt.savefig(output_path, dpi=300)
+    plt.savefig(output_path, dpi=get_dpi())
     plt.close(fig)
     return output_path
 
@@ -834,17 +856,19 @@ def visualize_faithfulness_circuit_samples(
             if not effect.clean_activations or not effect.corrupted_activations:
                 continue
 
+            # Convert tensors to lists for multiprocessing serialization
+            # (torch tensors use shared memory which can fail under memory pressure)
             effect_dict = {
-                "clean_activations": effect.clean_activations,
-                "corrupted_activations": effect.corrupted_activations,
-                "intervened_activations": effect.intervened_activations,
+                "clean_activations": _ensure_list(effect.clean_activations),
+                "corrupted_activations": _ensure_list(effect.corrupted_activations),
+                "intervened_activations": _ensure_list(effect.intervened_activations),
                 "expected_clean_output": effect.expected_clean_output,
                 "expected_corrupted_output": effect.expected_corrupted_output,
                 "actual_output": effect.actual_output,
                 "output_changed_to_corrupted": effect.output_changed_to_corrupted,
                 "faithfulness_score": effect.faithfulness_score,
-                "clean_input": effect.clean_input,
-                "corrupted_input": effect.corrupted_input,
+                "clean_input": _ensure_list(effect.clean_input),
+                "corrupted_input": _ensure_list(effect.corrupted_input),
                 "experiment_type": getattr(effect, 'experiment_type', 'noising'),
                 "score_type": getattr(effect, 'score_type', score_type),
             }
@@ -889,14 +913,23 @@ def visualize_faithfulness_circuit_samples(
         out_circuit_nodes,
     )
 
-    # Execute in parallel
+    # Execute in parallel with fallback to sequential
     if tasks:
         n_workers = min(len(tasks), mp.cpu_count())
         print(
             f"[VIZ] Generating {len(tasks)} faithfulness circuit figures with {n_workers} workers"
         )
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            list(executor.map(_generate_faithfulness_circuit_figure, tasks))
+        try:
+            with ProcessPoolExecutor(max_workers=n_workers) as executor:
+                list(executor.map(_generate_faithfulness_circuit_figure, tasks))
+        except Exception as e:
+            # Fallback to sequential processing if multiprocessing fails
+            print(f"[VIZ] Parallel execution failed ({type(e).__name__}), falling back to sequential")
+            for task in tasks:
+                try:
+                    _generate_faithfulness_circuit_figure(task)
+                except Exception as task_e:
+                    print(f"[VIZ] Warning: Failed to generate figure: {task_e}")
 
     # In-circuit/out-circuit patch visualizations (simpler, do sequentially)
     def visualize_patch_circuits(stats: dict, circuit_type: str, out_dir: str) -> dict:
@@ -965,21 +998,29 @@ def visualize_faithfulness_circuit_samples(
                 def extract_activations(acts):
                     """Convert activations to [layer][node] format.
 
-                    Handles both formats:
-                    - [layer][node] (from mean across batch) - return as-is
-                    - [layer][batch][node] - extract first batch sample
+                    Handles multiple formats:
+                    - Tensor per layer (1D): [layer] where each is tensor of shape [nodes]
+                    - List per layer: [layer][node] with plain numbers
+                    - Nested list: [layer][batch][node] - extract first batch
                     """
                     if not acts:
                         return []
                     result = []
                     for layer in acts:
-                        if isinstance(layer, (list, tuple)) and len(layer) > 0:
+                        # Handle tensor layers (most common from interventional analysis)
+                        if hasattr(layer, 'tolist'):
+                            # 1D tensor [nodes] -> list of floats
+                            result.append(layer.tolist())
+                        elif isinstance(layer, (list, tuple)) and len(layer) > 0:
                             first_elem = layer[0]
                             # Check if first element is a number (format: [layer][node])
                             # or a list/tuple (format: [layer][batch][node])
                             if isinstance(first_elem, (int, float)):
                                 # Already [layer][node] format - use directly
                                 result.append(list(layer))
+                            elif hasattr(first_elem, 'item'):
+                                # Tensor scalars - convert each to float
+                                result.append([v.item() for v in layer])
                             elif isinstance(first_elem, (list, tuple)):
                                 # [layer][batch][node] format - extract first batch
                                 result.append(list(first_elem))
@@ -1032,13 +1073,13 @@ def visualize_faithfulness_circuit_samples(
             )
 
             path = os.path.join(out_dir, f"{patch_label}.png")
-            plt.savefig(path, dpi=300, bbox_inches="tight")
+            plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
             plt.close(fig)
             type_paths[patch_label] = path
 
         return type_paths
 
-    # Create interventional visualizations with in_distribution/out_of_distribution subfolders
+    # Create interventional visualizations with in_distribution/out_distribution subfolders
     in_circuit_base = os.path.join(interventional_dir, "in_circuit")
     out_circuit_base = os.path.join(interventional_dir, "out_circuit")
 
@@ -1061,16 +1102,16 @@ def visualize_faithfulness_circuit_samples(
 
     # Out-of-distribution interventions (if OOD stats exist)
     if faithfulness.interventional.in_circuit_stats_ood if faithfulness.interventional else {}:
-        in_circuit_ood_dir = os.path.join(in_circuit_base, "out_of_distribution")
-        paths["interventional/in_circuit/out_of_distribution"] = visualize_patch_circuits(
+        in_circuit_ood_dir = os.path.join(in_circuit_base, "out_distribution")
+        paths["interventional/in_circuit/out_distribution"] = visualize_patch_circuits(
             faithfulness.interventional.in_circuit_stats_ood if faithfulness.interventional else {},
             "In-Circuit (OOD)",
             in_circuit_ood_dir,
         )
 
     if faithfulness.interventional.out_circuit_stats_ood if faithfulness.interventional else {}:
-        out_circuit_ood_dir = os.path.join(out_circuit_base, "out_of_distribution")
-        paths["interventional/out_circuit/out_of_distribution"] = visualize_patch_circuits(
+        out_circuit_ood_dir = os.path.join(out_circuit_base, "out_distribution")
+        paths["interventional/out_circuit/out_distribution"] = visualize_patch_circuits(
             faithfulness.interventional.out_circuit_stats_ood if faithfulness.interventional else {},
             "Out-of-Circuit (OOD)",
             out_circuit_ood_dir,

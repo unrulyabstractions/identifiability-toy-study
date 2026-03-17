@@ -65,10 +65,12 @@ def calculate_logit_similarity(
     y_target: torch.Tensor,  # [*] - any shape
     y_proxy: torch.Tensor,  # [*] - same shape as y_target
 ) -> torch.Tensor:  # [] scalar
-    """R²-like similarity: 1.0 = perfect match, 0.0 = predicting the mean."""
+    """Bounded logit similarity: 1.0 = perfect match, approaches 0.0 as MSE grows.
+
+    Uses formula: 1 / (1 + MSE) which is always in (0, 1].
+    """
     mse = calculate_mse(y_target, y_proxy)  # [] scalar
-    var = y_target.var().clamp(min=1e-8)  # [] scalar
-    return 1 - mse / var  # [] scalar
+    return 1 / (1 + mse)  # [] scalar, always in (0, 1]
 
 
 #########################
@@ -90,10 +92,12 @@ def calculate_logit_similarity_batched(
     y_target: torch.Tensor,  # [n_samples, n_gates]
     y_proxies: torch.Tensor,  # [batch, n_samples, n_gates]
 ) -> np.ndarray:  # [batch]
-    """Batched R²: y_proxies has leading batch dim, y_target does not."""
+    """Batched bounded logit similarity: always in (0, 1].
+
+    Uses formula: 1 / (1 + MSE) which is always in (0, 1].
+    """
     mse = ((y_proxies - y_target.unsqueeze(0)) ** 2).mean(dim=(1, 2))  # [batch]
-    var = y_target.var().clamp(min=1e-8)  # [] scalar
-    return (1 - mse / var).detach().cpu().numpy()  # [batch]
+    return (1 / (1 + mse)).detach().cpu().numpy()  # [batch], always in (0, 1]
 
 
 @torch.no_grad()

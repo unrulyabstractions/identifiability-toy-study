@@ -72,8 +72,8 @@ def build_trial_settings(
         normalized_gates, cfg.num_gates_per_run
     )
 
-    # Determine input size from gates - use max across all gates to support mixed sizes
-    input_size = get_max_n_inputs(normalized_gates)
+    # Determine max input size from gates - use max across all gates to support mixed sizes
+    max_input_size = get_max_n_inputs(normalized_gates)
 
     # Get architecture from base_trial.model_params
     width = cfg.base_trial.model_params.width
@@ -89,7 +89,7 @@ def build_trial_settings(
     # Pre-compute circuits for the single architecture
     logger and logger.info("\nPre-computing circuits...")
     subcircuits, subcircuit_structures = precompute_circuits_for_architecture(
-        width, depth, input_size, logger
+        width, depth, max_input_size, logger
     )
 
     # Collect all trial settings
@@ -126,6 +126,7 @@ def build_trial_settings(
                     TrialSetting(
                         setup=trial_setup,
                         gate_indices=gate_indices,
+                        max_input_size=max_input_size,  # Use experiment-wide max input size
                         config=cfg,
                         subcircuits=subcircuits,
                         subcircuit_structures=subcircuit_structures,
@@ -166,8 +167,8 @@ def experiment_run(
 
             try:
                 # Adapt master data for this trial's gates
-                n_inputs = get_max_n_inputs(setting.setup.model_params.logic_gates)
-                trial_data = master_data.select_gates(setting.gate_indices, n_inputs)
+                # Use experiment-wide max_input_size to match precomputed circuits
+                trial_data = master_data.select_gates(setting.gate_indices, setting.max_input_size)
 
                 trial_result = run_trial(
                     setting.setup,
@@ -240,8 +241,8 @@ def run_experiment(
 def run_trial_from_setting_parallel(ctx):
     """Run trial from TrialSetting context (for parallel execution)."""
     setting, master_data, cfg, logger = ctx
-    n_inputs = get_max_n_inputs(setting.setup.model_params.logic_gates)
-    trial_data = master_data.select_gates(setting.gate_indices, n_inputs)
+    # Use experiment-wide max_input_size to match precomputed circuits
+    trial_data = master_data.select_gates(setting.gate_indices, setting.max_input_size)
     return run_trial(
         setting.setup,
         trial_data,
@@ -255,8 +256,8 @@ def run_trial_from_setting_parallel(ctx):
 def run_trial_from_setting_series(ctx):
     """Run trial from TrialSetting context (for serial execution)."""
     setting, master_data, cfg, logger = ctx
-    n_inputs = get_max_n_inputs(setting.setup.model_params.logic_gates)
-    trial_data = master_data.select_gates(setting.gate_indices, n_inputs)
+    # Use experiment-wide max_input_size to match precomputed circuits
+    trial_data = master_data.select_gates(setting.gate_indices, setting.max_input_size)
     return run_trial(
         setting.setup,
         trial_data,

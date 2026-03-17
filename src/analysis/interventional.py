@@ -10,8 +10,6 @@ from typing import Optional
 import numpy as np
 import torch
 
-from src.model import Intervention, InterventionEffect, MLP, PatchShape
-from src.schemas import InterventionalSample, PatchStatistics, Similarity
 from src.math import (
     calculate_best_match_rate,
     calculate_logit_similarity,
@@ -19,6 +17,8 @@ from src.math import (
     calculate_mse,
     logits_to_binary,
 )
+from src.model import MLP, Intervention, InterventionEffect, PatchShape
+from src.schemas import InterventionalSample, PatchStatistics, Similarity
 
 
 def calculate_intervention_effect(
@@ -118,6 +118,11 @@ def calculate_patches_causal_effect(
         proxy_acts_base = original_proxy_acts
         y_proxy_base = proxy_acts_base[-1]
 
+    # Pre-move original activations to CPU (shared across all effects, avoids redundant transfers)
+    # These are only used for visualization, not computation
+    original_target_acts_cpu = [a.cpu() for a in original_target_acts]
+    original_proxy_acts_cpu = [a.cpu() for a in original_proxy_acts]
+
     intervention_results = {}
 
     for patch in patches:
@@ -189,8 +194,8 @@ def calculate_patches_causal_effect(
                     y_proxy_i,
                     target_activations=target_acts_i,
                     proxy_activations=proxy_acts_i,
-                    original_target_activations=original_target_acts,
-                    original_proxy_activations=original_proxy_acts,
+                    original_target_activations=original_target_acts_cpu,
+                    original_proxy_activations=original_proxy_acts_cpu,
                 )
             )
 
@@ -208,6 +213,9 @@ def _create_intervention_samples(
     IMPORTANT: Activations from InterventionEffect are converted to lists
     so visualization code NEVER needs to run models. Visualization is READ-ONLY.
     """
+    if not effects:
+        return []
+
     samples = []
 
     # Parse patch info from key (e.g., "PatchShape(layers=(1,), indices=(0,), axis='neuron')")
@@ -222,57 +230,106 @@ def _create_intervention_samples(
             int(x.strip()) for x in indices_match.group(1).split(",") if x.strip()
         ]
 
-    for effect in effects:
-        # Extract intervention values from the intervention object
-        iv_values = []
-        for ps, (mode, vals) in effect.intervention.patches.items():
-            iv_values.extend(vals.flatten().tolist())
+    # PRE-MOVE all effect tensors to CPU using BATCHED transfers
+    # Stack tensors across effects, transfer once, then unstack
+    # This is critical for MPS - one big transfer is ~100x faster than many small ones
 
-        # Calculate per-sample metrics using helper functions
-        logit_sim = calculate_logit_similarity(effect.y_target, effect.y_proxy).item()  # [] scalar
-        mse = calculate_mse(effect.y_target, effect.y_proxy).item()  # [] scalar
-        y_target_val = effect.y_target.mean().item()  # [] scalar -> float
-        y_proxy_val = effect.y_proxy.mean().item()  # [] scalar -> float
-        bit_target = logits_to_binary(effect.y_target.mean()).item()  # [] scalar -> int
-        bit_proxy = logits_to_binary(effect.y_proxy.mean()).item()  # [] scalar -> int
+    n_effects = len(effects)
+
+    # Stack y_target and y_proxy across all effects
+    y_targets_stacked = torch.stack([e.y_target for e in effects]).cpu()
+    y_proxies_stacked = torch.stack([e.y_proxy for e in effects]).cpu()
+
+    # Stack target activations per layer
+    n_layers = (
+        len(effects[0].target_activations) if effects[0].target_activations else 0
+    )
+    target_acts_stacked = []
+    proxy_acts_stacked = []
+    for layer in range(n_layers):
+        target_acts_stacked.append(
+            torch.stack([e.target_activations[layer] for e in effects]).cpu()
+        )
+        if effects[0].proxy_activations is not None:
+            proxy_acts_stacked.append(
+                torch.stack([e.proxy_activations[layer] for e in effects]).cpu()
+            )
+
+    # Stack intervention values
+    iv_vals_stacked = []
+    for e in effects:
+        for ps, (mode, vals) in e.intervention.patches.items():
+            iv_vals_stacked.append(vals)
+            break  # Only one patch per effect
+    iv_vals_tensor = torch.stack(iv_vals_stacked).cpu()
+
+    # Unstack back to individual effects
+    for i, effect in enumerate(effects):
+        effect.y_target = y_targets_stacked[i]
+        effect.y_proxy = y_proxies_stacked[i]
+        effect.target_activations = [
+            target_acts_stacked[layer][i] for layer in range(n_layers)
+        ]
+        if effect.proxy_activations is not None:
+            effect.proxy_activations = [
+                proxy_acts_stacked[layer][i] for layer in range(n_layers)
+            ]
+        for ps, (mode, vals) in effect.intervention.patches.items():
+            effect.intervention.patches[ps] = (mode, iv_vals_tensor[i])
+            break
+
+    # LAZY SERIALIZATION: Store tensors directly, convert to lists in to_dict()
+    for effect in effects:
+        # Extract intervention values as tensor (lazy conversion)
+        iv_values = None
+        for ps, (mode, vals) in effect.intervention.patches.items():
+            iv_values = vals.flatten()  # Keep as tensor
+            break
+
+        # Calculate per-sample metrics (tensors already on CPU)
+        logit_sim = calculate_logit_similarity(effect.y_target, effect.y_proxy).item()
+        mse = calculate_mse(effect.y_target, effect.y_proxy).item()
+        y_target_val = effect.y_target.mean().item()
+        y_proxy_val = effect.y_proxy.mean().item()
+        bit_target = logits_to_binary(effect.y_target.mean()).item()
+        bit_proxy = logits_to_binary(effect.y_proxy.mean()).item()
         bit_agree = bit_target == bit_proxy
 
-        # Convert tensor activations to lists for JSON serialization
-        # Use MEAN across batch for efficiency - visualization shows representative values
-        gate_acts_list = []
-        subcircuit_acts_list = []
-        original_gate_acts_list = []
-        original_subcircuit_acts_list = []
+        # Store tensors directly - lazy serialization handles conversion
+        gate_acts = []
+        subcircuit_acts = []
+        original_gate_acts = []
+        original_subcircuit_acts = []
         if effect.target_activations is not None:
-            gate_acts_list = [a.mean(dim=0).tolist() for a in effect.target_activations]
+            gate_acts = [a.mean(dim=0) for a in effect.target_activations]  # tensors
         if effect.proxy_activations is not None:
-            subcircuit_acts_list = [
-                a.mean(dim=0).tolist() for a in effect.proxy_activations
-            ]
+            subcircuit_acts = [
+                a.mean(dim=0) for a in effect.proxy_activations
+            ]  # tensors
         if effect.original_target_activations is not None:
-            original_gate_acts_list = [
-                a.mean(dim=0).tolist() for a in effect.original_target_activations
-            ]
+            original_gate_acts = [
+                a.mean(dim=0) for a in effect.original_target_activations
+            ]  # tensors
         if effect.original_proxy_activations is not None:
-            original_subcircuit_acts_list = [
-                a.mean(dim=0).tolist() for a in effect.original_proxy_activations
-            ]
+            original_subcircuit_acts = [
+                a.mean(dim=0) for a in effect.original_proxy_activations
+            ]  # tensors
 
         samples.append(
             InterventionalSample(
                 patch_key=patch_key,
                 patch_layer=patch_layer,
                 patch_indices=patch_indices,
-                intervention_values=iv_values,
+                intervention_values=iv_values,  # tensor, converted lazily
                 gate_output=y_target_val,
                 subcircuit_output=y_proxy_val,
                 logit_similarity=effect.logit_similarity,
                 bit_agreement=bit_agree,
                 mse=mse,
-                gate_activations=gate_acts_list,
-                subcircuit_activations=subcircuit_acts_list,
-                original_gate_activations=original_gate_acts_list,
-                original_subcircuit_activations=original_subcircuit_acts_list,
+                gate_activations=gate_acts,  # tensors, converted lazily
+                subcircuit_activations=subcircuit_acts,  # tensors, converted lazily
+                original_gate_activations=original_gate_acts,  # tensors, converted lazily
+                original_subcircuit_activations=original_subcircuit_acts,  # tensors, converted lazily
             )
         )
 

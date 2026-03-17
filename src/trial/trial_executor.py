@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from src.domain import get_max_n_inputs, resolve_gate
+from src.domain import resolve_gate
 from src.experiment_config import TrialSetup
 from src.infra import ParallelConfig, get_eval_device, set_seeds, update_status_fx
 from src.infra.profiler import trace, traced
@@ -64,7 +64,8 @@ def run_trial(
 
     # ===== Train Model =====
     update_status("STARTED_MLP_TRAINING")
-    input_size = get_max_n_inputs(gate_names)  # Use max to support mixed gate sizes
+    # Use data's input size (already set to experiment-wide max by select_gates)
+    input_size = data.train.x.shape[1]
     output_size = len(gate_names)
 
     # train_model has @profile_fn("Train Model") directly in helpers.py

@@ -78,6 +78,7 @@ from src.circuit.enumeration import parse_subcircuit_idx
 from src.circuit.precompute import compute_edge_mask_idx
 from src.schemas import ExperimentResult
 from src.serialization import filter_non_serializable
+from src.persistence.summary import build_run_summary
 
 # =============================================================================
 # Explanation Templates
@@ -263,11 +264,8 @@ def _save_summary_by_gate(result, run_dir: Path):
     )
 
 
-def _save_trial_organization(result: ExperimentResult, run_dir: Path):
-    """Save trial_org.json mapping sweep parameters to trial IDs.
-
-    Creates a file that shows which trials used which sweep values, making it
-    easy to find trials with specific configurations.
+def _build_trial_organization(result: ExperimentResult) -> dict:
+    """Build trial organization dict mapping sweep parameters to trial IDs.
 
     Structure:
         sweep_axes: Lists all unique values for each sweep parameter
@@ -367,7 +365,81 @@ def _save_trial_organization(result: ExperimentResult, run_dir: Path):
         },
     }
 
+    return trial_org
+
+
+def _save_trial_organization(result: ExperimentResult, run_dir: Path) -> dict:
+    """Save trial_org.json mapping sweep parameters to trial IDs.
+
+    Returns the trial_org dict for use by enhanced summaries.
+    """
+    trial_org = _build_trial_organization(result)
     _save_json(trial_org, run_dir / "trial_org.json")
+    return trial_org
+
+
+def _save_enhanced_summaries(result: ExperimentResult, run_dir: Path, trial_org: dict):
+    """Save enhanced analysis summaries.
+
+    Creates:
+        analysis/
+            gate_comparison.json    - Training context comparison
+            faithfulness_analysis.json  - Faith-error correlation
+        summary.txt               - Human-readable summary
+    """
+    # Build comprehensive summary
+    summary = build_run_summary(result, trial_org)
+
+    # Create analysis directory
+    analysis_dir = run_dir / "analysis"
+    analysis_dir.mkdir(exist_ok=True)
+
+    # Save gate comparison
+    if summary.gate_comparisons:
+        gate_comp_data = {
+            "_description": (
+                "Compare gate performance across training contexts. "
+                "Shows how each logic gate (XOR, AND, OR, etc.) performs when trained "
+                "alone vs when trained together with other gates in the same network."
+            ),
+            "_field_definitions": {
+                "context": "Which gates were trained together (e.g., 'XOR' = alone, 'XOR,OR' = together)",
+                "n_gates": "Number of gates in this training context",
+                "n_trials": "Number of experiment trials with this configuration",
+                "avg_gate_acc": "Average test accuracy of the full network on this gate (0-1)",
+                "avg_subcircuit_acc": "Average accuracy of the best-found subcircuit (0-1)",
+                "avg_faithfulness": "Average faithfulness score of the best subcircuit (0-1)",
+                "best_context": "Training context that achieved highest accuracy",
+                "delta_vs_alone": "Accuracy improvement when training with other gates vs alone",
+            },
+            "gate_comparisons": {g: c.to_dict() for g, c in summary.gate_comparisons.items()},
+        }
+        _save_json(gate_comp_data, analysis_dir / "gate_comparison.json")
+
+    # Save faithfulness analysis
+    if summary.faithfulness_analysis:
+        _save_json(
+            summary.faithfulness_analysis.to_dict(),
+            analysis_dir / "faithfulness_analysis.json",
+        )
+
+    # Save subcircuit mapping
+    if summary.subcircuit_mapping:
+        mapping_data = {
+            "_description": "Track which trials found which subcircuits",
+            "subcircuit_mapping": {
+                g: [m.to_dict() for m in mappings]
+                for g, mappings in summary.subcircuit_mapping.items()
+            },
+        }
+        _save_json(mapping_data, analysis_dir / "subcircuit_mapping.json")
+
+    # Save human-readable summary
+    text = summary.to_text()
+    (run_dir / "summary.txt").write_text(text)
+
+    # Print summary to stdout
+    print(text)
 
 
 def _save_decision_boundary_visualizations(
@@ -546,7 +618,10 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
     _save_summary_by_gate(result, run_dir)
 
     # Save trial_org.json mapping sweep parameters to trial IDs
-    _save_trial_organization(result, run_dir)
+    trial_org = _save_trial_organization(result, run_dir)
+
+    # Save enhanced analysis summaries (gate_comparison, faithfulness_analysis, summary.txt)
+    _save_enhanced_summaries(result, run_dir, trial_org)
 
     # Create trials directory
     trials_dir = run_dir / "trials"
@@ -582,7 +657,9 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
         _save_json(effective_config, trial_dir / "config.json")
 
         # 4. Metrics JSON - training and analysis results
-        metrics_data = filter_non_serializable(asdict(trial.metrics))
+        # Don't call asdict() first - let filter_non_serializable call to_dict()
+        # on sample objects so tensors are converted to lists properly
+        metrics_data = filter_non_serializable(trial.metrics)
         metrics_data["status"] = trial.status
         metrics_data["trial_id"] = trial.trial_id
         _save_json(metrics_data, trial_dir / "metrics.json")
@@ -596,7 +673,122 @@ def save_results(result: ExperimentResult, run_dir: str | Path, logger=None):
     # Validate all subfolders have explanation.md
     _validate_explanations(run_dir, logger)
 
+
+def save_run_summaries_only(result: ExperimentResult, run_dir: str | Path, logger=None):
+    """Save ONLY run-level summaries without re-saving trial data.
+
+    Use this when trials are already saved individually via save_single_trial().
+    Generates: summary.json, trial_org.json, gates.json, circuits.json,
+    summary_by_gate.json, analysis/, profiling/, subcircuits/, etc.
+
+    This is faster than save_results() because it skips per-trial re-saves.
+    """
+    os.makedirs(run_dir, exist_ok=True)
+    run_dir = Path(run_dir)
+
+    # Save experiment config
+    config_data = filter_non_serializable(asdict(result.config))
+    _save_json(config_data, run_dir / "config.json")
+
+    # Save run-level summary and explanation
+    run_summary = _generate_run_summary(result)
+    _save_json(run_summary, run_dir / "summary.json")
+    _save_explanation(run_dir / "explanation.md", RUN_EXPLANATION)
+
+    # Save gates.json with gate name -> base gate function mapping
+    _save_gates_registry(result, run_dir)
+
+    # Save circuits at run level
+    _save_run_level_circuits(result, run_dir)
+
+    # Save profiling at run level
+    _save_run_level_profiling(result, run_dir)
+
+    # Save subcircuits folder with rankings
+    _save_subcircuits_folder(result, run_dir)
+
+    # Save summary_by_gate.json
+    _save_summary_by_gate(result, run_dir)
+
+    # Save trial_org.json and get the dict for enhanced summaries
+    trial_org = _save_trial_organization(result, run_dir)
+
+    # Save enhanced analysis summaries
+    _save_enhanced_summaries(result, run_dir, trial_org)
+
+    # Save decision boundary visualizations
+    _save_decision_boundary_visualizations(result, run_dir, logger)
+
+    # Save subcircuit-level decision boundary visualizations
+    _save_subcircuit_decision_boundaries(result, run_dir, logger)
+
+    # Validate all subfolders have explanation.md
+    _validate_explanations(run_dir, logger)
+
+    logger and logger.info(f"Saved run-level summaries to {run_dir}")
+
     logger and logger.info(f"Saved results to {run_dir}")
+
+
+def save_single_trial(trial, run_dir: str | Path, cfg, logger=None):
+    """Save a single trial without loading all previous trials.
+
+    OPTIMIZED: Avoids O(n^2) memory/IO by not reloading all previous trials.
+    Only saves this trial's folder. Run-level summaries are regenerated
+    at experiment end by save_results().
+
+    Args:
+        trial: TrialResult to save
+        run_dir: Run directory path
+        cfg: ExperimentConfig for this run
+        logger: Optional logger
+    """
+    run_dir = Path(run_dir)
+    os.makedirs(run_dir, exist_ok=True)
+
+    # Save experiment config (idempotent - same for all trials)
+    config_data = filter_non_serializable(asdict(cfg))
+    _save_json(config_data, run_dir / "config.json")
+
+    # Create trials directory
+    trials_dir = run_dir / "trials"
+    trials_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save this trial
+    trial_dir = trials_dir / trial.trial_id
+    trial_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Trial-level summary and explanation
+    trial_summary = _generate_trial_summary(trial)
+    _save_json(trial_summary, trial_dir / "summary.json")
+    _save_explanation(trial_dir / "explanation.md", TRIAL_EXPLANATION)
+
+    # 2. Setup JSON - trial parameters
+    setup_data = filter_non_serializable(asdict(trial.setup))
+    _save_json(setup_data, trial_dir / "setup.json")
+
+    # 3. Config JSON - full effective config (experiment-level + trial-level)
+    effective_config = {
+        "device": cfg.device,
+        "debug": cfg.debug,
+        "trial_id": trial.trial_id,
+        **setup_data,
+    }
+    _save_json(effective_config, trial_dir / "config.json")
+
+    # 4. Metrics JSON - training and analysis results
+    metrics_data = filter_non_serializable(trial.metrics)
+    metrics_data["status"] = trial.status
+    metrics_data["trial_id"] = trial.trial_id
+    _save_json(metrics_data, trial_dir / "metrics.json")
+
+    # 5. Tensors PT - all tensor data
+    _save_tensors(trial, trial_dir, logger)
+
+    # 6. Models
+    _save_models(trial, trial_dir, logger)
+
+    logger and logger.info(f"Saved trial {trial.trial_id} to {trial_dir}")
 
 
 def save_training_data(data, run_dir: str | Path, gate_names: list[str] = None):
@@ -951,15 +1143,24 @@ def _generate_trial_summary(trial) -> dict:
             # Note: Only subcircuits that passed initial filtering have faithfulness analysis
             if faith_info:
                 _, faith = faith_info
+                # Build detailed interventional breakdown
+                int_detail = None
+                if faith.interventional:
+                    int_metrics = faith.interventional
+                    int_detail = {
+                        "overall": int_metrics.overall_interventional,
+                        "in_circuit_id": int_metrics.component_scores.get("in_circuit_id"),
+                        "out_circuit_id": int_metrics.component_scores.get("out_circuit_id"),
+                        "in_circuit_ood": int_metrics.component_scores.get("in_circuit_ood"),
+                        "out_circuit_ood": int_metrics.component_scores.get("out_circuit_ood"),
+                        "n_components": int_metrics.n_components_averaged,
+                    }
                 entry["faithfulness"] = {
                     "observational": (
                         faith.observational.overall_observational
                         if faith.observational else None
                     ),
-                    "interventional": (
-                        faith.interventional.overall_interventional
-                        if faith.interventional else None
-                    ),
+                    "interventional": int_detail,
                     "counterfactual": (
                         faith.counterfactual.overall_counterfactual
                         if faith.counterfactual else None

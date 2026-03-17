@@ -16,6 +16,7 @@ from src.pipeline import (
     run_iteratively,
     run_monolith,
 )
+from src.viz.viz_config import VizConfig
 
 
 def get_args() -> Any:
@@ -43,7 +44,7 @@ def get_args() -> Any:
         help="Enable fast test mode. Optional gate config: -1=ALL, 0=XOR, 1=OR+AND, 2=XOR+XOR, 3=ID+IMP, 4=ID+MAJ, 5=XOR+MAJ",
     )
     parser.add_argument(
-        "--analysis-only",
+        "--viz-only",
         action="store_true",
         help="Re-run visualization on existing runs without training",
     )
@@ -55,7 +56,15 @@ def get_args() -> Any:
     parser.add_argument(
         "--no-viz",
         action="store_true",
-        help="Skip visualization step",
+        help="Skip visualization step (deprecated, use --viz 0)",
+    )
+    parser.add_argument(
+        "--viz",
+        type=int,
+        default=None,
+        choices=[0, 1, 2, 3],
+        metavar="LEVEL",
+        help="Visualization level: 0=none (default), 1=summary only, 2=+top subcircuit, 3=+top 5",
     )
     parser.add_argument(
         "--spd",
@@ -66,18 +75,26 @@ def get_args() -> Any:
         "--run",
         type=str,
         default=None,
-        help="Specific run directory to process (for --analysis-only or --spd-only)",
+        help="Specific run directory to process (for --viz-only or --spd-only)",
     )
     parser.add_argument(
         "--trial",
         type=str,
         default=None,
-        help="Specific trial ID to process across runs (for --analysis-only or --spd-only)",
+        help="Specific trial ID to process across runs (for --viz-only or --spd-only)",
     )
     args = parser.parse_args()
 
     # args.spd_only should turn on args.spd
     args.spd = args.spd or args.spd_only
+
+    # Handle --no-viz (deprecated) and --viz
+    # --no-viz is equivalent to --viz 0
+    # If neither specified, default to --viz 0 (no viz)
+    if args.no_viz and args.viz is None:
+        args.viz = 0
+    elif args.viz is None:
+        args.viz = 0  # Default to no visualization
 
     return args
 
@@ -155,22 +172,24 @@ def rerun_all(
 
 
 def rerun_pipeline(output_dir: Path, args: Any) -> bool:
-    """Handle --analysis-only and --spd-only modes."""
+    """Handle --viz-only and --spd-only modes."""
     did_rerun_pipeline = False
+    viz_config = VizConfig.from_int(args.viz)
+
     if args.spd_only:
         do_fx = lambda result, run_dir: do_spd_on_experiment(
-            result, str(run_dir), viz=not args.no_viz, spd_device=args.spd_device
+            result, str(run_dir), viz=viz_config.level > 0, spd_device=args.spd_device
         )
         rerun_all(
             output_dir, do_fx, "spd", run_filter=args.run, trial_filter=args.trial
         )
         did_rerun_pipeline = True
-    if args.analysis_only:
+    if args.viz_only:
         do_fx = lambda result, run_dir: do_viz_on_experiment(
-            result, str(run_dir), spd=args.spd
+            result, str(run_dir), spd=args.spd, viz_config=viz_config
         )
         rerun_all(
-            output_dir, do_fx, "analysis", run_filter=args.run, trial_filter=args.trial
+            output_dir, do_fx, "viz", run_filter=args.run, trial_filter=args.trial
         )
         did_rerun_pipeline = True
     return did_rerun_pipeline
@@ -203,6 +222,9 @@ def run_single_experiment(args: Any, output_dir: Path) -> None:
         device=args.device,
     )
 
+    # Visualization config
+    viz_config = VizConfig.from_int(args.viz)
+
     # Determine execution mode based on trial count
     trial_settings, _ = build_trial_settings(cfg, logger)
     n_trials = len(trial_settings)
@@ -210,6 +232,7 @@ def run_single_experiment(args: Any, output_dir: Path) -> None:
     use_iterative = n_trials > cfg.max_num_trials_in_monolith
     mode_name = "iterative" if use_iterative else "monolith"
     logger.info(f"\nRunning {n_trials} trials in {mode_name} mode\n")
+    logger.info(f"Visualization level: {args.viz} ({viz_config.level.name})\n")
 
     if use_iterative:
         run_iteratively(
@@ -217,7 +240,7 @@ def run_single_experiment(args: Any, output_dir: Path) -> None:
             run_dir=run_dir,
             logger=logger,
             spd=args.spd,
-            no_viz=args.no_viz,
+            viz_config=viz_config,
             spd_device=args.spd_device,
         )
     else:
@@ -226,7 +249,7 @@ def run_single_experiment(args: Any, output_dir: Path) -> None:
             run_dir=run_dir,
             logger=logger,
             spd=args.spd,
-            no_viz=args.no_viz,
+            viz_config=viz_config,
             spd_device=args.spd_device,
         )
 

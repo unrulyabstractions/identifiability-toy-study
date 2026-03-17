@@ -62,14 +62,16 @@ def draw_intervened_circuit(
     node_size: int = 400,
     show_edge_labels: bool = True,
     biases: list[np.ndarray] | None = None,
+    subcircuit_nodes: set[str] | None = None,
+    show_legend: bool = False,
 ):
     """
     Draw a circuit showing intervention effects with pastel colors.
 
-    Border colors for node types:
-    - Regular nodes: thin dark grey
-    - Affected nodes (changed): medium purple border
-    - Intervened nodes: thick magenta border
+    Border colors (3 distinct categories):
+    - Out-of-circuit: thin grey border (#888888)
+    - In-circuit (subcircuit): thick blue border (#2196F3)
+    - Intervened: thick orange border (#FF6B35)
 
     Edge colors: warm brown for positive, cool slate for negative (subtle)
 
@@ -78,6 +80,13 @@ def draw_intervened_circuit(
     """
     if intervened_nodes is None:
         intervened_nodes = set()
+    if subcircuit_nodes is None:
+        subcircuit_nodes = set()
+
+    # Define border colors
+    COLOR_OUT_CIRCUIT = "#888888"   # Grey - out of circuit
+    COLOR_IN_CIRCUIT = "#2196F3"    # Blue - in circuit (not intervened)
+    COLOR_INTERVENED = "#FF6B35"    # Orange - intervened
 
     # Filter intervened_nodes to only include valid nodes based on layer_sizes
     valid_nodes = {
@@ -136,6 +145,9 @@ def draw_intervened_circuit(
             )
             is_affected = value_changed and not is_intervened
 
+            # Check if this node is in the subcircuit (for visual distinction)
+            is_subcircuit = name in subcircuit_nodes
+
             node_data[name] = {
                 "color": color,
                 "current_val": current_val,
@@ -144,6 +156,7 @@ def draw_intervened_circuit(
                 "is_intervened": is_intervened,
                 "is_affected": is_affected,
                 "value_changed": value_changed,
+                "is_subcircuit": is_subcircuit,
             }
 
     # Build edges with weights and track sign
@@ -198,34 +211,37 @@ def draw_intervened_circuit(
         for e in edges
     ]
 
-    # Categorize nodes by border type
-    regular_nodes = [n for n in G.nodes()
-                     if not node_data[n]["is_intervened"] and not node_data[n]["is_affected"]]
-    affected_nodes = [n for n in G.nodes() if node_data[n]["is_affected"]]
+    # Categorize nodes into 3 types (priority: intervened > in-circuit > out-of-circuit)
     intervened_list = [n for n in G.nodes() if node_data[n]["is_intervened"]]
+    in_circuit_list = [n for n in G.nodes()
+                       if node_data[n]["is_subcircuit"]
+                       and not node_data[n]["is_intervened"]]
+    out_circuit_list = [n for n in G.nodes()
+                        if not node_data[n]["is_subcircuit"]
+                        and not node_data[n]["is_intervened"]]
 
-    # Draw regular nodes (thin dark grey border)
-    if regular_nodes:
-        colors = [node_data[n]["color"] for n in regular_nodes]
+    # Draw out-of-circuit nodes (thin grey border)
+    if out_circuit_list:
+        colors = [node_data[n]["color"] for n in out_circuit_list]
         nx.draw_networkx_nodes(
-            G, pos, nodelist=regular_nodes, node_color=colors,
-            node_size=node_size, ax=ax, edgecolors="#555555", linewidths=0.8
+            G, pos, nodelist=out_circuit_list, node_color=colors,
+            node_size=node_size, ax=ax, edgecolors=COLOR_OUT_CIRCUIT, linewidths=1.0
         )
 
-    # Draw affected nodes (medium purple border - good contrast)
-    if affected_nodes:
-        colors = [node_data[n]["color"] for n in affected_nodes]
+    # Draw in-circuit nodes (thick blue border)
+    if in_circuit_list:
+        colors = [node_data[n]["color"] for n in in_circuit_list]
         nx.draw_networkx_nodes(
-            G, pos, nodelist=affected_nodes, node_color=colors,
-            node_size=node_size, ax=ax, edgecolors="#7B68EE", linewidths=2.0
+            G, pos, nodelist=in_circuit_list, node_color=colors,
+            node_size=node_size, ax=ax, edgecolors=COLOR_IN_CIRCUIT, linewidths=2.5
         )
 
-    # Draw intervened nodes (thick magenta border - high contrast)
+    # Draw intervened nodes (thick orange border)
     if intervened_list:
         colors = [node_data[n]["color"] for n in intervened_list]
         nx.draw_networkx_nodes(
             G, pos, nodelist=intervened_list, node_color=colors,
-            node_size=node_size, ax=ax, edgecolors="#C71585", linewidths=2.5
+            node_size=node_size, ax=ax, edgecolors=COLOR_INTERVENED, linewidths=2.5
         )
 
     # Draw edges with color by sign
@@ -289,6 +305,18 @@ def draw_intervened_circuit(
 
     if title:
         ax.set_title(title, fontsize=8, fontweight="bold")
+
+    # Add legend showing border color meanings
+    if show_legend and subcircuit_nodes:
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='white', edgecolor=COLOR_IN_CIRCUIT, linewidth=2, label='In-circuit'),
+            Patch(facecolor='white', edgecolor=COLOR_OUT_CIRCUIT, linewidth=1, label='Out-of-circuit'),
+            Patch(facecolor='white', edgecolor=COLOR_INTERVENED, linewidth=2, label='Intervened'),
+        ]
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=5,
+                  framealpha=0.8, handlelength=1.5, handleheight=1.0)
+
     ax.axis("off")
 
 

@@ -21,9 +21,23 @@ from .constants import (
     LAYOUT_RECT_DEFAULT,
     TITLE_Y,
     finalize_figure,
+    get_dpi,
     set_subplot_title,
 )
 from .circuit_drawing import draw_intervened_circuit
+
+
+def _ensure_list(obj):
+    """Convert tensors to lists for multiprocessing serialization.
+
+    ProcessPoolExecutor uses pickle, and torch tensors use shared memory
+    which can fail under memory pressure. Converting to plain lists avoids this.
+    """
+    if isinstance(obj, torch.Tensor):
+        return obj.tolist()
+    elif isinstance(obj, list):
+        return [_ensure_list(item) for item in obj]
+    return obj
 
 
 def _generate_observational_circuit_figure(args):
@@ -58,7 +72,7 @@ def _generate_observational_circuit_figure(args):
     input_size = layer_sizes[0] if layer_sizes else 2
     intervened_nodes = {f"(0,{i})" for i in range(input_size)}
 
-    fig, axes = plt.subplots(n_samples, 2, figsize=(8, n_samples * 3))
+    fig, axes = plt.subplots(n_samples, 2, figsize=(12, n_samples * 5))
     if n_samples == 1:
         axes = axes.reshape(1, -1)
 
@@ -132,13 +146,14 @@ def _generate_observational_circuit_figure(args):
     }
     category_label = category_labels.get(category, category)
 
-    # Use global layout with extra space for subtitle
-    plt.tight_layout(rect=[0, 0, 1, 0.90])
-    fig.suptitle(f"{base_str} -> {gt}", fontsize=14, fontweight="bold", y=TITLE_Y)
+    # Use global layout with extra space for subtitle and proper spacing
+    plt.subplots_adjust(hspace=0.5, wspace=0.3)  # Add spacing between subplots
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
+    fig.suptitle(f"{base_str} -> {gt}", fontsize=14, fontweight="bold", y=0.98)
     # Subtitle: transformation type (below main title)
-    fig.text(0.5, 0.93, category_label, ha="center", fontsize=10, style="italic")
+    fig.text(0.5, 0.95, category_label, ha="center", fontsize=10, style="italic")
 
-    plt.savefig(output_path, dpi=300)
+    plt.savefig(output_path, dpi=get_dpi())
     plt.close(fig)
     return output_path
 
@@ -214,21 +229,31 @@ def visualize_observational_circuits(
         k: {st: [] for st in sample_types} for k in base_to_key.values()
     }
 
+    def _get_base_key(base_input):
+        """Extract base key from input, handling tensors and lists."""
+        # Handle tensors, lists, and scalars
+        if hasattr(base_input[0], 'item'):
+            return (float(base_input[0].item()), float(base_input[1].item()))
+        return (float(base_input[0]), float(base_input[1]))
+
     # Process noise samples
     noise_samples = observational.noise.samples if observational.noise else []
     for sample in noise_samples:
-        base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
+        base_key = base_to_key.get(_get_base_key(sample.base_input))
         if base_key:
             samples_by_base[base_key]["noise"].append(sample)
 
     # Process OOD samples using sample_type field
     ood_samples = observational.ood.samples if observational.ood else []
     for sample in ood_samples:
-        base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
+        base_key = base_to_key.get(_get_base_key(sample.base_input))
         if base_key:
+            # Handle both SampleType enum and string
+            # For str(Enum), we need .value to get the string, not str() which gives "SampleType.ADD"
             st = getattr(sample, "sample_type", "multiply_positive")
-            if st in samples_by_base[base_key]:
-                samples_by_base[base_key][st].append(sample)
+            st_str = st.value if hasattr(st, 'value') else st
+            if st_str in samples_by_base[base_key]:
+                samples_by_base[base_key][st_str].append(sample)
 
     # Map sample types to directories and filename suffixes
     type_to_dir = {
@@ -296,10 +321,11 @@ def visualize_observational_circuits(
             output_path = os.path.join(target_dir, filename)
 
             # Convert samples to dicts for pickling
+            # Use _ensure_list to convert tensors to lists (torch shared memory can fail)
             sample_dicts = [
                 {
-                    "subcircuit_activations": s.subcircuit_activations,
-                    "gate_activations": s.gate_activations,
+                    "subcircuit_activations": _ensure_list(s.subcircuit_activations),
+                    "gate_activations": _ensure_list(s.gate_activations),
                     "subcircuit_correct": s.subcircuit_correct,
                     "gate_correct": s.gate_correct,
                     "agreement_bit": s.agreement_bit,
@@ -337,14 +363,23 @@ def visualize_observational_circuits(
             rel_path = os.path.relpath(output_path, circuit_viz_dir)
             paths[rel_path] = output_path
 
-    # Execute in parallel
+    # Execute in parallel with fallback to sequential
     if tasks:
         n_workers = min(len(tasks), mp.cpu_count())
         print(
             f"[VIZ] Generating {len(tasks)} observational circuit figures with {n_workers} workers"
         )
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            list(executor.map(_generate_observational_circuit_figure, tasks))
+        try:
+            with ProcessPoolExecutor(max_workers=n_workers) as executor:
+                list(executor.map(_generate_observational_circuit_figure, tasks))
+        except Exception as e:
+            # Fallback to sequential processing if multiprocessing fails
+            print(f"[VIZ] Parallel execution failed ({type(e).__name__}), falling back to sequential")
+            for task in tasks:
+                try:
+                    _generate_observational_circuit_figure(task)
+                except Exception as task_e:
+                    print(f"[VIZ] Warning: Failed to generate figure: {task_e}")
 
     return paths
 
@@ -416,9 +451,12 @@ def visualize_observational_curves(
         sorted_outputs = [p[1] for p in sorted_pairs]
         sorted_correct = [p[2] for p in sorted_pairs]
         colors = ["#4CAF50" if c else "#E53935" for c in sorted_correct]
-        ax.scatter(sorted_x, sorted_outputs, s=25, c=colors, alpha=0.7, edgecolors="none")
+        ax.scatter(sorted_x, sorted_outputs, s=15, c=colors, alpha=0.7, edgecolors="none")
         ax.axhline(y=gt_value, color="#333333", linestyle="--", linewidth=1, alpha=0.5)
         ax.axhline(y=0, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+        # Show sample count
+        ax.text(0.98, 0.98, f"n={len(samples)}", transform=ax.transAxes,
+                fontsize=6, ha='right', va='top', alpha=0.7)
 
     def _plot_agreement_binned(ax, samples, x_values, n_bins=6):
         """Plot binned agreement rates (overlapping: bit, best) and |Delta logit|."""
@@ -511,12 +549,18 @@ def visualize_observational_curves(
         ax2.set_ylabel("|Delta logit|", fontsize=8, color=color_line)
         ax2.tick_params(axis="y", labelcolor=color_line)
 
+    def _get_base_key(base_input):
+        """Extract base key from input, handling tensors and lists."""
+        if hasattr(base_input[0], 'item'):
+            return (float(base_input[0].item()), float(base_input[1].item()))
+        return (float(base_input[0]), float(base_input[1]))
+
     # Per-input breakdown for noise samples (4 rows x 3 cols: SC | Gate | Agreement)
     with profile("observational_curves.per_input"):
         noise_samples = observational.noise.samples if observational.noise else []
         samples_by_base = {k: [] for k in input_keys}
         for sample in noise_samples:
-            base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
+            base_key = base_to_key.get(_get_base_key(sample.base_input))
             if base_key:
                 samples_by_base[base_key].append(sample)
 
@@ -535,20 +579,41 @@ def visualize_observational_curves(
         else:
             noise_y_min, noise_y_max = -0.2, 1.2
 
+        # Compute global X range from all noise samples for consistent axes
+        all_perturbation_effects = []
+        for sample in noise_samples:
+            all_perturbation_effects.append(_compute_perturbation_effect(sample))
+        if all_perturbation_effects:
+            x_min = min(all_perturbation_effects)
+            x_max = max(all_perturbation_effects)
+            x_pad = (x_max - x_min) * 0.05 if x_max > x_min else 0.5
+            noise_x_min = x_min - x_pad
+            noise_x_max = x_max + x_pad
+        else:
+            noise_x_min, noise_x_max = -1.0, 1.0
+
         fig, axes = plt.subplots(4, 3, figsize=(15, 14))
 
         for row, key in enumerate(input_keys):
             samples = samples_by_base.get(key, [])
             gt = samples[0].ground_truth if samples else 0
 
+            # Compute X values once for all columns (same samples, same X)
+            if samples:
+                signed_noise = [float(_compute_perturbation_effect(s)) for s in samples]
+                sc_outputs = [float(s.subcircuit_output) for s in samples]
+                sc_correct = [bool(s.subcircuit_correct) for s in samples]
+                gate_outputs = [float(s.gate_output) for s in samples]
+                gate_correct = [bool(s.gate_correct) for s in samples]
+            else:
+                signed_noise = []
+
             # Column 0: Subcircuit
             ax = axes[row, 0]
             if samples:
-                signed_noise = [_compute_perturbation_effect(s) for s in samples]
-                sc_outputs = [s.subcircuit_output for s in samples]
-                sc_correct = [s.subcircuit_correct for s in samples]
                 _plot_single_model(ax, samples, signed_noise, gt, sc_outputs, sc_correct)
             ax.set_ylabel(f"({key.replace('_', ',')})", fontsize=10, fontweight="bold")
+            ax.set_xlim(noise_x_min, noise_x_max)
             ax.set_ylim(noise_y_min, noise_y_max)
             ax.grid(alpha=0.3)
             if row == 0:
@@ -556,13 +621,11 @@ def visualize_observational_curves(
             if row == 3:
                 ax.set_xlabel("Perturbation Effect", fontsize=9)
 
-            # Column 1: Gate
+            # Column 1: Gate (use same signed_noise as Subcircuit)
             ax = axes[row, 1]
             if samples:
-                signed_noise = [_compute_perturbation_effect(s) for s in samples]
-                gate_outputs = [s.gate_output for s in samples]
-                gate_correct = [s.gate_correct for s in samples]
                 _plot_single_model(ax, samples, signed_noise, gt, gate_outputs, gate_correct)
+            ax.set_xlim(noise_x_min, noise_x_max)
             ax.set_ylim(noise_y_min, noise_y_max)
             ax.grid(alpha=0.3)
             if row == 0:
@@ -573,8 +636,8 @@ def visualize_observational_curves(
             # Column 2: Agreement (binned)
             ax = axes[row, 2]
             if samples:
-                signed_noise = [_compute_perturbation_effect(s) for s in samples]
                 _plot_agreement_binned(ax, samples, signed_noise, n_bins=8)
+            ax.set_xlim(noise_x_min, noise_x_max)
             ax.grid(alpha=0.3, axis="y")
             if row == 0:
                 set_subplot_title(ax, "Agreement")
@@ -610,7 +673,7 @@ def visualize_observational_curves(
         noise_perturb_dir = os.path.join(output_dir, "circuit_viz", "noise_perturbations")
         os.makedirs(noise_perturb_dir, exist_ok=True)
         path = os.path.join(noise_perturb_dir, "summary.png")
-        plt.savefig(path, dpi=300, bbox_inches="tight")
+        plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
         plt.close(fig)
         paths["noise_perturbations/summary"] = path
 
@@ -676,8 +739,11 @@ def visualize_observational_curves(
             samples_by_base = {k: [] for k in input_keys}
             for sample in ood_samples:
                 st = getattr(sample, "sample_type", "multiply_positive")
-                if st == subtype_info["sample_type"]:
-                    base_key = base_to_key.get((sample.base_input[0], sample.base_input[1]))
+                # Handle both SampleType enum and string
+                # For str(Enum), we need .value to get the string, not str()
+                st_str = st.value if hasattr(st, 'value') else st
+                if st_str == subtype_info["sample_type"]:
+                    base_key = base_to_key.get(_get_base_key(sample.base_input))
                     if base_key:
                         samples_by_base[base_key].append(sample)
 
@@ -686,12 +752,14 @@ def visualize_observational_curves(
             if total_samples == 0:
                 continue
 
-            # Compute global y-axis range from samples
+            # Compute global y-axis and x-axis range from samples
             all_outputs = []
+            all_x_vals = []
             for samples in samples_by_base.values():
                 for sample in samples:
                     all_outputs.append(sample.gate_output)
                     all_outputs.append(sample.subcircuit_output)
+                    all_x_vals.append(abs(sample.noise_magnitude))
             if all_outputs:
                 y_min = min(all_outputs)
                 y_max = max(all_outputs)
@@ -700,6 +768,16 @@ def visualize_observational_curves(
                 y_max += y_pad
             else:
                 y_min, y_max = -0.2, 1.2
+
+            # Compute global X range for consistent axes
+            if all_x_vals:
+                x_min_global = min(all_x_vals)
+                x_max_global = max(all_x_vals)
+                x_pad = (x_max_global - x_min_global) * 0.05 if x_max_global > x_min_global else 0.5
+                x_min_global -= x_pad
+                x_max_global += x_pad
+            else:
+                x_min_global, x_max_global = 0.0, 1.0
 
             # Skip 0_0 for multiply (it stays 0 regardless of scale)
             if subtype_info["skip_0_0"]:
@@ -723,6 +801,7 @@ def visualize_observational_curves(
                     sc_correct = [s.subcircuit_correct for s in samples]
                     _plot_single_model(ax, samples, x_vals, gt, sc_outputs, sc_correct)
                 ax.set_ylabel(f"({key.replace('_', ',')})", fontsize=10, fontweight="bold")
+                ax.set_xlim(x_min_global, x_max_global)
                 ax.set_ylim(y_min, y_max)
                 ax.grid(alpha=0.3)
                 if row == 0:
@@ -737,6 +816,7 @@ def visualize_observational_curves(
                     gate_outputs = [s.gate_output for s in samples]
                     gate_correct = [s.gate_correct for s in samples]
                     _plot_single_model(ax, samples, x_vals, gt, gate_outputs, gate_correct)
+                ax.set_xlim(x_min_global, x_max_global)
                 ax.set_ylim(y_min, y_max)
                 ax.grid(alpha=0.3)
                 if row == 0:
@@ -749,6 +829,7 @@ def visualize_observational_curves(
                 if samples:
                     x_vals = [abs(s.noise_magnitude) for s in samples]
                     _plot_agreement_binned(ax, samples, x_vals, n_bins=8)
+                ax.set_xlim(x_min_global, x_max_global)
                 ax.grid(alpha=0.3, axis="y")
                 if row == 0:
                     set_subplot_title(ax, "Agreement")
@@ -782,7 +863,7 @@ def visualize_observational_curves(
             )
             os.makedirs(ood_type_dir, exist_ok=True)
             path = os.path.join(ood_type_dir, subtype_info["filename"])
-            plt.savefig(path, dpi=300, bbox_inches="tight")
+            plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
             plt.close(fig)
             paths[f"ood_{subtype_info['folder']}/{subtype_info['filename']}"] = path
 

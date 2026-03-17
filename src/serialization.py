@@ -7,7 +7,7 @@ for dataclass objects, filtering out non-serializable fields like nn.Module and 
 import hashlib
 import json
 import math
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, fields, is_dataclass
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
@@ -15,7 +15,11 @@ import torch
 
 
 def filter_non_serializable(obj):
-    """Recursively filter out non-JSON-serializable objects (like nn.Module, Tensor)."""
+    """Recursively filter out non-JSON-serializable objects (like nn.Module, Tensor).
+
+    For dataclasses with a to_dict() method, calls that method for proper serialization.
+    For other dataclasses, recursively processes each field to preserve nested to_dict() calls.
+    """
     if isinstance(obj, dict):
         return {
             k: filter_non_serializable(v)
@@ -36,8 +40,14 @@ def filter_non_serializable(obj):
         # Handle dataclass instances - check for to_dict method first
         if hasattr(obj, "to_dict"):
             return obj.to_dict()
-        # Otherwise convert to dict and filter
-        return filter_non_serializable(asdict(obj))
+        # For dataclasses without to_dict(), manually process each field
+        # This preserves to_dict() calls for nested dataclasses (unlike asdict())
+        result = {}
+        for f in fields(obj):
+            val = getattr(obj, f.name)
+            if val is not None and not isinstance(val, torch.nn.Module):
+                result[f.name] = filter_non_serializable(val)
+        return result
     return obj
 
 

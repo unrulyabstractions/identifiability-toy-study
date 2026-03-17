@@ -16,6 +16,7 @@ from src.model import DecomposedMLP
 from src.infra import profile_fn
 
 from .circuit_drawing import _get_spd_component_weights
+from .constants import get_dpi
 
 if TYPE_CHECKING:
     from src.spd import SpdResults
@@ -55,7 +56,7 @@ def visualize_spd_components(
     plt.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
-    plt.savefig(path, dpi=300, bbox_inches="tight")
+    plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
     plt.close(fig)
     return path
 
@@ -163,6 +164,6 @@ def _visualize_cluster_summary(
     plt.tight_layout()
 
     path = os.path.join(output_dir, "cluster_summary.png")
-    plt.savefig(path, dpi=300, bbox_inches="tight")
+    plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
     plt.close(fig)
     return path

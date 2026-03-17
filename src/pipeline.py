@@ -22,12 +22,25 @@ from src.spd import (
     save_spd_results,
 )
 from src.viz import visualize_experiment, visualize_spd_experiment
+from src.viz.viz_config import VizConfig, VizLevel
 
 
 @profile_fn("do_viz_on_experiment")
-def do_viz_on_experiment(result: ExperimentResult, run_dir: str, spd: bool) -> None:
+def do_viz_on_experiment(
+    result: ExperimentResult,
+    run_dir: str,
+    spd: bool,
+    viz_config: VizConfig | None = None,
+) -> None:
     """Run visualization on a complete experiment result."""
-    visualize_experiment(result, run_dir=run_dir)
+    if viz_config is None:
+        viz_config = VizConfig()
+
+    # Skip all visualization if level is NONE
+    if viz_config.skip_all_viz:
+        return
+
+    visualize_experiment(result, run_dir=run_dir, viz_config=viz_config)
     if spd:
         spd_result = load_spd_results(run_dir)
         if spd_result:
@@ -50,17 +63,29 @@ def do_spd_on_experiment(
     return spd_result
 
 
-def do_viz_on_trial(trial_result: TrialResult, run_dir: str, spd: bool) -> None:
+def do_viz_on_trial(
+    trial_result: TrialResult,
+    run_dir: str,
+    spd: bool,
+    viz_config: VizConfig | None = None,
+) -> None:
     """Run visualization on a single trial result.
 
     Creates a temporary ExperimentResult wrapper for compatibility with existing viz.
     """
+    if viz_config is None:
+        viz_config = VizConfig()
+
+    # Skip all visualization if level is NONE
+    if viz_config.skip_all_viz:
+        return
+
     # Wrap trial in experiment result for viz compatibility
     from src.experiment_config import ExperimentConfig
     temp_result = ExperimentResult(config=ExperimentConfig())
     temp_result.trials[trial_result.trial_id] = trial_result
 
-    visualize_experiment(temp_result, run_dir=run_dir)
+    visualize_experiment(temp_result, run_dir=run_dir, viz_config=viz_config)
     if spd:
         spd_result = load_spd_results(run_dir)
         if spd_result:
@@ -94,21 +119,15 @@ def save_experiment_results(result: ExperimentResult, run_dir: str) -> None:
 def save_trial_result(trial_result: TrialResult, run_dir: str, cfg: ExperimentConfig) -> None:
     """Save a single trial result incrementally.
 
-    Creates/updates the experiment result structure for this trial.
+    OPTIMIZED: Saves only this trial's data without loading all previous trials.
+    Run-level summaries are regenerated at the end of the experiment.
     """
+    from src.persistence.save import save_single_trial
+
     run_dir = Path(run_dir)
 
-    # Load existing result or create new one
-    if (run_dir / "config.json").exists():
-        result = load_results(str(run_dir))
-    else:
-        result = ExperimentResult(config=cfg)
-
-    # Add/update this trial
-    result.trials[trial_result.trial_id] = trial_result
-
-    # Save updated result
-    save_results(result, run_dir=run_dir)
+    # Save just this trial (no O(n^2) loading of all previous trials)
+    save_single_trial(trial_result, run_dir, cfg)
 
 
 def print_experiment_summary(
@@ -134,13 +153,16 @@ def run_monolith(
     run_dir: str,
     logger: Any,
     spd: bool = False,
-    no_viz: bool = False,
+    viz_config: VizConfig | None = None,
     spd_device: str = "cpu",
 ) -> ExperimentResult:
     """Run all trials at once, save at the end.
 
     Best for small experiments where total runtime is short.
     """
+    if viz_config is None:
+        viz_config = VizConfig()
+
     experiment_result, master_data = run_experiment(cfg, logger=logger)
     save_training_data(master_data, run_dir, gate_names=cfg.target_logic_gates)
     save_experiment_results(experiment_result, run_dir=run_dir)
@@ -148,10 +170,10 @@ def run_monolith(
     spd_result = None
     if spd:
         spd_result = do_spd_on_experiment(
-            experiment_result, run_dir, viz=not no_viz, spd_device=spd_device
+            experiment_result, run_dir, viz=not viz_config.skip_all_viz, spd_device=spd_device
         )
-    if not no_viz:
-        do_viz_on_experiment(experiment_result, run_dir, spd=spd)
+    if not viz_config.skip_all_viz:
+        do_viz_on_experiment(experiment_result, run_dir, spd=spd, viz_config=viz_config)
 
     print_experiment_summary(experiment_result, spd_result, logger)
     return experiment_result
@@ -163,7 +185,7 @@ def run_iteratively(
     run_dir: str,
     logger: Any,
     spd: bool = False,
-    no_viz: bool = False,
+    viz_config: VizConfig | None = None,
     spd_device: str = "cpu",
 ) -> ExperimentResult:
     """Run trials one at a time, saving after each.
@@ -171,22 +193,42 @@ def run_iteratively(
     Best for long experiments where you want incremental saves.
     Results are saved after each trial completes, so partial progress
     is preserved if the experiment is interrupted.
+
+    MEMORY OPTIMIZED: Trials are saved and then cleared from memory.
+    Final result is loaded from disk at the end.
     """
-    experiment_result = ExperimentResult(config=cfg)
+    import gc
+
+    if viz_config is None:
+        viz_config = VizConfig()
 
     trial_iterator, master_data = experiment_run(cfg, logger=logger)
     save_training_data(master_data, run_dir, gate_names=cfg.target_logic_gates)
 
+    trial_count = 0
     for trial_result in trial_iterator:
-        # Save this trial incrementally
+        trial_count += 1
+
+        # Save this trial incrementally (without loading all previous trials)
         save_trial_result(trial_result, run_dir, cfg)
-        experiment_result.trials[trial_result.trial_id] = trial_result
 
         # Optionally run SPD/viz per trial
         if spd:
-            do_spd_on_trial(trial_result, run_dir, viz=not no_viz, spd_device=spd_device)
-        if not no_viz:
-            do_viz_on_trial(trial_result, run_dir, spd=spd)
+            do_spd_on_trial(trial_result, run_dir, viz=not viz_config.skip_all_viz, spd_device=spd_device)
+        if not viz_config.skip_all_viz:
+            do_viz_on_trial(trial_result, run_dir, spd=spd, viz_config=viz_config)
+
+        # Clear trial from memory after processing
+        del trial_result
+        gc.collect()
+
+    # Load final results from disk for summary (memory-efficient: only loads once)
+    logger.info(f"Loading {trial_count} trials from disk for final summary...")
+    experiment_result = load_results(str(run_dir))
+
+    # Generate run-level summaries only (trials already saved individually)
+    from src.persistence.save import save_run_summaries_only
+    save_run_summaries_only(experiment_result, run_dir=run_dir, logger=logger)
 
     # Final summary
     spd_result = load_spd_results(run_dir) if spd else None

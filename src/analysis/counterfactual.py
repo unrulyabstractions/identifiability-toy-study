@@ -127,3 +127,43 @@ def create_patch_intervention(
             patches[single_ps] = ("set", vals)
 
     return Intervention(patches=patches)
+
+
+def create_batched_patch_intervention(
+    patch: PatchShape, batched_activations: list[torch.Tensor]
+) -> Intervention:
+    """
+    Create a batched intervention for multiple samples at once.
+
+    This enables batched counterfactual computation where each sample in the batch
+    gets its own intervention values (per-sample activations).
+
+    The MLP's _apply_neuron_patches_inplace supports per-sample values with shape [B, k],
+    where B is batch size and k is the number of neurons being patched.
+
+    Args:
+        patch: PatchShape specifying which neurons to patch (same for all samples).
+               Can span multiple layers (e.g., layers=(0,1) for all hidden layers).
+        batched_activations: List of activation tensors [N, hidden] per layer,
+                            where N is batch size. Length must cover all layers in patch.
+
+    Returns:
+        Intervention with per-sample values [N, k] where k = len(patch.indices)
+    """
+    if patch is None:
+        return Intervention(patches={})
+
+    patches_dict = {}
+    for layer in patch.single_layers():
+        if layer < len(batched_activations):
+            layer_acts = batched_activations[layer]  # [N, hidden]
+            if patch.indices:
+                vals = layer_acts[:, list(patch.indices)]  # [N, k]
+            else:
+                vals = layer_acts  # [N, hidden]
+            single_ps = PatchShape(
+                layers=(layer,), indices=patch.indices, axis="neuron"
+            )
+            patches_dict[single_ps] = ("set", vals)
+
+    return Intervention(patches=patches_dict)

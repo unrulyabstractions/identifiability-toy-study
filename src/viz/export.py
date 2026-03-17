@@ -159,18 +159,22 @@ def compute_interventional_metrics(faithfulness: "FaithfulnessMetrics") -> dict:
             "in_distribution": {...},
             "out_distribution": {...}
         },
-        "overall_score": 0.90
+        "component_scores": {"in_circuit_id": 0.95, "out_circuit_id": 0.90, ...},
+        "n_components_averaged": 2,
+        "overall_score": 0.92
     }
+
+    Uses availability-aware averaging: only components with n_interventions > 0 contribute to overall_score.
     """
     def compute_stats(stats_dict):
         if not stats_dict:
-            return {"n_interventions": 0, "mean_bit_similarity": 0.0, "mean_logit_similarity": 0.0}
+            return {"n_interventions": 0, "mean_bit_similarity": None, "mean_logit_similarity": None}
         bit_sims = [ps.mean.bit for ps in stats_dict.values()]
         logit_sims = [ps.mean.logit for ps in stats_dict.values()]
         return {
             "n_interventions": len(stats_dict),
-            "mean_bit_similarity": sum(bit_sims) / len(bit_sims) if bit_sims else 0.0,
-            "mean_logit_similarity": sum(logit_sims) / len(logit_sims) if logit_sims else 0.0,
+            "mean_bit_similarity": sum(bit_sims) / len(bit_sims) if bit_sims else None,
+            "mean_logit_similarity": sum(logit_sims) / len(logit_sims) if logit_sims else None,
         }
 
     interventional = faithfulness.interventional
@@ -179,15 +183,18 @@ def compute_interventional_metrics(faithfulness: "FaithfulnessMetrics") -> dict:
     out_circuit_id = compute_stats(interventional.out_circuit_stats if interventional else {})
     out_circuit_ood = compute_stats(interventional.out_circuit_stats_ood if interventional else {})
 
-    # Overall: average of bit similarities
-    sims = [
-        in_circuit_id["mean_bit_similarity"],
-        in_circuit_ood["mean_bit_similarity"],
-        out_circuit_id["mean_bit_similarity"],
-        out_circuit_ood["mean_bit_similarity"],
-    ]
-    n_valid = sum(1 for s in sims if s > 0)
-    overall = sum(sims) / n_valid if n_valid > 0 else 0.0
+    # Build component scores dict (None for unavailable components)
+    component_scores = {
+        "in_circuit_id": in_circuit_id["mean_bit_similarity"],
+        "out_circuit_id": out_circuit_id["mean_bit_similarity"],
+        "in_circuit_ood": in_circuit_ood["mean_bit_similarity"],
+        "out_circuit_ood": out_circuit_ood["mean_bit_similarity"],
+    }
+
+    # Overall: average only available components (those with n_interventions > 0)
+    available_scores = [s for s in component_scores.values() if s is not None]
+    n_components_averaged = len(available_scores)
+    overall = sum(available_scores) / n_components_averaged if available_scores else 0.0
 
     return {
         "in_circuit": {
@@ -198,6 +205,8 @@ def compute_interventional_metrics(faithfulness: "FaithfulnessMetrics") -> dict:
             "in_distribution": out_circuit_id,
             "out_distribution": out_circuit_ood,
         },
+        "component_scores": component_scores,
+        "n_components_averaged": n_components_averaged,
         "overall_score": overall,
     }
 
@@ -512,21 +521,27 @@ def _compute_subcircuit_scores(
             obs_epsilon = abs(min(1.0 - s for s in obs_valid_scores))
 
     # Interventional score and epsilon (from faithfulness.interventional)
+    # Use availability-aware averaging: only components with data contribute
     int_score = 0.0
     int_epsilon = 0.0
     interventional = faithfulness.interventional if faithfulness else None
     if interventional:
         int_component_scores = []
-        for stats_dict in [interventional.in_circuit_stats, interventional.out_circuit_stats,
-                          interventional.in_circuit_stats_ood, interventional.out_circuit_stats_ood]:
+        stats_dicts = [
+            ("in_circuit_id", interventional.in_circuit_stats),
+            ("out_circuit_id", interventional.out_circuit_stats),
+            ("in_circuit_ood", interventional.in_circuit_stats_ood),
+            ("out_circuit_ood", interventional.out_circuit_stats_ood),
+        ]
+        for name, stats_dict in stats_dicts:
             if stats_dict:
                 bit_sims = [ps.mean.bit for ps in stats_dict.values()]
                 if bit_sims:
                     int_component_scores.append(sum(bit_sims) / len(bit_sims))
-        int_valid_scores = [s for s in int_component_scores if s > 0]
-        if int_valid_scores:
-            int_score = sum(int_valid_scores) / len(int_valid_scores)
-            int_epsilon = abs(min(1.0 - s for s in int_valid_scores))
+        # Only average components that have data (no artificial 0.0s)
+        if int_component_scores:
+            int_score = sum(int_component_scores) / len(int_component_scores)
+            int_epsilon = abs(min(1.0 - s for s in int_component_scores))
 
     # Counterfactual score and epsilon (from faithfulness.counterfactual)
     cf_score = 0.0
@@ -746,7 +761,13 @@ def save_all_samples(
     paths = {}
 
     def sample_to_dict(sample) -> dict:
-        """Convert a sample dataclass to dict, handling nested fields."""
+        """Convert a sample dataclass to dict, handling nested fields.
+
+        Uses to_dict() if available (for lazy tensor->list conversion),
+        otherwise falls back to asdict().
+        """
+        if hasattr(sample, 'to_dict'):
+            return sample.to_dict()
         return asdict(sample)
 
     def save_samples_file(subdir: str, samples: list[dict]) -> str:

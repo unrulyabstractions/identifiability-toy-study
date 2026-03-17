@@ -130,6 +130,11 @@ class InterventionalMetrics(SchemaClass):
     # Overall
     overall_interventional: float = 0.0
 
+    # Component-level tracking for transparency
+    component_scores: dict[str, float | None] = field(default_factory=dict)
+    component_n: dict[str, int] = field(default_factory=dict)
+    n_components_averaged: int = 0
+
 
 @dataclass
 class CounterfactualMetrics(SchemaClass):
@@ -314,6 +319,12 @@ class InterventionStatistics(SchemaClass):
     mean_out_sim_ood: float = 0.0
     mean_faith: float = 0.0
     std_faith: float = 0.0
+
+    # Sample counts for availability tracking
+    n_in_sim: int = 0
+    n_out_sim: int = 0
+    n_in_sim_ood: int = 0
+    n_out_sim_ood: int = 0
 
 
 @dataclass

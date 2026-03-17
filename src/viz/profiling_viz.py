@@ -13,6 +13,8 @@ import numpy as np
 
 from src.schemas import ProfilingData
 
+from .constants import get_dpi
+
 
 def visualize_profiling_timeline(
     profiling: ProfilingData,
@@ -52,7 +54,7 @@ def visualize_profiling_timeline(
     plt.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
-    plt.savefig(path, dpi=300, bbox_inches="tight")
+    plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
     plt.close(fig)
     return path
 
@@ -106,7 +108,7 @@ def visualize_profiling_phases(
     plt.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
-    plt.savefig(path, dpi=300, bbox_inches="tight")
+    plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
     plt.close(fig)
     return path
 
@@ -161,6 +163,6 @@ def visualize_profiling_summary(
     plt.tight_layout()
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
-    plt.savefig(path, dpi=300, bbox_inches="tight")
+    plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
     plt.close(fig)
     return path

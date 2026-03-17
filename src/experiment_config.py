@@ -50,7 +50,7 @@ def get_default_train_n_samples():
 def get_default_train_noise():
     if _FAST_TEST_MODE:
         return 0.00001
-    return 0.1
+    return 0.09
 
 
 def get_default_logic_gates():
@@ -68,6 +68,9 @@ def get_default_logic_gates():
             return ["ID", "MAJORITY"]
         if _FAST_TEST_GATES_IDX == 5:
             return ["XOR", "MAJORITY"]
+
+    ALL_GATES = ["XOR", "OR", "AND", "IMP"]
+
     return ALL_GATES
 
 
@@ -98,7 +101,7 @@ def get_default_faith_n_samples():
 def get_default_num_gates_per_run():
     if _FAST_TEST_MODE:
         return [2]
-    return [1, 2, 3]
+    return [1, 2]
 
 
 def get_default_activations():
@@ -128,7 +131,7 @@ class DataParams(SchemaClass):
 @dataclass
 class ModelParams(SchemaClass):
     logic_gates: list[str] = field(default_factory=lambda: get_default_logic_gates())
-    width: int = 3
+    width: int = 4
     depth: int = 2
     activation: str = "leaky_relu"  # Single activation for the model
 
@@ -255,6 +258,7 @@ class TrialSetting:
     Contains everything needed to run a trial:
     - setup: Trial configuration (seed, params, constraints)
     - gate_indices: Which columns from master data to use for this trial's gates
+    - max_input_size: Experiment-wide max input size (must match precomputed circuits)
     - config: Reference to experiment config
     - subcircuits: Pre-computed subcircuits for this architecture
     - subcircuit_structures: Pre-computed structures for analysis
@@ -262,6 +266,7 @@ class TrialSetting:
 
     setup: TrialSetup
     gate_indices: list[int]  # Indices into master data's y columns
+    max_input_size: int  # Experiment-wide max input size (max across all gates)
     config: ExperimentConfig
     subcircuits: list
     subcircuit_structures: list

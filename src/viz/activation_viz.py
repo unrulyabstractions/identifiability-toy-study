@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import torch
 
 from src.circuit import Circuit
-from .constants import finalize_figure
+from .constants import finalize_figure, get_dpi
 from .circuit_drawing import _draw_circuit_from_data
 
 
@@ -119,7 +119,7 @@ def visualize_circuit_activations_from_data(
         ax.axis("off")
         os.makedirs(output_dir, exist_ok=True)
         path = os.path.join(output_dir, filename)
-        plt.savefig(path, dpi=300, bbox_inches="tight")
+        plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
         plt.close(fig)
         return path
 
@@ -161,7 +161,7 @@ def visualize_circuit_activations_from_data(
 
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
-    plt.savefig(path, dpi=300, bbox_inches="tight")
+    plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
     plt.close(fig)
     return path
 
@@ -222,6 +222,6 @@ def visualize_circuit_activations_mean(
 
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)
-    plt.savefig(path, dpi=300, bbox_inches="tight")
+    plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
     plt.close(fig)
     return path

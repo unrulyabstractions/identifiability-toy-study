@@ -5,12 +5,30 @@ Contains sample dataclasses for storing test results:
 - InterventionalSample: Result of a single intervention test
 - CounterfactualSample: Result of a single counterfactual test
 - SampleType: Enum for sample types
+
+LAZY SERIALIZATION: Sample classes store activations as tensors during computation.
+Conversion to lists happens lazily in to_dict() when serializing to JSON.
+This avoids thousands of .tolist() calls during analysis, improving performance.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, asdict
 from enum import Enum
+from typing import Any, Union
+
+import torch
 
 from src.schema_class import SchemaClass
+
+
+def _tensor_to_list(obj: Any) -> Any:
+    """Recursively convert tensors to lists for JSON serialization."""
+    if isinstance(obj, torch.Tensor):
+        return obj.tolist()
+    elif isinstance(obj, list):
+        return [_tensor_to_list(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {k: _tensor_to_list(v) for k, v in obj.items()}
+    return obj
 
 
 class SampleType(str, Enum):
@@ -34,6 +52,9 @@ class ObservationalSample(SchemaClass):
 
     NOTE: Activations are pre-computed here so visualization code
     NEVER needs to run models. Visualization is READ-ONLY.
+
+    LAZY SERIALIZATION: Activations can be stored as tensors during computation.
+    They are converted to lists in to_dict() when serializing.
 
     Sample types:
     - noise: Gaussian noise perturbation
@@ -67,9 +88,18 @@ class ObservationalSample(SchemaClass):
     sample_type: str = SampleType.NOISE  # Can be string or SampleType enum
 
     # Pre-computed activations for visualization (NO model runs during viz!)
-    # Each is a list of lists: [[layer0_acts], [layer1_acts], ...]
-    gate_activations: list[list[float]] = field(default_factory=list)
-    subcircuit_activations: list[list[float]] = field(default_factory=list)
+    # Can be tensors (during computation) or lists (after serialization)
+    # Each is a list: [layer0_acts, layer1_acts, ...] where each can be tensor or list
+    gate_activations: Any = field(default_factory=list)
+    subcircuit_activations: Any = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        """Convert to dict with lazy tensor->list conversion."""
+        result = {}
+        for f in fields(self):
+            val = getattr(self, f.name)
+            result[f.name] = _tensor_to_list(val)
+        return result
 
 
 @dataclass
@@ -78,6 +108,9 @@ class InterventionalSample(SchemaClass):
 
     NOTE: Activations are pre-computed here so visualization code
     NEVER needs to run models. Visualization is READ-ONLY.
+
+    LAZY SERIALIZATION: Activations can be stored as tensors during computation.
+    They are converted to lists in to_dict() when serializing.
     """
 
     # Patch info
@@ -86,7 +119,7 @@ class InterventionalSample(SchemaClass):
     patch_indices: list[int]  # Neuron indices
 
     # Intervention values (what we patched in)
-    intervention_values: list[float]
+    intervention_values: Any  # list[float] or tensor
 
     # Outputs
     gate_output: float  # Output from full gate model under intervention
@@ -98,12 +131,20 @@ class InterventionalSample(SchemaClass):
     mse: float  # (gate_output - subcircuit_output)^2
 
     # Pre-computed activations for visualization (NO model runs during viz!)
-    # These are the activations AFTER the intervention/patch is applied
-    gate_activations: list[list[float]] = field(default_factory=list)
-    subcircuit_activations: list[list[float]] = field(default_factory=list)
+    # Can be tensors (during computation) or lists (after serialization)
+    gate_activations: Any = field(default_factory=list)
+    subcircuit_activations: Any = field(default_factory=list)
     # Original activations BEFORE the intervention (for showing two-value display)
-    original_gate_activations: list[list[float]] = field(default_factory=list)
-    original_subcircuit_activations: list[list[float]] = field(default_factory=list)
+    original_gate_activations: Any = field(default_factory=list)
+    original_subcircuit_activations: Any = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        """Convert to dict with lazy tensor->list conversion."""
+        result = {}
+        for f in fields(self):
+            val = getattr(self, f.name)
+            result[f.name] = _tensor_to_list(val)
+        return result
 
 
 @dataclass
@@ -124,6 +165,9 @@ class CounterfactualSample(SchemaClass):
 
     NOTE: Activations are pre-computed here so visualization code
     NEVER needs to run models. Visualization is READ-ONLY.
+
+    LAZY SERIALIZATION: Activations can be stored as tensors during computation.
+    They are converted to lists in to_dict() when serializing.
     """
 
     faithfulness_score: float  # Score depends on score_type
@@ -140,9 +184,9 @@ class CounterfactualSample(SchemaClass):
     # - "independence": Noise out-circuit -> tests if circuit is self-contained
     score_type: str = "necessity"
 
-    # Clean/corrupted input info
-    clean_input: list[float] = field(default_factory=list)  # e.g., [0, 1]
-    corrupted_input: list[float] = field(default_factory=list)  # e.g., [1, 0]
+    # Clean/corrupted input info (can be tensor or list)
+    clean_input: Any = field(default_factory=list)  # e.g., [0, 1]
+    corrupted_input: Any = field(default_factory=list)  # e.g., [1, 0]
 
     # Expected outputs (from original clean/corrupted runs, no intervention)
     expected_clean_output: float = 0.0  # y_clean (full model on clean input)
@@ -157,10 +201,17 @@ class CounterfactualSample(SchemaClass):
     output_changed_to_corrupted: bool = False  # round(actual) == round(corrupted)
 
     # Pre-computed activations for visualization (NO model runs during viz!)
-    # These are from the ORIGINAL clean/corrupted runs (reference)
-    clean_activations: list[list[float]] = field(default_factory=list)
-    corrupted_activations: list[list[float]] = field(default_factory=list)
+    # Can be tensors (during computation) or lists (after serialization)
+    clean_activations: Any = field(default_factory=list)
+    corrupted_activations: Any = field(default_factory=list)
 
     # Activations from the actual intervention run (FULL MODEL with patches)
-    # This is what the visualization should show for the counterfactual
-    intervened_activations: list[list[float]] = field(default_factory=list)
+    intervened_activations: Any = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        """Convert to dict with lazy tensor->list conversion."""
+        result = {}
+        for f in fields(self):
+            val = getattr(self, f.name)
+            result[f.name] = _tensor_to_list(val)
+        return result

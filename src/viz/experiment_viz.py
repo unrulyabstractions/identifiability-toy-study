@@ -89,6 +89,7 @@ from .profiling_viz import (
     visualize_profiling_summary,
     visualize_profiling_timeline,
 )
+from .viz_config import VizConfig, VizLevel
 
 
 def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) -> None:
@@ -163,7 +164,11 @@ def _generate_circuit_diagrams(result: ExperimentResult, run_dir: str | Path) ->
 
 
 @no_pytorch_inference
-def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
+def visualize_experiment(
+    result: ExperimentResult,
+    run_dir: str | Path,
+    viz_config: VizConfig | None = None,
+) -> dict:
     """
     Generate all visualizations for experiment using pre-computed data.
 
@@ -176,15 +181,28 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
 
     The @no_pytorch decorator enforces that no model inference happens here.
 
+    Args:
+        result: ExperimentResult to visualize
+        run_dir: Output directory
+        viz_config: Visualization configuration (controls level of detail)
+
     Returns paths dict.
     """
     import time
+
+    if viz_config is None:
+        viz_config = VizConfig()
+
+    # Skip all visualization if level is NONE
+    if viz_config.skip_all_viz:
+        print("[VIZ] Skipping visualization (--viz 0)")
+        return {}
 
     # Overall viz profiling
     viz_start = time.time()
     viz_mem_start = get_memory_mb()
     print(f"\n{'~' * 60}")
-    print("  VISUALIZATION PHASE")
+    print(f"  VISUALIZATION PHASE (level: {viz_config.level.name})")
     print(f"  Memory before: {viz_mem_start:.1f} MB")
     print(f"{'~' * 60}")
 
@@ -296,12 +314,20 @@ def visualize_experiment(result: ExperimentResult, run_dir: str | Path) -> dict:
                 viz_paths[trial_id][gname]["summary"] = summary_path
 
         # --- Subcircuit visualization ---
+        # Skip if level doesn't include subcircuit visualization
+        if viz_config.skip_circuit_figures:
+            continue
+
         for gate_idx, gname in enumerate(gate_names):
             best_keys = trial.metrics.per_gate_bests.get(gname, [])
             if not best_keys:
                 continue
 
-            print(f"[VIZ] Gate {gname}: {len(best_keys)} best subcircuits to visualize")
+            # Limit subcircuits based on viz level
+            max_sc = viz_config.max_subcircuits_per_gate
+            best_keys = best_keys[:max_sc]
+
+            print(f"[VIZ] Gate {gname}: {len(best_keys)} best subcircuits to visualize (max: {max_sc})")
             bests_faith = trial.metrics.per_gate_bests_faith.get(gname, [])
 
             # Group edge variations by node pattern for summary generation
