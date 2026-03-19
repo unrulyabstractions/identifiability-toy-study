@@ -328,7 +328,7 @@ def plot_decision_boundary_2d_from_data(
     for i in range(len(corners)):
         cx, cy = corners[i]
         pred = corner_preds[i]
-        color = "blue" if pred < 0.5 else "red"
+        color = "blue" if pred <= 0.5 else "red"
         ax.scatter([cx], [cy], c=color, s=200, marker="s", edgecolors="black", zorder=5)
         ax.annotate(
             f"({int(cx)},{int(cy)})\n{pred:.2f}",
@@ -426,7 +426,7 @@ def plot_decision_boundary_3d_from_data(
     for i in range(len(corners)):
         corner = corners[i]
         pred = corner_preds[i]
-        color = "blue" if pred < 0.5 else "red"
+        color = "blue" if pred <= 0.5 else "red"
         ax.scatter(
             [corner[0]],
             [corner[1]],
@@ -476,7 +476,7 @@ def plot_decision_boundary_3d_from_data(
         for i in range(len(corners)):
             corner = corners[i]
             pred = corner_preds[i]
-            color = "blue" if pred < 0.5 else "red"
+            color = "blue" if pred <= 0.5 else "red"
             ax.scatter(
                 [corner[dim1]],
                 [corner[dim2]],

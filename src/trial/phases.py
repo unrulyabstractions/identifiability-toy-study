@@ -16,17 +16,17 @@ in their source modules (helpers.py and batched_eval.py).
 import torch
 
 from src.analysis import calculate_faithfulness_metrics
-from src.domain import generate_canonical_inputs
 from src.circuit import (
     adapt_masks_for_gate,
     batch_compute_metrics,
     batch_evaluate_edge_variants,
-    enumerate_all_valid_circuit,
+    enumerate_circuits_for_architecture,
     parse_subcircuit_idx,
     precompute_circuit_masks_base,
 )
+from src.domain import generate_canonical_inputs
 from src.infra import ParallelTasks, profile, profile_fn
-from src.infra.profiler import trace, traced, trace_progress
+from src.infra.profiler import trace, trace_progress, traced
 from src.training import train_model
 
 # Re-export functions that have @profile_fn directly on them
@@ -99,7 +99,7 @@ def compute_activations_phase(model, data, device, input_size):
 def enumerate_circuits_phase(model, parallel_config):
     """Enumerate all valid circuits and analyze structure."""
     with profile("circuit_enum"):
-        subcircuits = enumerate_all_valid_circuit(model, use_tqdm=True)
+        subcircuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=True)
 
     with profile("structure_analysis"):
         if parallel_config.enable_parallel_structure:
@@ -196,7 +196,9 @@ def faithfulness_phase(
     else:
         results = []
         for i, key in enumerate(subcircuit_keys):
-            trace_progress(i + 1, len(subcircuit_keys), "faithfulness subcircuits", every=5)
+            trace_progress(
+                i + 1, len(subcircuit_keys), "faithfulness subcircuits", every=5
+            )
             with traced("calc_faithfulness", key=key):
                 results.append(compute_single_faithfulness(key))
         trace("faithfulness_phase complete", n_results=len(results))
@@ -288,7 +290,9 @@ def decision_boundary_phase(
 
         for subcircuit_idx in per_gate_bests[gate_name]:
             # Parse flat index to get node pattern and edge variant rank
-            node_mask_idx, edge_variant_rank = parse_subcircuit_idx(width, depth, subcircuit_idx)
+            node_mask_idx, edge_variant_rank = parse_subcircuit_idx(
+                width, depth, subcircuit_idx
+            )
 
             # Look up the edge-masked circuit (stored during gate analysis)
             sc_data = gate_circuits.get(subcircuit_idx)

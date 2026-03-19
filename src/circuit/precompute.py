@@ -248,36 +248,6 @@ class SubcircuitSpecification(SchemaClass):
     # TODO Define useful properties for querying and suck
 
 
-def compute_node_mask_idx(node_masks: List[List[int]], width: int, depth: int) -> int:
-    """Compute flat node_mask_idx from node masks.
-
-    The node_mask_idx uniquely identifies which hidden nodes are active.
-    Input and output layers are always fully active and not included.
-
-    Args:
-        node_masks: List of masks per layer [input, hidden1, ..., hiddenN, output]
-        width: Hidden layer width
-        depth: Number of hidden layers
-
-    Returns:
-        Flat node_mask_idx
-    """
-    # Extract hidden layer masks (skip input and output)
-    hidden_masks = node_masks[1:-1] if len(node_masks) > 2 else []
-
-    # Convert each hidden layer mask to an integer (bitmask)
-    # Then combine into a single index
-    idx = 0
-    multiplier = 1
-    for layer_mask in hidden_masks:
-        # Convert layer mask to integer (e.g., [1, 0, 1] -> 5)
-        layer_int = sum(bit << i for i, bit in enumerate(layer_mask))
-        idx += layer_int * multiplier
-        multiplier *= (1 << width)  # 2^width possible masks per layer
-
-    return idx
-
-
 def compute_edge_mask_idx(
     edge_masks: List, width: int, depth: int, input_size: int
 ) -> int:
@@ -339,11 +309,6 @@ def compute_edge_mask_idx(
                 edge_offset += 1
 
     return edge_bitmask
-
-
-def edge_mask_idx_to_bitmask(edge_mask_idx: int) -> int:
-    """Convert edge_mask_idx back to bitmask (identity for now)."""
-    return edge_mask_idx
 
 
 def get_compatible_edge_masks_for_node(

@@ -14,7 +14,8 @@ class VizLevel(IntEnum):
     NONE = 0  # No PNGs, only JSON/TXT summaries
     SUMMARY = 1  # Run-level summary plots only
     TOP_1 = 2  # + Best subcircuit per gate
-    TOP_5 = 3  # + Top 5 subcircuits per gate (current behavior)
+    TOP_5 = 3  # + Top 5 subcircuits per gate
+    ALL = 4  # + All analyzed subcircuits (default when --viz used)
 
 
 @dataclass
@@ -47,6 +48,7 @@ class VizConfig:
             VizLevel.SUMMARY: 0,
             VizLevel.TOP_1: 1,
             VizLevel.TOP_5: 5,
+            VizLevel.ALL: 9999,  # Effectively unlimited
         }[self.level]
 
     @property
@@ -56,6 +58,6 @@ class VizConfig:
 
     @classmethod
     def from_int(cls, level: int) -> "VizConfig":
-        """Create VizConfig from integer level (0-3)."""
-        viz_level = VizLevel(max(0, min(3, level)))
+        """Create VizConfig from integer level (0-4)."""
+        viz_level = VizLevel(max(0, min(4, level)))
         return cls(level=viz_level)

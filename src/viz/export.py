@@ -17,6 +17,7 @@ import os
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
+from src.circuit import make_subcircuit_idx
 from src.infra import parse_subcircuit_key
 
 if TYPE_CHECKING:
@@ -613,9 +614,11 @@ def save_gate_summary(
     # Build summaries for best per node pattern
     node_summaries = []
     for node_mask_idx, (edge_variant_rank, scores, _) in node_pattern_best.items():
+        subcircuit_idx = make_subcircuit_idx(width, depth, node_mask_idx, edge_variant_rank)
         node_summaries.append({
             "node_pattern": node_mask_idx,
             "best_edge_variant_rank": edge_variant_rank,
+            "subcircuit_idx": subcircuit_idx,
             "observational": round(scores["observational"]["score"], 3),
             "interventional": round(scores["interventional"]["score"], 3),
             "counterfactual": round(scores["counterfactual"]["score"], 3),

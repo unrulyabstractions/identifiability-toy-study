@@ -18,6 +18,7 @@ from src.model import DecomposedMLP
 from .constants import (
     _activation_to_color,
     _layout_cache,
+    _node_color_by_layer,
     _symmetric_range,
     _text_color_for_background,
 )
@@ -128,9 +129,10 @@ def draw_intervened_circuit(
                     if isinstance(v, (int, float)):
                         original_val = float(v)
 
-            # Compute color from current value (uses new pastel gradient)
+            # Compute color from current value (uses layer-aware coloring)
+            n_layers = len(layer_sizes)
             if current_val is not None:
-                color = _activation_to_color(current_val)
+                color = _node_color_by_layer(current_val, layer_idx, n_layers)
                 text_color = _text_color_for_background(color)
             else:
                 color = (0.92, 0.92, 0.92, 1.0)
@@ -366,6 +368,7 @@ def _build_graph_fast(
     G.add_nodes_from(all_nodes)
 
     # Build node colors and labels
+    n_layers = len(activations)
     for layer_idx, layer_act in enumerate(activations):
         n = (
             layer_act.shape[-1]
@@ -396,7 +399,8 @@ def _build_graph_fast(
 
             if active:
                 labels[name] = f"{val:.2f}"
-                color = _activation_to_color(val, vmin, vmax)
+                # Use layer-aware coloring: input/hidden/output get different schemes
+                color = _node_color_by_layer(val, layer_idx, n_layers)
                 node_colors_dict[name] = color
                 text_colors[name] = _text_color_for_background(color)
             else:
@@ -676,4 +680,7 @@ def _draw_circuit_from_data(ax, activations, circuit, weights, title, biases=Non
         if isinstance(activations[-1], torch.Tensor)
         else activations[-1][0][0]
     )
-    ax.set_title(f"{title} -> {output:.3f}", fontsize=10, fontweight="bold")
+    # Show bit (0/1) based on logit sign, not the raw logit value
+    bit = 1 if output > 0 else 0
+    # Large, prominent title showing input -> output mapping
+    ax.set_title(f"{title} -> {bit}", fontsize=18, fontweight="bold", pad=12)

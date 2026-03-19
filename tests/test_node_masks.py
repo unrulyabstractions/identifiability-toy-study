@@ -3,7 +3,7 @@
 import pytest
 import numpy as np
 from src.model import MLP
-from src.circuit import enumerate_all_valid_circuit, enumerate_edge_variants
+from src.circuit import enumerate_circuits_for_architecture, enumerate_edge_variants
 
 
 # Node masks: 2^(w*d) total combinations for hidden layers
@@ -69,14 +69,14 @@ def test_formula_2_power_wd():
     (2, 2), (3, 2), (3, 3), (4, 2), (4, 3),
 ])
 def test_valid_circuit_count(width, depth):
-    """Verify enumerate_all_valid_circuit returns (2^w - 1)^d valid circuits.
+    """Verify enumerate_circuits_for_architecture returns (2^w - 1)^d valid circuits.
 
     Valid circuits must have at least 1 active node per hidden layer.
     """
     model = MLP(hidden_sizes=[width] * depth, input_size=2, output_size=1, device="cpu")
     expected = (2**width - 1) ** depth
 
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
 
     assert len(circuits) == expected, (
         f"w={width}, d={depth}: expected (2^{width}-1)^{depth}={expected}, got {len(circuits)}"
@@ -86,7 +86,7 @@ def test_valid_circuit_count(width, depth):
 def test_all_circuits_have_valid_connectivity():
     """All enumerated circuits must have at least 1 active node per hidden layer."""
     model = MLP(hidden_sizes=[4, 4, 4], input_size=2, output_size=1, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
 
     for i, circuit in enumerate(circuits):
         for layer_idx, layer in enumerate(circuit.node_masks[1:-1]):  # Hidden layers
@@ -99,7 +99,7 @@ def test_all_circuits_have_valid_connectivity():
 def test_edge_variants_sparse_circuit():
     """Sparse circuits (few active nodes) should have few edge variants."""
     model = MLP(hidden_sizes=[4, 4, 4], input_size=2, output_size=1, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
 
     # Find a sparse circuit (1 active node per layer)
     sparse = [c for c in circuits if c.sparsity()[0] >= 0.7]
@@ -113,7 +113,7 @@ def test_edge_variants_sparse_circuit():
 def test_edge_variants_dense_circuit():
     """Dense circuits (many active nodes) can have many edge variants."""
     model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=1, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
 
     # Find the densest circuit (all nodes active)
     dense = [c for c in circuits if c.sparsity()[0] == 0.0]

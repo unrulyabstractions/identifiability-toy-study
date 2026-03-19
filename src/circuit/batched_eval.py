@@ -544,6 +544,70 @@ def batch_compute_metrics(
     )
 
 
+def batch_compute_canonical_accuracy(
+    model: "MLP",
+    circuits: list["Circuit"],
+    gate_idx: int = 0,
+    n_inputs: int = 2,
+    ground_truth_fn=None,
+    eval_device: str | None = None,
+    max_batch_size: int = DEFAULT_MAX_BATCH_SIZE,
+) -> np.ndarray:
+    """
+    Compute accuracy on canonical inputs (e.g., 4 inputs for 2-input gates).
+
+    Args:
+        model: The full trained model
+        circuits: List of circuits to evaluate
+        gate_idx: Which output gate
+        n_inputs: Number of input dimensions (determines canonical input count)
+        ground_truth_fn: Function(input_tensor) -> expected_output (0 or 1)
+        eval_device: Device to run evaluation on
+        max_batch_size: Maximum circuits per batch
+
+    Returns:
+        Array of accuracies (one per circuit), computed on canonical inputs only
+    """
+    device = eval_device if eval_device is not None else model.device
+    n_circuits = len(circuits)
+
+    # Generate canonical inputs: all 2^n_inputs combinations
+    canonical_x = []
+    canonical_y = []
+    for i in range(2**n_inputs):
+        bits = [(i >> j) & 1 for j in range(n_inputs)]
+        inp = torch.tensor([bits], dtype=torch.float32, device=device)
+        canonical_x.append(inp)
+        if ground_truth_fn is not None:
+            canonical_y.append(ground_truth_fn(inp))
+        else:
+            canonical_y.append(0.0)  # Default if no ground truth
+
+    x = torch.cat(canonical_x, dim=0)  # [4, n_inputs] for 2-input gates
+    y_target = torch.tensor(canonical_y, dtype=torch.float32, device=device).unsqueeze(-1)  # [4, 1]
+
+    # Evaluate all circuits on canonical inputs
+    y_circuits = batch_evaluate_subcircuits(
+        model,
+        circuits,
+        x,
+        gate_idx,
+        precomputed_masks=None,
+        eval_device=device,
+        max_batch_size=max_batch_size,
+    )  # [n_circuits, 4, 1]
+
+    # Compute accuracy: compare subcircuit binary output to ground truth
+    bit_circuits = logits_to_binary(y_circuits)  # [n_circuits, 4, 1]
+    bit_target = y_target.unsqueeze(0).expand(n_circuits, -1, -1)  # [n_circuits, 4, 1]
+
+    # Accuracy per circuit
+    matches = (bit_circuits == bit_target).float()  # [n_circuits, 4, 1]
+    accuracies = matches.mean(dim=(1, 2)).cpu().numpy()  # [n_circuits]
+
+    return accuracies
+
+
 # =============================================================================
 # Edge variant evaluation
 # =============================================================================
@@ -622,7 +686,9 @@ def _find_top_variants(
     # Get top N variants (between min and max, respecting available count)
     effective_min = max(1, min_variants)
     effective_max = max(effective_min, max_variants)
-    top_n = min(max(effective_min, 1), effective_max, len(scored_variants))
+    # Take up to max_variants, but at least min_variants (if available)
+    top_n = min(effective_max, len(scored_variants))
+    top_n = max(top_n, min(effective_min, len(scored_variants)))
     top_variants = []
     for i in range(top_n):
         _, global_idx, local_idx = scored_variants[i]

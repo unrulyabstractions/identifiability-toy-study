@@ -168,7 +168,9 @@ def experiment_run(
             try:
                 # Adapt master data for this trial's gates
                 # Use experiment-wide max_input_size to match precomputed circuits
-                trial_data = master_data.select_gates(setting.gate_indices, setting.max_input_size)
+                trial_data = master_data.select_gates(
+                    setting.gate_indices, setting.max_input_size
+                )
 
                 trial_result = run_trial(
                     setting.setup,

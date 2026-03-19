@@ -151,6 +151,9 @@ def _activation_to_color(val: float, vmin: float = -2, vmax: float = 2) -> tuple
     - 0.0 = neutral cream/beige (decision boundary)
     - Positive (class 1) → cooler colors (mint, teal)
     - Negative (class 0) → warmer colors (peach, coral, rose)
+
+    NOTE: This is the legacy function. For layer-aware coloring, use
+    _input_node_color, _hidden_node_color, or _output_node_color.
     """
     # Pastel colors (RGB tuples, 0-1 range)
     colors = {
@@ -188,6 +191,94 @@ def _activation_to_color(val: float, vmin: float = -2, vmax: float = 2) -> tuple
         rgb = colors["teal"]
 
     return (*rgb, 1.0)
+
+
+def _input_node_color(val: float) -> tuple:
+    """
+    Color for input layer nodes based on binary input value.
+    - 0 → pastel red
+    - 1 → pastel green
+    """
+    pastel_red = (0.95, 0.65, 0.65)    # #F2A6A6 - soft salmon/rose
+    pastel_green = (0.65, 0.92, 0.65)  # #A6EBA6 - soft mint green
+
+    # Threshold at 0.5 for binary classification
+    if val < 0.5:
+        return (*pastel_red, 1.0)
+    else:
+        return (*pastel_green, 1.0)
+
+
+def _output_node_color(val: float) -> tuple:
+    """
+    Color for output layer nodes based on logit sign.
+    - Negative → pastel red
+    - Positive → pastel green
+    """
+    pastel_red = (0.95, 0.60, 0.60)    # Soft red/coral for negative
+    pastel_green = (0.60, 0.90, 0.60)  # Soft green for positive
+
+    if val < 0:
+        return (*pastel_red, 1.0)
+    else:
+        return (*pastel_green, 1.0)
+
+
+def _hidden_node_color(val: float) -> tuple:
+    """
+    Color for hidden layer nodes based on activation magnitude.
+
+    5 distinct bands:
+    - (-inf, -10]: deep purple (very negative)
+    - (-10, 0]: light purple/lavender (negative)
+    - (0, 1]: cream/yellow (near zero positive)
+    - (1, 10]: light teal/cyan (moderate positive)
+    - (10, +inf): deep teal (very positive)
+    """
+    # Define band colors (RGB tuples, 0-1 range)
+    colors = {
+        "deep_purple": (0.58, 0.44, 0.86),   # Very negative (< -10)
+        "lavender": (0.80, 0.70, 0.90),      # Negative (-10 to 0)
+        "cream": (0.98, 0.95, 0.75),         # Near-zero positive (0 to 1)
+        "light_teal": (0.70, 0.90, 0.88),    # Moderate positive (1 to 10)
+        "deep_teal": (0.35, 0.75, 0.75),     # Very positive (> 10)
+    }
+
+    if val <= -10.0:
+        rgb = colors["deep_purple"]
+    elif val <= 0.0:
+        rgb = colors["lavender"]
+    elif val <= 1.0:
+        rgb = colors["cream"]
+    elif val <= 10.0:
+        rgb = colors["light_teal"]
+    else:
+        rgb = colors["deep_teal"]
+
+    return (*rgb, 1.0)
+
+
+def _node_color_by_layer(val: float, layer_idx: int, n_layers: int) -> tuple:
+    """
+    Get node color based on layer type and activation value.
+
+    Args:
+        val: Activation value
+        layer_idx: Layer index (0 = input, n_layers-1 = output)
+        n_layers: Total number of layers
+
+    Returns:
+        RGBA color tuple
+    """
+    if layer_idx == 0:
+        # Input layer
+        return _input_node_color(val)
+    elif layer_idx == n_layers - 1:
+        # Output layer
+        return _output_node_color(val)
+    else:
+        # Hidden layers
+        return _hidden_node_color(val)
 
 
 def _text_color_for_background(bg_color: tuple) -> str:

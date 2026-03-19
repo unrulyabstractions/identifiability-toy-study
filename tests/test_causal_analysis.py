@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 import torch
 
-from src.circuit import Circuit, enumerate_all_valid_circuit
+from src.circuit import Circuit, enumerate_circuits_for_architecture
 from src.model import MLP
 from src.experiment_config import IdentifiabilityConstraints
 from src.schemas import SubcircuitMetrics
@@ -25,7 +25,7 @@ class TestFilterSubcircuits:
     def model_and_circuits(self):
         """Create a small model with circuits and structures."""
         model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=1, device="cpu")
-        circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
         structures = [c.analyze_structure() for c in circuits]
         return model, circuits, structures
 

@@ -1,21 +1,9 @@
-import copy
-import itertools
-from collections import defaultdict
 from dataclasses import dataclass
 
-import matplotlib.pyplot as plt
-import networkx as nx
 import numpy as np
-import pandas as pd
-import torch
-from matplotlib.cm import ScalarMappable
-from torch import nn
 from tqdm import tqdm
 
-from src.domain import name_gate
-from src.infra import get_node_size
-from src.math import calculate_logit_similarity, logits_to_binary
-from src.model import Intervention, PatchShape
+from src.model import PatchShape
 
 from .enumeration import (
     NodePattern,
@@ -24,7 +12,6 @@ from .enumeration import (
     enumerate_node_patterns,
     full_edge_config,
 )
-from .grounding import Grounding, compute_local_tts, enumerate_tts
 
 
 @dataclass
@@ -176,37 +163,213 @@ class Circuit:
     def __repr__(self):
         return f"Circuit(node_masks={self.node_masks}, edge_masks={self.edge_masks})"
 
-    def to_intervention(self, device: str = "cpu") -> Intervention:
+    @classmethod
+    def full(cls, layer_sizes: list[int]) -> "Circuit":
+        """Create a full circuit with all nodes and edges active.
+
+        Args:
+            layer_sizes: List of layer sizes [input, hidden1, ..., output]
+
+        Returns:
+            Circuit with all nodes=1 and all edges=1
         """
-        Convert Circuit to an Intervention that zeroes masked nodes/edges:
-          - Node masks: neuron 'mul' at h^{(L)} with a 0/1 vector (broadcast across batch).
-          - Edge masks: edge  'mul' at W^{(L)} with a 0/1 matrix.
+        node_masks = [np.ones(size, dtype=np.int8) for size in layer_sizes]
+        edge_masks = [
+            np.ones((layer_sizes[i + 1], layer_sizes[i]), dtype=np.int8)
+            for i in range(len(layer_sizes) - 1)
+        ]
+        return cls(node_masks=node_masks, edge_masks=edge_masks)
+
+    def visualize(
+        self,
+        file_path: str = None,
+        node_size: str = "medium",
+        title: str = None,
+        show: bool = False,
+    ) -> str | None:
+        """Visualize the circuit structure.
+
+        Args:
+            file_path: Path to save the figure (if None, returns without saving)
+            node_size: Size of nodes ("small", "medium", "large")
+            title: Optional title for the plot
+            show: Whether to display the plot
+
+        Returns:
+            Path to saved figure, or None if not saved
         """
-        patches = {}
+        import matplotlib.pyplot as plt
+        import networkx as nx
 
-        # Node masks (apply at current activation h^{(L)})
-        if getattr(self, "node_masks", None) is not None:
-            for L, nm in enumerate(self.node_masks):
-                k = len(nm)
-                idxs = tuple(range(k))  # all neurons in that activation
-                vals = torch.as_tensor(nm, dtype=torch.float32, device=device).view(
-                    1, k
-                )
-                patches[PatchShape(layers=(L,), indices=idxs, axis="neuron")] = (
-                    "mul",
-                    vals,
-                )
+        size_map = {"small": 200, "medium": 400, "large": 600}
+        ns = size_map.get(node_size, 400)
 
-        # Edge masks (apply to W^{(L)})
-        if getattr(self, "edge_masks", None) is not None:
-            for L, em in enumerate(self.edge_masks):
-                vals = torch.as_tensor(em, dtype=torch.float32, device=device)
-                patches[PatchShape(layers=(L,), indices=(), axis="edge")] = (
-                    "mul",
-                    vals,
-                )
+        G = nx.DiGraph()
+        pos = {}
+        node_colors = []
 
-        return Intervention(patches=patches)
+        # Build graph with positions
+        layer_sizes = [len(m) for m in self.node_masks]
+        max_width = max(layer_sizes)
+
+        for layer_idx, node_mask in enumerate(self.node_masks):
+            n = len(node_mask)
+            y_offset = (max_width - n) / 2
+            for node_idx in range(n):
+                name = f"L{layer_idx}_{node_idx}"
+                G.add_node(name)
+                pos[name] = (layer_idx, y_offset + node_idx)
+                # Active nodes are blue, inactive are gray
+                if node_mask[node_idx] == 1:
+                    node_colors.append("#4a90d9")
+                else:
+                    node_colors.append("#d3d3d3")
+
+        # Add edges
+        for layer_idx, edge_mask in enumerate(self.edge_masks):
+            for out_idx, row in enumerate(edge_mask):
+                for in_idx, active in enumerate(row):
+                    src = f"L{layer_idx}_{in_idx}"
+                    dst = f"L{layer_idx + 1}_{out_idx}"
+                    G.add_edge(src, dst, active=active)
+
+        # Draw
+        fig, ax = plt.subplots(figsize=(3 + len(layer_sizes), max_width * 0.8))
+
+        # Draw inactive edges first (thin, gray)
+        inactive_edges = [(u, v) for u, v, d in G.edges(data=True) if d["active"] == 0]
+        nx.draw_networkx_edges(
+            G, pos, edgelist=inactive_edges, ax=ax,
+            edge_color="#e0e0e0", width=0.5, alpha=0.3, arrows=False
+        )
+
+        # Draw active edges (thicker, dark)
+        active_edges = [(u, v) for u, v, d in G.edges(data=True) if d["active"] == 1]
+        nx.draw_networkx_edges(
+            G, pos, edgelist=active_edges, ax=ax,
+            edge_color="#333333", width=1.5, alpha=0.8, arrows=False
+        )
+
+        # Draw nodes
+        nx.draw_networkx_nodes(
+            G, pos, ax=ax, node_color=node_colors,
+            node_size=ns, edgecolors="black", linewidths=1
+        )
+
+        if title:
+            ax.set_title(title)
+        ax.axis("off")
+        plt.tight_layout()
+
+        if file_path:
+            import os
+            os.makedirs(os.path.dirname(file_path) if os.path.dirname(file_path) else ".", exist_ok=True)
+            plt.savefig(file_path, dpi=150, bbox_inches="tight")
+
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+
+        return file_path
+
+    def overlap_jaccard(self, other: "Circuit") -> float:
+        """Compute Jaccard similarity between this circuit and another.
+
+        Jaccard = |intersection| / |union| for active components.
+
+        Args:
+            other: Another Circuit to compare with
+
+        Returns:
+            Jaccard similarity score between 0 and 1
+        """
+        # Combine node masks (excluding input and output layers)
+        self_nodes = np.concatenate(self.node_masks[1:-1])
+        other_nodes = np.concatenate(other.node_masks[1:-1])
+
+        # Combine edge masks
+        self_edges = np.concatenate([m.flatten() for m in self.edge_masks])
+        other_edges = np.concatenate([m.flatten() for m in other.edge_masks])
+
+        # Combine all masks
+        self_all = np.concatenate([self_nodes, self_edges])
+        other_all = np.concatenate([other_nodes, other_edges])
+
+        # Compute Jaccard: intersection / union
+        intersection = np.sum((self_all == 1) & (other_all == 1))
+        union = np.sum((self_all == 1) | (other_all == 1))
+
+        if union == 0:
+            return 1.0  # Both empty = identical
+        return float(intersection / union)
+
+    def is_subset_of(self, other: "Circuit") -> bool:
+        """Check if this circuit is a subset of another.
+
+        A circuit A is a subset of B if every active component in A
+        is also active in B (for both nodes and edges).
+
+        Args:
+            other: Another Circuit to compare with
+
+        Returns:
+            True if self is a subset of other
+        """
+        # Check nodes (hidden layers only)
+        for self_mask, other_mask in zip(self.node_masks[1:-1], other.node_masks[1:-1]):
+            # For each active node in self, it must be active in other
+            if not np.all((self_mask == 1) <= (other_mask == 1)):
+                return False
+
+        # Check edges
+        for self_mask, other_mask in zip(self.edge_masks, other.edge_masks):
+            if not np.all((self_mask == 1) <= (other_mask == 1)):
+                return False
+
+        return True
+
+    def overlap_metrics(self, other: "Circuit") -> dict:
+        """Compute detailed overlap metrics between two circuits.
+
+        Args:
+            other: Another Circuit to compare with
+
+        Returns:
+            Dict with jaccard, intersection_size, union_size, self_size, other_size,
+            is_subset, is_superset
+        """
+        # Combine node masks (excluding input and output layers)
+        self_nodes = np.concatenate(self.node_masks[1:-1])
+        other_nodes = np.concatenate(other.node_masks[1:-1])
+
+        # Combine edge masks
+        self_edges = np.concatenate([m.flatten() for m in self.edge_masks])
+        other_edges = np.concatenate([m.flatten() for m in other.edge_masks])
+
+        # Combine all masks
+        self_all = np.concatenate([self_nodes, self_edges])
+        other_all = np.concatenate([other_nodes, other_edges])
+
+        self_active = self_all == 1
+        other_active = other_all == 1
+
+        intersection = int(np.sum(self_active & other_active))
+        union = int(np.sum(self_active | other_active))
+        self_size = int(np.sum(self_active))
+        other_size = int(np.sum(other_active))
+
+        jaccard = intersection / union if union > 0 else 1.0
+
+        return {
+            "jaccard": round(jaccard, 4),
+            "intersection_size": intersection,
+            "union_size": union,
+            "self_size": self_size,
+            "other_size": other_size,
+            "is_subset": intersection == self_size,  # All of self is in other
+            "is_superset": intersection == other_size,  # All of other is in self
+        }
 
     def get_all_possible_intervention_patches(
         self, max_patch_size: int = -1
@@ -398,206 +561,6 @@ class Circuit:
 
         return n_paths, all_lengths
 
-    @staticmethod
-    def full(layer_sizes):
-        """
-        Returns a full circuit of the given layer sizes.
-
-        Args:
-            layer_sizes: The sizes of each layer
-
-        Returns:
-            A full circuit of the given layer sizes
-        """
-        node_masks = [np.ones(x) for x in layer_sizes]
-        edge_masks = [
-            np.ones((y, x)) for x, y in zip(layer_sizes[:-1], layer_sizes[1:])
-        ]
-        return Circuit(node_masks, edge_masks)
-
-    def save_to_file(self, filepath):
-        """
-        Saves the node_masks and edge_masks to a file in .npz format.
-
-        Args:
-            filepath (str): The file path where to save the circuit data.
-        """
-        # Convert the list of numpy arrays to a dictionary for saving
-        data_to_save = {
-            f"node_mask_{i}": mask for i, mask in enumerate(self.node_masks)
-        }
-        data_to_save.update(
-            {f"edge_mask_{i}": mask for i, mask in enumerate(self.edge_masks)}
-        )
-
-        # Save as .npz file
-        np.savez(filepath, **data_to_save)
-
-    @classmethod
-    def load_from_file(cls, filepath):
-        """
-        Loads node_masks and edge_masks from a file and returns an instance of Circuit.
-
-        Args:
-            filepath (str): The file path from where to load the circuit data.
-
-        Returns:
-            Circuit: A new instance of Circuit with the loaded masks.
-        """
-        # Load the data from the .npz file
-        loaded_data = np.load(filepath)
-
-        # Extract node_masks and edge_masks from the loaded data
-        node_masks = [
-            loaded_data[f"node_mask_{i}"]
-            for i in range(len(loaded_data.files) // 2 + 1)
-        ]
-        edge_masks = [
-            loaded_data[f"edge_mask_{i}"] for i in range(len(loaded_data.files) // 2)
-        ]
-
-        # Create a new Circuit instance and return it
-        return cls(node_masks, edge_masks)
-
-    def validate_against_model(self, model):
-        """
-        Checks whether the node_masks and edge_masks in the Circuit are valid for the given model.
-
-        Args:
-            model: The model to validate against
-        """
-        if len(self.node_masks) != model.num_layers + 1:
-            raise ValueError(
-                "The number of node masks in the circuit does not match the number of layers "
-                "plus the input layer in the model."
-            )
-
-        if len(self.edge_masks) != model.num_layers:
-            raise ValueError(
-                "The number of edge masks in the circuit does not match the number of layers in the model."
-            )
-
-        for i, layer in enumerate(model.layers):
-            linear_layer = layer[0]
-
-            node_mask_size = self.node_masks[i + 1].shape[0]
-            if node_mask_size != linear_layer.out_features:
-                raise ValueError(
-                    f"Node mask at layer {i + 1} does not match the size of the model's layer."
-                )
-
-            edge_mask_size = self.edge_masks[i].shape
-            weight_size = linear_layer.weight.shape
-
-            if edge_mask_size != weight_size:
-                raise ValueError(
-                    f"Edge mask at layer {i} does not match the size of the model's weight matrix."
-                )
-
-            for out_idx in range(weight_size[0]):  # Rows (output neurons of this layer)
-                for in_idx in range(
-                    weight_size[1]
-                ):  # Columns (input neurons of this layer)
-                    if self.edge_masks[i][out_idx, in_idx] == 1:
-                        if (
-                            self.node_masks[i][in_idx] == 0
-                            or self.node_masks[i + 1][out_idx] == 0
-                        ):
-                            raise ValueError(
-                                f"Active edge from node {in_idx} to node {out_idx} "
-                                f"at layer {i} connects to an inactive node."
-                            )
-
-            self._validate_node_connectivity(i)
-
-        # Check for an active path from inputs to outputs
-        active_path_exists = self._check_active_path()
-        if not active_path_exists:
-            raise ValueError(
-                "No active path exists from the input to the output in the circuit."
-            )
-
-    def _validate_node_connectivity(self, layer_idx):
-        """
-        Ensure each active node has at least one incoming edge (except if it is an input)
-        and one outgoing edge (except if it is an output).
-
-        Args:
-            layer_idx: The index of the layer to validate
-        """
-        if layer_idx > 0:
-            # Check incoming edges for nodes in layer_idx
-            incoming_edges = self.edge_masks[layer_idx - 1]
-            for node_idx in range(incoming_edges.shape[0]):
-                if self.node_masks[layer_idx][node_idx] == 1:  # Active node
-                    if not any(incoming_edges[node_idx, :] == 1):
-                        raise ValueError(
-                            f"Active node {node_idx} in layer {layer_idx} has no incoming edges."
-                        )
-
-        if layer_idx < len(self.edge_masks):
-            # Check outgoing edges for nodes in layer_idx
-            outgoing_edges = self.edge_masks[layer_idx]
-            for node_idx in range(outgoing_edges.shape[1]):
-                if self.node_masks[layer_idx][node_idx] == 1:  # Active node
-                    if not any(outgoing_edges[:, node_idx] == 1):
-                        raise ValueError(
-                            f"Active node {node_idx} in layer {layer_idx} has no outgoing edges."
-                        )
-
-    def _check_active_path(self):
-        """
-        Checks if there's an active path from input to output.
-        """
-        # Start with active nodes in the input layer
-        active_nodes = set(
-            i for i, active in enumerate(self.node_masks[0]) if active == 1
-        )
-
-        for i in range(len(self.edge_masks)):
-            next_active_nodes = set()
-            for j in range(self.edge_masks[i].shape[0]):
-                if any(
-                    self.edge_masks[i][j, k] == 1 and k in active_nodes
-                    for k in range(self.edge_masks[i].shape[1])
-                ):
-                    next_active_nodes.add(j)
-            active_nodes = next_active_nodes
-
-        # Check if any output node is active
-        return any(self.node_masks[-1][i] == 1 for i in active_nodes)
-
-    def __le__(self, other):
-        """
-        Checks if the current circuit is included in another circuit.
-
-        Args:
-            other (Circuit): The circuit to check inclusion against.
-
-        Returns:
-            bool: True if the current circuit is included in the other, False otherwise.
-        """
-        if len(self.node_masks) != len(other.node_masks) or len(self.edge_masks) != len(
-            other.edge_masks
-        ):
-            return False
-
-        for i, (node_mask, other_node_mask) in enumerate(
-            zip(self.node_masks, other.node_masks)
-        ):
-            # if a node is included in self but not in other, return False
-            if np.any(np.logical_and(node_mask == 1, other_node_mask == 0)):
-                return False
-
-        for i, (edge_mask, other_edge_mask) in enumerate(
-            zip(self.edge_masks, other.edge_masks)
-        ):
-            # if an edge is included in self but not in other, return False
-            if np.any(np.logical_and(edge_mask == 1, other_edge_mask == 0)):
-                return False
-
-        return True
-
     def sparsity(self):
         """
         Computes the overall sparsity of nodes and edges across all layers.
@@ -621,410 +584,6 @@ class Circuit:
         overall_combined_sparsity = np.mean(combined_mask == 0)
 
         return overall_node_sparsity, overall_edge_sparsity, overall_combined_sparsity
-
-    def overlap_jaccard(self, other):
-        """
-        Computes the overlap Jaccard index with another circuit.
-
-        Args:
-            other: The other circuit
-
-        Returns:
-            The overlap Jaccard index
-        """
-        sk1_extended_mask = list(self.node_masks[1:-1]) + list(self.edge_masks)
-        sk2_extended_mask = list(other.node_masks[1:-1]) + list(other.edge_masks)
-        return compute_jaccard_index(sk1_extended_mask, sk2_extended_mask)
-
-    def ground(self, activations):
-        """
-        Grounds a circuit in model activations and returns all valid groundings
-
-        Args:
-            activations: The model's activations
-
-        Returns:
-            A list of all valid groundings
-        """
-        activations = [x.cpu().numpy() for x in activations]
-        activations[-1] = (
-            logits_to_binary(torch.tensor(activations[-1])).numpy().astype(int)
-        )
-
-        global_inputs_pt = activations[0].astype(int)
-        global_inputs = list(map(tuple, global_inputs_pt))
-
-        global_tts = defaultdict(list)
-        for layer_id, node_mask in enumerate(self.node_masks[1:], start=1):
-            for node_id in range(len(node_mask)):
-                if node_mask[node_id] == 0:
-                    continue
-
-                neuron_values = activations[layer_id][:, node_id]
-                mapping = dict(zip(global_inputs, neuron_values))
-
-                neuron_info = tuple([layer_id, node_id])
-                for tt in enumerate_tts(mapping):
-                    tt["neuron_info"] = neuron_info
-                    global_tts[neuron_info].append(tt)
-
-        # Create initial groundings
-        first_neurons = [(key, val) for key, val in global_tts.items() if key[0] == 1]
-        initial_groundings = list(itertools.product(*[a[1] for a in first_neurons]))
-        initial_groundings = [list(i_g) for i_g in initial_groundings]
-        for i_g in initial_groundings:
-            for tt_i in i_g:
-                tt_i["local_tt"] = tt_i["tt"]
-                tt_i["gate_name"] = name_gate(tt_i["local_tt"])
-                tt_i["par_n"] = "inputs"
-
-        partial_groundings = initial_groundings
-        for neuron_info, neuron_val in global_tts.items():
-            current_layer, node_id = neuron_info
-            if current_layer <= 1:
-                continue
-
-            edge_mask = self.edge_masks[current_layer - 1]
-            prev_nodes = np.where(self.node_masks[current_layer - 1])[0]
-
-            # Parents
-            par_n = [
-                (current_layer - 1, par)
-                for par in prev_nodes
-                if edge_mask[node_id, par]
-            ]
-
-            # Iterate over all partially constructed groundings so far
-            new_partial_groundings = []
-            for p_g in partial_groundings:
-                parents_tts = [val["tt"] for val in p_g if val["neuron_info"] in par_n]
-
-                for possible_current_tt in neuron_val:
-                    node_tt = possible_current_tt["tt"]
-
-                    local_tts = compute_local_tts(node_tt, parents_tts, global_inputs)
-
-                    if local_tts is None:
-                        continue
-
-                    for l_tt in local_tts:
-                        new_pg = copy.deepcopy(p_g)
-                        new_neuron_val = copy.deepcopy(possible_current_tt)
-                        new_neuron_val["local_tt"] = l_tt
-                        new_neuron_val["gate_name"] = name_gate(l_tt)
-                        new_neuron_val["par_n"] = par_n
-                        new_pg.append(new_neuron_val)
-                        new_partial_groundings.append(new_pg)
-
-            partial_groundings = new_partial_groundings
-
-        return [Grounding(grounding, self) for grounding in partial_groundings]
-
-    def visualize(
-        self,
-        ax=None,
-        display_idx=False,
-        node_size="small",
-        file_path=None,
-        labels=None,
-        colors=None,
-    ):
-        node_size = get_node_size(node_size)
-        """
-        Visualize the circuit.
-
-        Args:
-            ax: The axis to plot on
-            display_idx: Whether to display the index of each node
-            node_size: The size of the nodes
-            file_path: The path to save the figure to
-            labels: The labels for each node
-            colors: The colors for each node
-        """
-
-        G = nx.DiGraph()
-        pos = {}  # Dictionary to store positions for nodes
-
-        # Calculate max width (number of nodes) for proper alignment
-        max_width = max(len(mask) for mask in self.node_masks)
-
-        # Create nodes and edges
-        for layer_idx, node_mask in enumerate(self.node_masks):
-            num_nodes = len(node_mask)
-            y_start = -(max_width - num_nodes) / 2  # Centering the layer vertically
-
-            for node_idx, active in enumerate(node_mask):
-                node_name = f"({layer_idx},{node_idx})"
-                G.add_node(node_name, layer=layer_idx, active=active)
-                pos[node_name] = (layer_idx, y_start - node_idx)  # Centered vertically
-
-        for layer_idx, edge_mask in enumerate(self.edge_masks):
-            for out_idx, row in enumerate(edge_mask):
-                for in_idx, active in enumerate(row):
-                    G.add_edge(
-                        f"({layer_idx},{in_idx})",
-                        f"({layer_idx + 1},{out_idx})",
-                        active=active,
-                    )
-
-        # Draw nodes
-        active_nodes = [
-            node for node, attr in G.nodes(data=True) if attr["active"] == 1
-        ]
-        inactive_nodes = [
-            node for node, attr in G.nodes(data=True) if attr["active"] == 0
-        ]
-        node_color = "tab:blue" if colors is None else colors
-        nx.draw_networkx_nodes(
-            G,
-            pos,
-            nodelist=active_nodes,
-            node_color=node_color,
-            node_size=node_size,
-            alpha=0.8,
-            ax=ax,
-        )
-        nx.draw_networkx_nodes(
-            G,
-            pos,
-            nodelist=inactive_nodes,
-            node_color="grey",
-            node_size=node_size,
-            alpha=0.4,
-            ax=ax,
-        )
-
-        # Draw edges
-        active_edges = [
-            (u, v) for u, v, attr in G.edges(data=True) if attr["active"] == 1
-        ]
-        inactive_edges = [
-            (u, v) for u, v, attr in G.edges(data=True) if attr["active"] == 0
-        ]
-        nx.draw_networkx_edges(
-            G,
-            pos,
-            node_size=node_size,
-            edgelist=active_edges,
-            edge_color="tab:blue",
-            width=2,
-            alpha=0.8,
-            arrows=True,
-            arrowstyle="-|>",
-            connectionstyle="arc3,rad=0.1",
-            ax=ax,
-        )
-        nx.draw_networkx_edges(
-            G,
-            pos,
-            node_size=node_size,
-            edgelist=inactive_edges,
-            edge_color="grey",
-            width=1,
-            alpha=0.5,
-            style="dashed",
-            arrows=True,
-            arrowstyle="-|>",
-            connectionstyle="arc3,rad=0.1",
-            ax=ax,
-        )
-
-        # Draw labels
-        if display_idx:
-            nx.draw_networkx_labels(
-                G,
-                pos,
-                labels=labels,
-                font_size=8,
-                font_color="black",
-                alpha=0.9,
-                ax=ax,
-            )
-
-        if ax is None:
-            if file_path is None:
-                plt.axis("off")
-                plt.show()
-            else:
-                plt.tight_layout()
-                plt.savefig(file_path)
-                plt.close()
-        else:
-            ax.axis("off")
-
-
-def visualize_circuit_heatmap(circuits, ax=None, sizes="small", file_path=None):
-    """
-    Visualize a list of circuits as a heatmap.
-
-    Args:
-        circuits: The list of circuits
-        ax: The axis to plot on
-        sizes: The size of the nodes
-        file_path: The path to save the figure to
-    """
-    node_size = get_node_size(sizes)
-
-    # Assuming all circuits have the same structure (same number of nodes and edges)
-    G = nx.DiGraph()
-    pos = {}
-    node_activation_count = {}
-    edge_activation_count = {}
-
-    # Calculate max width for proper alignment
-    max_width = max(len(mask) for mask in circuits[0].node_masks)
-
-    # Create nodes and edges, and count activations
-    for layer_idx, node_mask in enumerate(circuits[0].node_masks):
-        num_nodes = len(node_mask)
-        y_start = -(max_width - num_nodes) / 2  # Centering the layer vertically
-
-        for node_idx in range(num_nodes):
-            node_name = f"({layer_idx},{node_idx})"
-            G.add_node(node_name, layer=layer_idx)
-            pos[node_name] = (layer_idx, y_start - node_idx)
-
-            # Initialize node activation count
-            node_activation_count[node_name] = 0
-
-            # Count how often the node is active across all circuits
-            for circuit in circuits:
-                if circuit.node_masks[layer_idx][node_idx] == 1:
-                    node_activation_count[node_name] += 1
-
-    # Create edges and count activations
-    for layer_idx, edge_mask in enumerate(circuits[0].edge_masks):
-        for out_idx, row in enumerate(edge_mask):
-            for in_idx in range(len(row)):
-                edge_name = (f"({layer_idx},{in_idx})", f"({layer_idx + 1},{out_idx})")
-                G.add_edge(*edge_name)
-
-                # Initialize edge activation count
-                edge_activation_count[edge_name] = 0
-
-                # Count how often the edge is active across all circuits
-                for circuit in circuits:
-                    if circuit.edge_masks[layer_idx][out_idx][in_idx] == 1:
-                        edge_activation_count[edge_name] += 1
-
-    # Normalize activation counts to [0, 1] for coloring
-    max_node_activation = len(circuits)
-    max_edge_activation = len(circuits)
-
-    cmap = plt.cm.inferno
-
-    node_colors = [
-        cmap(node_activation_count[node] / max_node_activation) for node in G.nodes()
-    ]
-    edge_colors = [
-        cmap(edge_activation_count[edge] / max_edge_activation) for edge in G.edges()
-    ]
-
-    # Draw nodes with heatmap colors
-    nx.draw_networkx_nodes(
-        G, pos, node_color=node_colors, node_size=node_size, alpha=0.9, ax=ax
-    )
-
-    # Draw edges with heatmap colors
-    nx.draw_networkx_edges(
-        G,
-        pos,
-        edgelist=G.edges(),
-        edge_color=edge_colors,
-        width=2,
-        alpha=0.9,
-        arrows=True,
-        arrowstyle="-|>",
-        connectionstyle="arc3,rad=0.1",
-        ax=ax,
-    )
-
-    # Draw labels for node indices (optional, but can be useful)
-    # nx.draw_networkx_labels(G, pos, font_size=12, font_color='black', alpha=0.9, ax=ax)
-
-    # Add colorbar for the frequency (activation percentage)
-    sm = ScalarMappable(cmap=cmap)
-    sm.set_array([])  # Required for the colorbar
-    cbar = plt.colorbar(sm, ax=ax if ax else plt.gca(), fraction=0.03, pad=0.04)
-    cbar.set_label("Activation Frequency", rotation=270, labelpad=15)
-
-    # Show or save the figure
-    if file_path:
-        plt.savefig(file_path, bbox_inches="tight")
-    else:
-        if ax is None:
-            plt.axis("off")
-            plt.show()
-        else:
-            ax.axis("off")
-
-
-def compute_jaccard_index(mask1, mask2):
-    """
-    Computes the Jaccard index between two node masks.
-
-    Args:
-        mask1: The first node mask
-        mask2: The second node mask
-
-    Returns:
-        The Jaccard index
-    """
-    # Flatten masks and compute the intersection and union
-    mask1_flat = np.concatenate(mask1, axis=None).flatten()
-    mask2_flat = np.concatenate(mask2, axis=None).flatten()
-
-    intersection = np.sum((mask1_flat == 1) & (mask2_flat == 1))
-    union = np.sum((mask1_flat == 1) | (mask2_flat == 1))
-
-    if union == 0:
-        return 0.0
-    return intersection / union
-
-
-def _enumerate_edge_mask_per_layer(in_mask, out_mask):
-    """
-    Generates all valid edge masks for a given input and output node mask.
-
-    Args:
-        in_mask: The input node mask
-        out_mask: The output node mask
-
-    Returns:
-        All valid edge masks
-    """
-    num_out_nodes = len(out_mask)
-    num_in_nodes = len(in_mask)
-
-    edge_mask = np.zeros((num_out_nodes, num_in_nodes), dtype=int)
-
-    # Set entire rows to zero for inactive output nodes
-    active_out_nodes = np.where(out_mask == 1)[0]
-    # Set entire columns to zero for inactive input nodes
-    active_in_nodes = np.where(in_mask == 1)[0]
-
-    edge_mask[np.ix_(active_out_nodes, active_in_nodes)] = 1
-
-    all_masks = []
-    # Generate all possible combinations for the remaining active edges
-    for mask in itertools.product(
-        *[range(2)] * len(active_out_nodes) * len(active_in_nodes)
-    ):
-        mask_array = np.array(mask).reshape(len(active_out_nodes), len(active_in_nodes))
-
-        # Check that each row and column has at least one `1`
-        if not np.all(mask_array.sum(axis=1) > 0):
-            continue
-        if not np.all(mask_array.sum(axis=0) > 0):
-            continue
-
-        edge_mask_tmp = copy.copy(edge_mask)
-
-        # Set masked entries
-        edge_mask_tmp[np.ix_(active_out_nodes, active_in_nodes)] = mask_array
-
-        all_masks.append(edge_mask_tmp)
-    return all_masks
 
 
 def enumerate_circuits_for_architecture(
@@ -1061,29 +620,6 @@ def enumerate_circuits_for_architecture(
     return all_circuits
 
 
-def enumerate_all_valid_circuit(
-    model, min_sparsity: float = 0.0, use_tqdm=True
-) -> list[Circuit]:
-    """
-    Enumerate valid node patterns as circuits with full edge connectivity.
-
-    Formula: (2^w - 1)^d valid patterns for d hidden layers of width w.
-    Each pattern has at least 1 active node per hidden layer.
-
-    Args:
-        model: The input model
-        min_sparsity: Minimum node sparsity (fraction of hidden nodes OFF).
-            Default 0.0 includes all valid patterns.
-        use_tqdm: Whether to use tqdm to show progress
-
-    Returns:
-        List of circuits, one per valid node pattern, with full edges.
-    """
-    return enumerate_circuits_for_architecture(
-        model.layer_sizes, min_sparsity, use_tqdm
-    )
-
-
 def enumerate_edge_variants(circuit: Circuit) -> list[Circuit]:
     """
     For a given node pattern, enumerate all valid edge configurations.
@@ -1109,141 +645,3 @@ def enumerate_edge_variants(circuit: Circuit) -> list[Circuit]:
         circuits.append(new_circuit)
 
     return circuits
-
-
-def analyze_circuits(circuits, top_n=None):
-    """
-    Analyzes a list of circuits and returns the fraction of included pairs, average Jaccard similarity, and top pairs.
-
-    Args:
-        circuits: The list of circuits
-        top_n: The top N pairs to return
-
-    Returns:
-        The fraction of included pairs, average Jaccard similarity, and top pairs
-    """
-    n = len(circuits)
-    included_count = 0
-    total_count = 0
-    jaccard_similarities = []
-
-    pair_indices = list(itertools.combinations(range(n), 2))
-    pair_similarities = []
-
-    for i, j in tqdm(
-        pair_indices, total=len(pair_indices), desc="Comparing circuits pairs"
-    ):
-        if i == j:
-            continue
-
-        if circuits[i] <= circuits[j] or circuits[j] <= circuits[i]:
-            included_count += 1
-
-        total_count += 1
-
-        # Calculate Jaccard similarity
-        jaccard_sim = circuits[i].overlap_jaccard(circuits[j])
-        jaccard_similarities.append(jaccard_sim)
-        pair_similarities.append(((i, j), jaccard_sim))
-
-    fraction_included_pairs = included_count / total_count if total_count > 0 else 0
-    average_jaccard_similarity = (
-        np.mean(jaccard_similarities) if jaccard_similarities else 0
-    )
-
-    # Sort pairs by Jaccard similarity
-    top_n_pairs = sorted(pair_similarities, key=lambda x: x[1])
-    # Get the top_n with lowest similarity
-    if top_n:
-        top_n_pairs = top_n_pairs[:top_n]
-
-    return fraction_included_pairs, average_jaccard_similarity, top_n_pairs
-
-
-def find_circuits(
-    model: nn.Module, x, y, accuracy_threshold, min_sparsity=None, use_tqdm=True
-):
-    """
-    Find all valid circuits in a model.
-
-    Args:
-        model: The input model
-        x: The input data to use for validation
-        y: The target data to use for validation
-        accuracy_threshold: The minimum accuracy threshold for circuits
-        min_sparsity: The minimum sparsity threshold for circuits
-        use_tqdm: Whether to use tqdm to show progress
-
-    Returns:
-        All valid circuits found in the model.
-    """
-    # Make predictions with the model
-    model_predictions = model(x)  # [n_samples, n_gates]
-    bit_model_pred = logits_to_binary(model_predictions)  # [n_samples, n_gates]
-
-    all_sks = enumerate_all_valid_circuit(
-        model, min_sparsity=min_sparsity, use_tqdm=use_tqdm
-    )
-
-    # Initialize a list to collect data for DataFrame
-    data = []
-
-    max_sparsity, max_sparsity_node, max_sparsity_edge = 0, 0, 0
-    top_sks = []
-    sparsities = []
-
-    # Iterate over all circuits with progress tracking
-    it = enumerate(all_sks)
-    if use_tqdm:
-        it = tqdm(it, total=len(all_sks), desc="Evaluating circuits")
-    for i, circuit in it:
-        # Make predictions with the current circuit
-        sk_predictions = model(
-            x, intervention=circuit.to_intervention(model.device)
-        )  # [n_samples, n_gates]
-        bit_sk_pred = logits_to_binary(sk_predictions)  # [n_samples, n_gates]
-
-        # Compute the accuracy with respect to the task
-        correct_predictions = bit_sk_pred.eq(y).all(dim=1)
-        accuracy = correct_predictions.sum().item() / y.size(0)
-
-        # Compute similarity with model prediction based on logits
-        logit_similarity = calculate_logit_similarity(
-            model_predictions,
-            sk_predictions,  # both [n_samples, n_gates]
-        ).item()
-
-        # Compute similarity with model prediction
-        same_predictions = torch.sum(bit_model_pred == bit_sk_pred).item()
-        total_predictions = bit_model_pred.shape[0]
-        similarity_bit_preds = same_predictions / total_predictions
-
-        # Compute circuit sparsity
-        sk_sparsity_node_sparsity, sk_edge_sparsity, sk_combined_sparsity = (
-            circuit.sparsity()
-        )
-        if sk_sparsity_node_sparsity > max_sparsity_node:
-            max_sparsity_node = sk_sparsity_node_sparsity
-        if sk_edge_sparsity > max_sparsity_edge:
-            max_sparsity_edge = sk_edge_sparsity
-        if sk_combined_sparsity > max_sparsity:
-            max_sparsity = sk_combined_sparsity
-
-        if accuracy > accuracy_threshold:
-            top_sks.append(circuit)
-            sparsities.append(sk_sparsity_node_sparsity)
-
-        # Collect the data
-        data.append(
-            {
-                "circuit_idx": i,
-                "accuracy": accuracy,
-                "logit_similarity": logit_similarity,
-                "similarity_bit_preds": similarity_bit_preds,
-                "sk_sparsity": sk_combined_sparsity,
-                "sk_sparsity_node_sparsity": sk_sparsity_node_sparsity,
-                "sk_edge_sparsity": sk_edge_sparsity,
-            }
-        )
-
-    return top_sks, sparsities, pd.DataFrame(data)

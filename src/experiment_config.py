@@ -50,7 +50,7 @@ def get_default_train_n_samples():
 def get_default_train_noise():
     if _FAST_TEST_MODE:
         return 0.00001
-    return 0.09
+    return 0.01  # Low noise for cleaner learning
 
 
 def get_default_logic_gates():
@@ -70,6 +70,7 @@ def get_default_logic_gates():
             return ["XOR", "MAJORITY"]
 
     ALL_GATES = ["XOR", "OR", "AND", "IMP"]
+    ALL_GATES = ["XOR"]  # XOR requires 2 neurons
 
     return ALL_GATES
 
@@ -77,19 +78,19 @@ def get_default_logic_gates():
 def get_default_max_subcircuits_per_gate():
     if _FAST_TEST_MODE:
         return 1
-    return 10
+    return 20  # Analyze more subcircuits to find non-subset pairs
 
 
 def get_default_max_edge_variations_per_subcircuits():
     if _FAST_TEST_MODE:
         return 1
-    return 10
+    return 2
 
 
 def get_default_epsilon():
     if _FAST_TEST_MODE:
         return 0.01
-    return 0.2
+    return 0.001  # Only select 100% accurate subcircuits
 
 
 def get_default_faith_n_samples():
@@ -100,14 +101,14 @@ def get_default_faith_n_samples():
 
 def get_default_num_gates_per_run():
     if _FAST_TEST_MODE:
-        return [2]
-    return [1, 2]
+        return [1]
+    return [1]
 
 
 def get_default_activations():
     if _FAST_TEST_MODE:
         return ["leaky_relu"]
-    return ["leaky_relu", "relu"]
+    return ["tanh"]
 
 
 ###############
@@ -131,9 +132,9 @@ class DataParams(SchemaClass):
 @dataclass
 class ModelParams(SchemaClass):
     logic_gates: list[str] = field(default_factory=lambda: get_default_logic_gates())
-    width: int = 4
+    width: int = 3
     depth: int = 2
-    activation: str = "leaky_relu"  # Single activation for the model
+    activation: str = field(default_factory=lambda: get_default_activations()[0])
 
 
 @dataclass

@@ -83,6 +83,13 @@ def get_args() -> Any:
         default=None,
         help="Specific trial ID to process across runs (for --viz-only or --spd-only)",
     )
+    parser.add_argument(
+        "--rename",
+        type=str,
+        default=None,
+        metavar="DIR_NAME",
+        help="Custom name for run directory (instead of timestamp)",
+    )
     args = parser.parse_args()
 
     # args.spd_only should turn on args.spd
@@ -203,11 +210,14 @@ def exit_fx() -> None:
 
 def run_single_experiment(args: Any, output_dir: Path) -> None:
     """Run a single experiment with the current test mode settings."""
-    # We identify run by time (with microseconds to avoid collisions in parallel runs)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-
-    # Run path
-    run_dir = os.path.join(output_dir, f"run_{timestamp}")
+    # Run path - use custom name or timestamp
+    if args.rename:
+        run_dir = os.path.join(output_dir, args.rename)
+        if os.path.exists(run_dir):
+            raise ValueError(f"Run directory already exists: {run_dir}")
+    else:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        run_dir = os.path.join(output_dir, f"run_{timestamp}")
     os.makedirs(run_dir, exist_ok=False)
 
     # File paths

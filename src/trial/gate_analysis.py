@@ -1,7 +1,10 @@
 """Gate analysis - per-gate metric computation, edge optimization, and faithfulness."""
 
+import torch
+
 from src.analysis import FilterResult, create_clean_corrupted_data, filter_subcircuits
-from src.circuit import batch_compute_metrics, batch_evaluate_edge_variants, make_subcircuit_idx
+from src.circuit import batch_compute_metrics, batch_compute_canonical_accuracy, batch_evaluate_edge_variants, make_subcircuit_idx
+from src.domain import resolve_gate
 from src.infra.logging import (
     log_filtering_result,
     log_gate_faithfulness_summary,
@@ -93,7 +96,7 @@ def analyze_gate(
     )
 
     # batch_compute_metrics has @profile_fn("Gate Metrics (Batched)") directly
-    accuracies, logit_sims, bit_sims, best_sims = batch_compute_metrics(
+    _, logit_sims, bit_sims, best_sims = batch_compute_metrics(
         model=model,
         circuits=subcircuits,
         x=x_eval,
@@ -104,10 +107,28 @@ def analyze_gate(
         eval_device=eval_device,
     )
 
+    # Compute accuracy on canonical inputs (4 inputs for 2-input gates)
+    logic_gate = resolve_gate(gate_name)
+    n_inputs = logic_gate.n_inputs
+
+    def ground_truth_fn(inp):
+        """Compute ground truth for a single canonical input."""
+        inp_np = inp.cpu().numpy()
+        return float(logic_gate.gate_fn(inp_np)[0])
+
+    canonical_accuracies = batch_compute_canonical_accuracy(
+        model=model,
+        circuits=subcircuits,
+        gate_idx=gate_idx,
+        n_inputs=n_inputs,
+        ground_truth_fn=ground_truth_fn,
+        eval_device=eval_device,
+    )
+
     subcircuit_metrics = [
         SubcircuitMetrics(
             idx=idx,
-            accuracy=float(accuracies[idx]),
+            accuracy=float(canonical_accuracies[idx]),
             logit_similarity=float(logit_sims[idx]),
             bit_similarity=float(bit_sims[idx]),
             best_similarity=float(best_sims[idx]),

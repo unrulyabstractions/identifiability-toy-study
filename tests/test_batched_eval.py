@@ -6,7 +6,7 @@ import numpy as np
 import time
 from src.model import MLP
 from src.circuit import (
-    enumerate_all_valid_circuit,
+    enumerate_circuits_for_architecture,
     adapt_masks_for_gate,
     batch_evaluate_edge_variants,
     batch_evaluate_subcircuits,
@@ -33,7 +33,7 @@ def sequential_evaluate(model, circuits, x, gate_idx=0):
 def model_and_circuits():
     """Create a model and enumerate circuits."""
     model = MLP(hidden_sizes=[4, 4], input_size=2, output_size=1, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
     return model, circuits
 
 
@@ -101,7 +101,7 @@ def test_batch_compute_metrics_range(model_and_circuits):
 def test_batch_speedup(width, depth):
     """Measure speedup from batched evaluation."""
     model = MLP(hidden_sizes=[width] * depth, input_size=2, output_size=1, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
     x = torch.randn(100, 2)
 
     # Warmup
@@ -132,7 +132,7 @@ def test_batch_speedup(width, depth):
 def test_multi_output_model():
     """Test with multi-output model."""
     model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=2, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
     x = torch.randn(10, 2)
 
     # Test gate 0
@@ -150,7 +150,7 @@ def test_multi_output_model():
 def test_precomputed_masks_match_without():
     """Verify precomputed masks give same results as without."""
     model = MLP(hidden_sizes=[4, 4], input_size=2, output_size=1, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
     x = torch.randn(20, 2)
 
     # Without precomputed
@@ -173,7 +173,7 @@ def test_precomputed_masks_match_without():
 def test_precomputed_masks_multi_gate():
     """Test precomputed masks work correctly with multi-output models."""
     model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=2, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
     x = torch.randn(10, 2)
 
     # Precompute for gate 0
@@ -191,7 +191,7 @@ def test_precomputed_masks_multi_gate():
 def test_eval_device_parameter():
     """Test that eval_device parameter works correctly."""
     model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=1, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
     x_cpu = torch.randn(10, 2)
 
     # Evaluate on CPU
@@ -213,7 +213,7 @@ def test_eval_device_parameter():
 def test_batch_compute_metrics_with_eval_device():
     """Test batch_compute_metrics with explicit eval_device."""
     model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=1, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
     x = torch.randn(10, 2)
     y_target = torch.randint(0, 2, (10, 1)).float()
 
@@ -239,7 +239,7 @@ def test_batch_compute_metrics_with_eval_device():
 def test_base_masks_with_adapt_matches_direct():
     """Verify base masks + adapt gives same results as direct precompute."""
     model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=2, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
     x = torch.randn(10, 2)
 
     # Direct computation for each gate
@@ -270,7 +270,7 @@ def test_base_masks_with_adapt_matches_direct():
 def test_base_masks_evaluate_matches():
     """Verify evaluation results match between base+adapt and direct precompute."""
     model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=2, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
     x = torch.randn(15, 2)
 
     # Direct precompute approach
@@ -293,7 +293,7 @@ def test_base_masks_evaluate_matches():
 def test_single_output_adapt_returns_base():
     """For single-output models, adapt should return unchanged masks."""
     model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=1, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
 
     base_masks = precompute_circuit_masks_base(circuits, len(model.layers), device="cpu")
     adapted = adapt_masks_for_gate(base_masks, gate_idx=0, output_size=1)
@@ -307,7 +307,7 @@ def test_single_output_adapt_returns_base():
 def test_batch_evaluate_edge_variants_returns_results():
     """Verify edge variant evaluation returns correct structure."""
     model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=1, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
     x = torch.randn(10, 2)
     y_target = torch.randint(0, 2, (10, 1)).float()
 
@@ -334,7 +334,7 @@ def test_batch_evaluate_edge_variants_returns_results():
 def test_batch_evaluate_edge_variants_preserves_node_pattern():
     """Edge optimization should preserve the original node pattern."""
     model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=1, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
     x = torch.randn(10, 2)
     y_target = torch.randint(0, 2, (10, 1)).float()
 
@@ -358,7 +358,7 @@ def test_batch_evaluate_edge_variants_preserves_node_pattern():
 def test_batch_evaluate_edge_variants_multi_gate():
     """Test edge variant evaluation with multi-gate model."""
     model = MLP(hidden_sizes=[3, 3], input_size=2, output_size=2, device="cpu")
-    circuits = enumerate_all_valid_circuit(model, use_tqdm=False)
+    circuits = enumerate_circuits_for_architecture(model.layer_sizes, use_tqdm=False)
     x = torch.randn(10, 2)
     y_target = torch.randint(0, 2, (10, 1)).float()
 

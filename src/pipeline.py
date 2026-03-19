@@ -21,7 +21,7 @@ from src.spd import (
     run_trial_on_spd_results,
     save_spd_results,
 )
-from src.viz import visualize_experiment, visualize_spd_experiment
+from src.viz import save_per_gate_data, visualize_experiment, visualize_spd_experiment
 from src.viz.viz_config import VizConfig, VizLevel
 
 
@@ -36,7 +36,10 @@ def do_viz_on_experiment(
     if viz_config is None:
         viz_config = VizConfig()
 
-    # Skip all visualization if level is NONE
+    # ALWAYS save per-gate JSON data (independent of viz level)
+    save_per_gate_data(result, run_dir)
+
+    # Skip PNG visualization if level is NONE
     if viz_config.skip_all_viz:
         return
 
@@ -76,14 +79,17 @@ def do_viz_on_trial(
     if viz_config is None:
         viz_config = VizConfig()
 
-    # Skip all visualization if level is NONE
-    if viz_config.skip_all_viz:
-        return
-
     # Wrap trial in experiment result for viz compatibility
     from src.experiment_config import ExperimentConfig
     temp_result = ExperimentResult(config=ExperimentConfig())
     temp_result.trials[trial_result.trial_id] = trial_result
+
+    # ALWAYS save per-gate JSON data (independent of viz level)
+    save_per_gate_data(temp_result, run_dir)
+
+    # Skip PNG visualization if level is NONE
+    if viz_config.skip_all_viz:
+        return
 
     visualize_experiment(temp_result, run_dir=run_dir, viz_config=viz_config)
     if spd:
@@ -212,11 +218,12 @@ def run_iteratively(
         # Save this trial incrementally (without loading all previous trials)
         save_trial_result(trial_result, run_dir, cfg)
 
-        # Optionally run SPD/viz per trial
+        # Optionally run SPD per trial
         if spd:
             do_spd_on_trial(trial_result, run_dir, viz=not viz_config.skip_all_viz, spd_device=spd_device)
-        if not viz_config.skip_all_viz:
-            do_viz_on_trial(trial_result, run_dir, spd=spd, viz_config=viz_config)
+
+        # ALWAYS run viz (saves JSON data regardless of viz level, only skips PNGs)
+        do_viz_on_trial(trial_result, run_dir, spd=spd, viz_config=viz_config)
 
         # Clear trial from memory after processing
         del trial_result

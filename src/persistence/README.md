@@ -31,11 +31,6 @@ runs/
         edge_masks/{idx}.png          # Edge pattern diagrams
         ranked_node_masks/            # Diagrams sorted by ranking
         ranked_edge_masks/
-        structural_faithfulness/
-          summary.json                # Structural analysis overview
-          samples.json                # Per-subcircuit detailed metrics
-          structural_rankings.json    # Rankings by structural metrics
-          explanation.md              # How to read this folder
     trials/
       {trial_id}/
         summary.json                  # Trial-level ranked results

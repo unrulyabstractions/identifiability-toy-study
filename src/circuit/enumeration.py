@@ -161,7 +161,7 @@ def enumerate_edge_configs(
 def _enumerate_layer_edges(
     in_mask: np.ndarray,
     out_mask: np.ndarray,
-    require_connectivity: bool,
+    require_connectivity: bool = True,
 ) -> list[np.ndarray]:
     """
     Enumerate valid edge masks between two layers.
@@ -253,50 +253,6 @@ def pattern_to_circuit(pattern: NodePattern, edge_masks: list[np.ndarray] = None
     return Circuit(node_masks=node_arrays, edge_masks=edge_masks)
 
 
-def enumerate_circuits(
-    layer_widths: list[int],
-    min_sparsity: float = 0.0,
-    full_edges_only: bool = True,
-):
-    """
-    Enumerate circuits for a network architecture.
-
-    Args:
-        layer_widths: [input_size, hidden1, ..., output_size]
-        min_sparsity: Minimum node sparsity to include
-        full_edges_only: If True, only return circuits with full edge connectivity
-            (fast). If False, enumerate all edge configurations (can be slow).
-
-    Yields:
-        Circuit objects
-    """
-    from .circuit import Circuit
-
-    for pattern in enumerate_node_patterns(layer_widths, min_sparsity):
-        node_arrays = pattern.to_arrays()
-
-        if full_edges_only:
-            edge_masks = full_edge_config(pattern)
-            yield Circuit(node_masks=node_arrays, edge_masks=edge_masks)
-        else:
-            for edge_masks in enumerate_edge_configs(pattern):
-                yield Circuit(node_masks=node_arrays, edge_masks=edge_masks)
-
-
-def enumerate_subcircuits(layer_widths: list[int], min_sparsity: float = 0.0):
-    """Alias for enumerate_circuits with full edges only."""
-    return enumerate_circuits(layer_widths, min_sparsity, full_edges_only=True)
-
-
-def enumerate_subcircuits_with_constraint(
-    layer_widths: list[int],
-    min_sparsity: float = 0.0,
-    require_connectivity: bool = True,
-):
-    """Enumerate subcircuits with full edge configs."""
-    return enumerate_circuits(layer_widths, min_sparsity, full_edges_only=True)
-
-
 # =============================================================================
 # Subcircuit Index Utilities
 # =============================================================================
@@ -304,7 +260,9 @@ def enumerate_subcircuits_with_constraint(
 # The flat subcircuit_idx is computed using the architecture (width, depth).
 
 
-def make_subcircuit_idx(width: int, depth: int, node_mask_idx: int, edge_variant_rank: int) -> int:
+def make_subcircuit_idx(
+    width: int, depth: int, node_mask_idx: int, edge_variant_rank: int
+) -> int:
     """Create a flat subcircuit index from node pattern and edge variant rank.
 
     This is the canonical way to create a unique identifier for a subcircuit.
@@ -332,7 +290,9 @@ def make_subcircuit_idx(width: int, depth: int, node_mask_idx: int, edge_variant
     return node_mask_idx * max_edge_variants + edge_variant_rank
 
 
-def parse_subcircuit_idx(width: int, depth: int, subcircuit_idx: int) -> tuple[int, int]:
+def parse_subcircuit_idx(
+    width: int, depth: int, subcircuit_idx: int
+) -> tuple[int, int]:
     """Extract node pattern and edge variant rank from a flat subcircuit index.
 
     Args:
@@ -349,3 +309,255 @@ def parse_subcircuit_idx(width: int, depth: int, subcircuit_idx: int) -> tuple[i
     node_mask_idx = subcircuit_idx // max_edge_variants
     edge_variant_rank = subcircuit_idx % max_edge_variants
     return node_mask_idx, edge_variant_rank
+
+
+# =============================================================================
+# Subcircuit Counting with Connectivity Constraints
+# =============================================================================
+# A valid subcircuit is an edge subset where:
+# - All input nodes have >= 1 outgoing edge
+# - The output node has >= 1 incoming edge
+# - Each hidden node is either absent (no edges) or present (>= 1 in AND >= 1 out)
+#
+# The subcircuit index is the decimal interpretation of the binary edge mask.
+
+
+def f_cover(k: int, a: int) -> int:
+    """Covering function: ways for `a` sources to cover all `k` targets.
+
+    Each of `a` source nodes independently picks a NON-EMPTY subset of [k] targets.
+    Returns the count where their union covers ALL k targets.
+
+    Formula (inclusion-exclusion):
+        f(k, a) = sum_{j=0}^{k} (-1)^{k-j} * C(k,j) * (2^j - 1)^a
+    """
+    from math import comb
+
+    total = 0
+    for j in range(k + 1):
+        sign = (-1) ** (k - j)
+        total += sign * comb(k, j) * ((2**j - 1) ** a)
+    return total
+
+
+def count_valid_subcircuits(input_size: int, width: int, depth: int) -> int:
+    """Count valid subcircuits using DP over active hidden node counts.
+
+    Network: [input_size] -> [width] x depth -> [1]
+
+    By symmetry of hidden nodes, we only track HOW MANY are active (1..W),
+    not which ones. Runs in O(W^3 * D) time.
+
+    Args:
+        input_size: Number of input nodes (F)
+        width: Hidden layer width (W)
+        depth: Number of hidden layers (D)
+
+    Returns:
+        Total count of valid subcircuits
+    """
+    from math import comb
+
+    F, W, D = input_size, width, depth
+
+    # First edge-layer: F inputs -> first hidden layer
+    # state[a'] = number of edge configs producing a' active nodes in H1
+    state = {}
+    for a_prime in range(1, W + 1):
+        val = comb(W, a_prime) * f_cover(a_prime, F)
+        if val > 0:
+            state[a_prime] = val
+
+    # Middle edge-layers: hidden -> hidden (D-1 transitions)
+    for _ in range(D - 1):
+        new_state = {}
+        for a, cnt in state.items():
+            for a_prime in range(1, W + 1):
+                trans = comb(W, a_prime) * f_cover(a_prime, a)
+                if trans > 0:
+                    new_state[a_prime] = new_state.get(a_prime, 0) + cnt * trans
+        state = new_state
+
+    # Last edge-layer: each active hidden node must connect to output
+    # Valid iff a >= 1 (already guaranteed by state keys)
+    return sum(state.values())
+
+
+def get_edge_list(input_size: int, width: int, depth: int) -> list[tuple[int, int, int, int]]:
+    """Get ordered list of edges for an architecture.
+
+    Returns list of (src_layer, src_idx, dst_layer, dst_idx) tuples.
+    Edge index in this list corresponds to bit position in subcircuit index.
+
+    Network: [input_size] -> [width] x depth -> [1]
+    """
+    layer_sizes = [input_size] + [width] * depth + [1]
+    edges = []
+    for layer in range(len(layer_sizes) - 1):
+        for src in range(layer_sizes[layer]):
+            for dst in range(layer_sizes[layer + 1]):
+                edges.append((layer, src, layer + 1, dst))
+    return edges
+
+
+def get_num_edges(input_size: int, width: int, depth: int) -> int:
+    """Get total number of edges in architecture."""
+    # input->hidden + (D-1)*hidden->hidden + hidden->output
+    return input_size * width + (depth - 1) * width * width + width
+
+
+def subcircuit_idx_to_edge_mask(subcircuit_idx: int, num_edges: int) -> list[int]:
+    """Convert subcircuit index to binary edge mask.
+
+    Args:
+        subcircuit_idx: Decimal index (binary encodes which edges are active)
+        num_edges: Total number of edges in architecture
+
+    Returns:
+        List of 0/1 values, one per edge
+    """
+    return [(subcircuit_idx >> i) & 1 for i in range(num_edges)]
+
+
+def edge_mask_to_subcircuit_idx(edge_mask: list[int]) -> int:
+    """Convert binary edge mask to subcircuit index.
+
+    Args:
+        edge_mask: List of 0/1 values, one per edge
+
+    Returns:
+        Decimal subcircuit index
+    """
+    idx = 0
+    for i, bit in enumerate(edge_mask):
+        if bit:
+            idx |= (1 << i)
+    return idx
+
+
+def get_circuit_from_trial(
+    trial,
+    gate_name: str,
+    subcircuit_idx: int,
+    subcircuits: list = None,
+) -> "Circuit":
+    """Get a Circuit object from trial data given a subcircuit_idx.
+
+    Looks up the stored circuit in trial.metrics.per_gate_circuits first.
+    Falls back to base node pattern (full edges) if not found.
+
+    Args:
+        trial: Trial object with metrics
+        gate_name: Name of the gate (e.g., "XOR")
+        subcircuit_idx: Flat subcircuit index
+        subcircuits: Optional list of base circuits (for fallback)
+
+    Returns:
+        Circuit object
+
+    Raises:
+        ValueError: If circuit cannot be found or reconstructed
+    """
+    from .circuit import Circuit
+
+    # Get architecture params from trial
+    width = trial.setup.architecture.get("width", 4)
+    depth = trial.setup.architecture.get("depth", 2)
+
+    # Try to get from stored circuits
+    per_gate_circuits = trial.metrics.per_gate_circuits.get(gate_name, {})
+    if subcircuit_idx in per_gate_circuits:
+        circuit_dict = per_gate_circuits[subcircuit_idx]
+        return Circuit.from_dict(circuit_dict)
+
+    # Fallback: use base node pattern from subcircuits list
+    if subcircuits is not None:
+        node_mask_idx, _ = parse_subcircuit_idx(width, depth, subcircuit_idx)
+        if 0 <= node_mask_idx < len(subcircuits):
+            return subcircuits[node_mask_idx]
+
+    raise ValueError(
+        f"Circuit not found for subcircuit_idx={subcircuit_idx} "
+        f"gate={gate_name}"
+    )
+
+
+def reconstruct_circuit_from_idx(
+    subcircuit_idx: int,
+    width: int,
+    depth: int,
+    input_size: int = 2,
+    output_size: int = 1,
+) -> "Circuit":
+    """Reconstruct a Circuit by re-enumerating patterns up to the given index.
+
+    This is expensive for large indices. Use get_circuit_from_trial() when
+    trial data is available.
+
+    Args:
+        subcircuit_idx: Flat subcircuit index
+        width: Hidden layer width
+        depth: Number of hidden layers
+        input_size: Number of inputs
+        output_size: Number of outputs
+
+    Returns:
+        Circuit object
+    """
+    from .circuit import Circuit
+
+    node_mask_idx, edge_variant_rank = parse_subcircuit_idx(width, depth, subcircuit_idx)
+
+    # Enumerate node patterns until we find the right one
+    layer_widths = [input_size] + [width] * depth + [output_size]
+    patterns = list(enumerate_node_patterns(layer_widths))
+
+    if node_mask_idx >= len(patterns):
+        raise ValueError(
+            f"node_mask_idx={node_mask_idx} exceeds number of patterns "
+            f"({len(patterns)})"
+        )
+
+    pattern = patterns[node_mask_idx]
+    node_arrays = pattern.to_arrays()
+
+    # Enumerate edge configs for this pattern
+    edge_configs = list(enumerate_edge_configs(pattern))
+
+    if edge_variant_rank >= len(edge_configs):
+        # Fall back to full edges if rank exceeds available configs
+        edge_masks = full_edge_config(pattern)
+    else:
+        edge_masks = edge_configs[edge_variant_rank]
+
+    return Circuit(node_masks=node_arrays, edge_masks=edge_masks)
+
+
+def compare_circuits(circuit_a: "Circuit", circuit_b: "Circuit") -> dict:
+    """Compare two circuits and return detailed metrics.
+
+    Args:
+        circuit_a: First circuit
+        circuit_b: Second circuit
+
+    Returns:
+        Dict with comparison metrics including:
+        - jaccard: Jaccard similarity (0-1)
+        - a_subset_of_b: True if A is a subset of B
+        - b_subset_of_a: True if B is a subset of A
+        - intersection_size: Number of shared active components
+        - a_only: Components active only in A
+        - b_only: Components active only in B
+    """
+    metrics = circuit_a.overlap_metrics(circuit_b)
+
+    return {
+        "jaccard": metrics["jaccard"],
+        "a_subset_of_b": metrics["is_subset"],
+        "b_subset_of_a": metrics["is_superset"],
+        "intersection_size": metrics["intersection_size"],
+        "a_size": metrics["self_size"],
+        "b_size": metrics["other_size"],
+        "a_only": metrics["self_size"] - metrics["intersection_size"],
+        "b_only": metrics["other_size"] - metrics["intersection_size"],
+    }

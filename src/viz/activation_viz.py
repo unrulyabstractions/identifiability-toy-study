@@ -124,8 +124,12 @@ def visualize_circuit_activations_from_data(
         return path
 
     n_combinations = len(labels_map)
-    n_cols = min(4, n_combinations)
-    n_rows = math.ceil(n_combinations / n_cols)
+    # Use 2x2 grid for 4 inputs (more compact), otherwise up to 4 columns
+    if n_combinations == 4:
+        n_cols, n_rows = 2, 2
+    else:
+        n_cols = min(4, n_combinations)
+        n_rows = math.ceil(n_combinations / n_cols)
 
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(7 * n_cols, 6 * n_rows))
 
@@ -154,10 +158,8 @@ def visualize_circuit_activations_from_data(
     for i in range(len(labels_map), len(axes)):
         axes[i].axis("off")
 
-    if gate_name:
-        finalize_figure(fig, f"{gate_name} - Circuit Activations", fontsize=14)
-    else:
-        plt.tight_layout()
+    # No main title - subplot titles are sufficient
+    plt.tight_layout()
 
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, filename)

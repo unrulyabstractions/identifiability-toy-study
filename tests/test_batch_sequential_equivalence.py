@@ -17,7 +17,7 @@ from src.circuit import (
     batch_compute_metrics,
     batch_evaluate_subcircuits,
     precompute_circuit_masks,
-    enumerate_all_valid_circuit,
+    enumerate_circuits_for_architecture,
 )
 from src.model import MLP
 from src.infra import ParallelTasks
@@ -126,7 +126,7 @@ class TestBatchedEvalEqualsSequential:
 
     def test_small_model_basic(self, small_model):
         """Basic test with small model."""
-        circuits = enumerate_all_valid_circuit(small_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(small_model.layer_sizes, use_tqdm=False)
         x = torch.randn(10, 2)
 
         seq_result = sequential_evaluate_circuits(small_model, circuits, x)
@@ -142,7 +142,7 @@ class TestBatchedEvalEqualsSequential:
 
     def test_medium_model(self, medium_model):
         """Test with more circuits (225 for w=4, d=2)."""
-        circuits = enumerate_all_valid_circuit(medium_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(medium_model.layer_sizes, use_tqdm=False)
         x = torch.randn(20, 2)
 
         seq_result = sequential_evaluate_circuits(medium_model, circuits, x)
@@ -157,7 +157,7 @@ class TestBatchedEvalEqualsSequential:
 
     def test_multi_output_gate0(self, multi_output_model):
         """Test multi-output model, gate 0."""
-        circuits = enumerate_all_valid_circuit(multi_output_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(multi_output_model.layer_sizes, use_tqdm=False)
         x = torch.randn(10, 2)
 
         seq_result = sequential_evaluate_circuits(
@@ -176,7 +176,7 @@ class TestBatchedEvalEqualsSequential:
 
     def test_multi_output_gate1(self, multi_output_model):
         """Test multi-output model, gate 1."""
-        circuits = enumerate_all_valid_circuit(multi_output_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(multi_output_model.layer_sizes, use_tqdm=False)
         x = torch.randn(10, 2)
 
         seq_result = sequential_evaluate_circuits(
@@ -195,7 +195,7 @@ class TestBatchedEvalEqualsSequential:
 
     def test_with_precomputed_masks(self, medium_model):
         """Test that precomputed masks give same result."""
-        circuits = enumerate_all_valid_circuit(medium_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(medium_model.layer_sizes, use_tqdm=False)
         x = torch.randn(15, 2)
 
         # Without precompute
@@ -219,7 +219,7 @@ class TestBatchedEvalEqualsSequential:
     @pytest.mark.parametrize("batch_size", [1, 5, 10, 32, 64])
     def test_various_batch_sizes(self, small_model, batch_size):
         """Test with various batch sizes."""
-        circuits = enumerate_all_valid_circuit(small_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(small_model.layer_sizes, use_tqdm=False)
         x = torch.randn(batch_size, 2)
 
         seq_result = sequential_evaluate_circuits(small_model, circuits, x)
@@ -243,7 +243,7 @@ class TestBatchedMetricsEqualsSequential:
 
     def test_accuracy_matches(self, small_model):
         """Test accuracy computation matches."""
-        circuits = enumerate_all_valid_circuit(small_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(small_model.layer_sizes, use_tqdm=False)
         x = torch.randn(20, 2)
         y_target = torch.randint(0, 2, (20, 1)).float()
 
@@ -261,7 +261,7 @@ class TestBatchedMetricsEqualsSequential:
 
     def test_bit_similarity_matches(self, small_model):
         """Test bit similarity computation matches."""
-        circuits = enumerate_all_valid_circuit(small_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(small_model.layer_sizes, use_tqdm=False)
         x = torch.randn(20, 2)
         y_target = torch.randint(0, 2, (20, 1)).float()
 
@@ -279,7 +279,7 @@ class TestBatchedMetricsEqualsSequential:
 
     def test_logit_similarity_matches(self, small_model):
         """Test logit similarity computation matches."""
-        circuits = enumerate_all_valid_circuit(small_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(small_model.layer_sizes, use_tqdm=False)
         x = torch.randn(20, 2)
         y_target = torch.randint(0, 2, (20, 1)).float()
 
@@ -297,7 +297,7 @@ class TestBatchedMetricsEqualsSequential:
 
     def test_all_metrics_medium_model(self, medium_model):
         """Test all metrics with medium model."""
-        circuits = enumerate_all_valid_circuit(medium_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(medium_model.layer_sizes, use_tqdm=False)
         x = torch.randn(30, 2)
         y_target = torch.randint(0, 2, (30, 1)).float()
 
@@ -326,7 +326,7 @@ class TestParallelStructureEqualsSequential:
 
     def test_structure_analysis_matches(self, medium_model):
         """Test parallel structure analysis gives same results."""
-        circuits = enumerate_all_valid_circuit(medium_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(medium_model.layer_sizes, use_tqdm=False)
 
         # Sequential
         seq_structures = sequential_structure_analysis(circuits)
@@ -362,7 +362,7 @@ class TestCpuMpsEquivalence:
     )
     def test_eval_cpu_vs_mps(self, small_model):
         """Test batched eval gives same results on CPU vs MPS."""
-        circuits = enumerate_all_valid_circuit(small_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(small_model.layer_sizes, use_tqdm=False)
         x = torch.randn(10, 2)
 
         # CPU
@@ -388,7 +388,7 @@ class TestCpuMpsEquivalence:
     )
     def test_metrics_cpu_vs_mps(self, small_model):
         """Test metrics computation gives same results on CPU vs MPS."""
-        circuits = enumerate_all_valid_circuit(small_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(small_model.layer_sizes, use_tqdm=False)
         x = torch.randn(15, 2)
         y_target = torch.randint(0, 2, (15, 1)).float()
 
@@ -414,7 +414,7 @@ class TestCpuMpsEquivalence:
     )
     def test_precomputed_masks_cpu_vs_mps(self, medium_model):
         """Test precomputed masks work correctly on both devices."""
-        circuits = enumerate_all_valid_circuit(medium_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(medium_model.layer_sizes, use_tqdm=False)
         x = torch.randn(10, 2)
 
         # Precompute on each device
@@ -461,7 +461,7 @@ class TestEdgeCases:
 
     def test_single_circuit(self, small_model):
         """Test with just one circuit."""
-        circuits = enumerate_all_valid_circuit(small_model, use_tqdm=False)[:1]
+        circuits = enumerate_circuits_for_architecture(small_model.layer_sizes, use_tqdm=False)[:1]
         x = torch.randn(5, 2)
 
         seq_result = sequential_evaluate_circuits(small_model, circuits, x)
@@ -476,7 +476,7 @@ class TestEdgeCases:
 
     def test_single_sample(self, small_model):
         """Test with batch size of 1."""
-        circuits = enumerate_all_valid_circuit(small_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(small_model.layer_sizes, use_tqdm=False)
         x = torch.randn(1, 2)
 
         seq_result = sequential_evaluate_circuits(small_model, circuits, x)
@@ -491,7 +491,7 @@ class TestEdgeCases:
 
     def test_deterministic_results(self, small_model):
         """Test that results are deterministic across runs."""
-        circuits = enumerate_all_valid_circuit(small_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(small_model.layer_sizes, use_tqdm=False)
         x = torch.randn(10, 2)
 
         result1 = batch_evaluate_subcircuits(small_model, circuits, x)
@@ -503,7 +503,7 @@ class TestEdgeCases:
 
     def test_different_inputs_different_outputs(self, small_model):
         """Test that different inputs produce different outputs."""
-        circuits = enumerate_all_valid_circuit(small_model, use_tqdm=False)
+        circuits = enumerate_circuits_for_architecture(small_model.layer_sizes, use_tqdm=False)
         x1 = torch.zeros(5, 2)
         x2 = torch.ones(5, 2)
 

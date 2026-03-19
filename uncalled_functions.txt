@@ -1,0 +1,444 @@
+UNCALLED FUNCTIONS
+======================================================================
+
+src/activation_analysis/clustering.py:
+  line   34: cluster_neurons_kmeans
+  line  116: cluster_neurons_hierarchical
+  line  212: cluster_samples_by_activation
+  line  253: find_optimal_clusters
+
+src/activation_analysis/scripts/run_activation_analysis.py:
+  line   37: run_activation_analysis
+  line  187: main
+
+src/activation_analysis/statistics.py:
+  line   24: compute_activation_statistics
+  line   80: compute_activation_correlation
+  line  149: compute_all_correlations
+  line  182: compute_inter_layer_correlation
+
+src/activation_analysis/types.py:
+  line  142: summary
+
+src/activation_analysis/viz/plots.py:
+  line   24: plot_layer_statistics
+  line  117: plot_correlation_heatmap
+  line  168: plot_correlation_summary
+  line  209: plot_clustering_result
+  line  267: plot_cluster_centers
+  line  315: plot_silhouette_scores
+
+src/analysis/counterfactual.py:
+  line   96: create_patch_intervention
+
+src/analysis/filtering.py:
+  line   12: _node_masks_key
+
+src/analysis/structural_faithfulness.py:
+  line   30: _build_circuit_graph
+  line   59: _count_io_paths
+  line   82: compute_topology_metrics
+  line  139: compute_centrality_metrics
+  line  210: compute_structural_faithfulness
+  line  315: _compute_overall_structural_score
+  line  343: _interpret_structural_metrics
+  line  379: analyze_subcircuit_structure
+  line  409: compute_structural_rankings
+  line  463: compute_structural_summary
+
+src/analysis/subcircuit_ranking.py:
+  line  177: get_ranking_tuple
+  line  205: get_ranking_dict
+
+src/attribution/eap.py:
+  line   18: compute_eap
+  line  122: compute_direct_eap
+
+src/attribution/eap_ig.py:
+  line   18: compute_eap_ig
+  line  122: compute_eap_ig_fast
+
+src/attribution/input_attribution.py:
+  line   17: compute_gradient_attribution
+  line   56: compute_gradient_x_input
+  line   96: compute_integrated_gradients
+  line  158: compute_integrated_gradients_fast
+
+src/attribution/patching.py:
+  line   19: compute_activation_patching
+  line   86: compute_mean_ablation
+
+src/attribution/scripts/run_attribution.py:
+  line   38: run_attribution_analysis
+  line  248: main
+
+src/attribution/types.py:
+  line   32: get_top_edges
+  line   59: get_mean_attribution
+  line   65: get_relative_importance
+
+src/attribution/viz/decision_boundary.py:
+  line   18: plot_decision_boundary_predictions
+  line   79: plot_decision_boundary_logits
+  line  149: plot_decision_boundary_accuracy
+  line  234: plot_decision_boundary_comparison
+
+src/attribution/viz/heatmaps.py:
+  line   18: plot_layer_attribution_heatmap
+  line   78: plot_edge_attribution_matrix
+  line  158: plot_input_attribution
+  line  218: plot_attribution_comparison
+
+src/circuit/batched_eval.py:
+  line  780: run_batched_node_interventions
+
+src/circuit/circuit.py:
+  line  173: __repr__
+  line  176: to_intervention
+  line  399: full
+  line  415: save_to_file
+  line  434: load_from_file
+  line  459: validate_against_model
+  line  517: _validate_node_connectivity
+  line  545: _check_active_path
+  line  567: __le__
+  line  622: overlap_jaccard
+  line  636: ground
+  line  720: visualize
+  line  853: compute_jaccard_index
+  line  910: enumerate_all_valid_circuit
+
+src/circuit/enumeration.py:
+  line   30: active_counts
+  line   34: sparsity
+  line  236: pattern_to_circuit
+  line  325: f_cover
+  line  343: count_valid_subcircuits
+  line  386: get_edge_list
+  line  403: get_num_edges
+  line  409: subcircuit_idx_to_edge_mask
+  line  422: edge_mask_to_subcircuit_idx
+
+src/circuit/grounding.py:
+  line   13: __init__
+  line   24: visualize
+  line   34: enumerate_tts
+  line   56: compute_local_tts
+  line  110: load_circuits
+  line  138: ground_subcircuit
+
+src/circuit/precompute.py:
+  line   28: to_flat
+  line   42: from_flat
+  line   58: __str__
+  line   91: __post_init__
+  line   98: n_hidden_nodes
+  line  102: n_hh_edges
+  line  106: n_ho_edges
+  line  110: n_internal_edges
+  line  115: n_input_edges
+  line  119: n_nodes
+  line  123: n_edges
+  line  127: total
+  line  132: node_coords
+  line  137: edge_coords
+  line  167: get_subcircuit_idx
+  line  181: calculate_index
+  line  251: compute_edge_mask_idx
+  line  314: get_compatible_edge_masks_for_node
+
+src/domain/logic_gates.py:
+  line   49: truth_table
+  line  130: print_truth_table
+  line  150: generate_noisy_multi_gate_data
+  line  226: from_logic
+  line  259: __repr__
+  line  280: __str__
+  line  287: _str
+  line  310: add_missing_ids
+  line  330: find_node
+  line  351: get_leaf_nodes
+  line  364: get_node_ids
+  line  376: get_non_leaf_nodes
+  line  388: get_nodes
+  line  399: get_intervened_trees
+  line  424: _get_unique_intervention_nodes
+  line  441: negate
+  line  457: intervene
+  line  482: do_intervene
+  line  497: sample
+  line  531: call
+  line  544: evaluate
+  line  578: visualize
+  line  593: calculate_positions
+  line  664: all_formulas
+  line  694: get_formula_dataset
+  line  782: and_func
+  line  787: or_func
+  line  792: implication_func
+  line  801: nand_func
+  line  806: nor_func
+  line  811: not_implication_func
+  line  818: majority_func
+  line  824: parity_func
+  line  834: full_adder_sum_func
+  line  840: full_adder_carry_func
+  line  847: not_func
+  line  853: identity_func
+  line  864: mux_func
+  line  889: aoi_func
+  line  910: exactly_k_func
+  line  926: conditional_func
+  line  941: print_truth_table_multiple
+  line  975: name_gate
+  line 1061: create_gate
+  line 1265: nn_sample_complexity
+
+src/experiment.py:
+  line  194: run_experiment
+  line  243: run_trial_from_setting_parallel
+  line  258: run_trial_from_setting_series
+
+src/geometric/cka.py:
+  line   18: centering
+  line   34: linear_kernel
+  line   46: rbf_kernel
+  line   69: hsic
+  line   83: linear_cka
+  line  119: rbf_cka
+  line  156: compare_layers_cka
+  line  194: compute_cka_result
+
+src/geometric/rsa.py:
+  line   20: compute_rdm
+  line   55: compute_layer_rdm
+  line   92: compute_all_rdms
+  line  136: compare_rdms
+  line  183: compute_rsa_matrix
+
+src/geometric/scripts/run_geometric.py:
+  line   24: plot_similarity_matrix
+  line   75: plot_rdm
+  line  109: run_geometric_analysis
+  line  252: main
+
+src/geometric/types.py:
+  line   29: get_upper_triangle
+  line   93: summary
+
+src/infra/logging.py:
+  line   13: log_section
+  line   20: log_subsection
+  line   25: log_kv
+  line   79: log_edge_variant_summary
+
+src/infra/parallel.py:
+  line   87: __enter__
+  line   91: __exit__
+  line   96: submit
+  line  103: run_parallel
+  line  121: parallel_map
+
+src/infra/profiler.py:
+  line   94: enable
+  line  101: disable
+  line  113: elapsed
+  line  120: indent_str
+  line  213: debug_break
+  line  241: debug_break_if
+  line  269: reset
+  line  354: logged
+  line  472: _summarize_args
+  line  483: _summarize_value
+  line  512: timed_phase
+
+src/infra/utils.py:
+  line   11: nn_sample_complexity
+  line   65: visualize_as_grid
+  line  106: get_node_size
+  line  148: powerset
+
+src/model/decomposed_mlp.py:
+  line   34: __init__
+  line   45: forward
+  line   50: get_n_components
+  line   56: save
+  line   78: load
+
+src/model/intervention.py:
+  line   31: is_multi
+  line   34: for_layer
+  line   46: from_dict
+  line   71: to
+  line   79: merge
+  line   85: from_states_dict
+  line   97: create_random_interventions
+  line  118: sample_from_range
+  line  185: to_device
+
+src/model/mlp.py:
+  line  120: out_features
+  line  185: get_states
+  line  202: get_patch
+  line  227: visualize
+  line  438: __call__
+  line  442: view
+  line  533: enumerate_valid_node_masks
+  line  608: _apply_edge_patches
+
+src/persistence/load.py:
+  line   36: _reconstruct_full_subcircuit
+  line   75: get_all_runs
+  line  194: load_run_profiling
+  line  210: load_trial_profiling
+  line  237: load_decomposed_model
+  line  261: load_spd_analysis
+  line  586: load_experiment
+
+src/persistence/save.py:
+  line  575: save_results
+  line  828: _simplify_circuit_masks
+  line 1296: _compute_structural_metrics_for_rankings
+  line 1791: _node_sort_key
+  line 1825: _edge_sort_key
+  line 2018: _save_structural_faithfulness
+  line 2309: _save_subcircuit_structural
+
+src/persistence/summary.py:
+  line  362: _pearson_correlation
+
+src/pipeline.py:
+  line   29: do_viz_on_experiment
+  line   54: do_spd_on_experiment
+  line  101: do_spd_on_trial
+  line  120: save_experiment_results
+  line  157: run_monolith
+
+src/probing/analysis.py:
+  line   17: analyze_probes
+  line   49: probe_for_gate
+  line  116: probe_for_input
+
+src/probing/linear_probe.py:
+  line   24: __init__
+  line   34: forward
+  line   38: train_linear_probe
+  line  152: train_probes_all_layers
+
+src/probing/scripts/run_probing.py:
+  line   28: run_probing_analysis
+  line  172: main
+
+src/probing/types.py:
+  line   37: get_feature_importance
+  line   73: summary
+
+src/probing/viz/plots.py:
+  line   19: plot_probe_accuracy
+  line   69: plot_probe_comparison
+  line  124: plot_feature_importance
+  line  166: plot_loss_history
+  line  209: plot_layer_accuracy_heatmap
+
+src/schema_class.py:
+  line   27: __str__
+  line   32: __copy__
+
+src/schemas/visualization.py:
+  line   57: n_samples
+  line   94: n_corners
+
+src/training_analysis/types.py:
+  line   81: summary
+
+src/trial/phases.py:
+  line   99: enumerate_circuits_phase
+
+src/visualization/decision_boundary.py:
+  line   27: generate_monte_carlo_data
+  line  205: plot_decision_boundary_1d_from_data
+  line  285: plot_decision_boundary_2d_from_data
+  line  379: plot_decision_boundary_3d_from_data
+  line  511: plot_decision_boundary_nd_from_data
+  line  623: plot_decision_boundary_from_data
+  line  654: visualize_all_gates_from_data
+
+src/viz/activation_viz.py:
+  line   19: _filter_activations_for_gate
+  line   40: _build_canonical_labels
+  line   58: _filter_weights_biases
+  line   88: visualize_circuit_activations_from_data
+  line  169: visualize_circuit_activations_mean
+
+src/viz/circuit_drawing.py:
+  line   26: _get_spd_component_weights
+  line   53: draw_intervened_circuit
+  line  323: _build_graph_fast
+  line  464: _draw_graph
+  line  567: _draw_graph_with_output_highlight
+  line  666: _draw_circuit_from_data
+
+src/viz/constants.py:
+  line   23: get_dpi
+  line   28: set_dpi
+  line   80: finalize_figure
+  line   97: set_subplot_title
+  line  123: get_positions
+  line  137: clear
+  line  148: _activation_to_color
+  line  164: lerp
+  line  193: _text_color_for_background
+  line  200: _symmetric_range
+
+src/viz/experiment_viz.py:
+  line   39: wrapper
+  line   45: blocked_forward
+  line  100: _generate_circuit_diagrams
+  line  345: visualize_experiment
+
+src/viz/faithfulness_viz.py:
+  line   33: _ensure_list
+  line   46: _patch_key_to_filename
+  line   61: _faithfulness_score_to_color
+  line   86: visualize_faithfulness_intervention_effects
+  line  106: _plot_intervention_scatter
+  line  131: _plot_agreement_binned
+  line  181: _create_circuit_distribution_summary
+  line  292: _create_intervention_summary
+  line  300: sort_key
+  line  385: _build_node_scores
+  line  401: _build_cf_node_scores
+  line  454: _draw_metric_circuit
+  line  573: _draw_per_input_figure
+  line  676: _generate_faithfulness_circuit_figure
+  line  800: visualize_faithfulness_circuit_samples
+  line  848: _add_counterfactual_tasks
+  line  935: visualize_patch_circuits
+  line  998: extract_activations
+
+src/viz/observational_viz.py:
+  line   30: _ensure_list
+  line   43: _generate_observational_circuit_figure
+  line  161: visualize_observational_circuits
+  line  387: visualize_observational_curves
+  line  396: _compute_perturbation_effect
+  line  410: _plot_output_values
+  line  445: _plot_single_model
+  line  461: _plot_agreement_binned
+  line  552: _get_base_key
+
+src/viz/profiling_viz.py:
+  line   19: visualize_profiling_timeline
+  line   62: visualize_profiling_phases
+  line  116: visualize_profiling_summary
+
+src/viz/spd_viz.py:
+  line   25: visualize_spd_components
+  line   65: visualize_spd_experiment
+  line  116: _visualize_cluster_summary
+
+src/viz/viz_config.py:
+  line   38: skip_circuit_figures
+  line   43: max_subcircuits_per_gate
+  line   53: generate_summary_plots
+
