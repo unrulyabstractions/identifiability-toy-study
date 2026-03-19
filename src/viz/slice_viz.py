@@ -192,8 +192,17 @@ def visualize_node_pattern_comparison(
     x = np.arange(len(patterns))
     width = 0.6
 
-    # Single bar for max score
-    bars = ax.bar(x, max_scores, width, color='steelblue', edgecolor='black', linewidth=0.5)
+    # Color bars by score using a gradient (viridis: purple->teal->yellow)
+    cmap = plt.cm.viridis
+    # Normalize scores to 0-1 range for colormap
+    score_min, score_max = min(max_scores), max(max_scores)
+    if score_max > score_min:
+        normalized = [(s - score_min) / (score_max - score_min) for s in max_scores]
+    else:
+        normalized = [0.5] * len(max_scores)
+    colors = [cmap(n) for n in normalized]
+
+    bars = ax.bar(x, max_scores, width, color=colors, edgecolor='black', linewidth=0.5)
 
     ax.set_xlabel("Node Pattern", fontsize=12)
     ax.set_ylabel("Max Score", fontsize=12)

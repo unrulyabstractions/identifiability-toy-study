@@ -209,19 +209,17 @@ def visualize_faithfulness_intervention_effects(
         labels = [_patch_key_to_filename(pk) for pk, _ in sorted_patches]
         bit_sim = [ps.mean.bit for _, ps in sorted_patches]
         logit_sim = [ps.mean.logit for _, ps in sorted_patches]
-        best_sim = [ps.mean.best for _, ps in sorted_patches]
         n_samples = [ps.n_samples for _, ps in sorted_patches]
 
         # Create bar chart (same format as observational/interventional summaries)
         fig, ax = plt.subplots(1, 1, figsize=(max(12, n_patches * 1.2), 6))
 
         x = np.arange(n_patches)
-        width = 0.25
+        width = 0.35
 
-        # Bar colors matching observational format
-        ax.bar(x - width, bit_sim, width, label="Bit Agreement", color="#4CAF50", alpha=0.8)
-        ax.bar(x, logit_sim, width, label="Logit Similarity", color="#2196F3", alpha=0.8)
-        ax.bar(x + width, best_sim, width, label="Best Similarity", color="#FF9800", alpha=0.8)
+        # Bar colors matching observational format (removed Best Similarity)
+        ax.bar(x - width/2, bit_sim, width, label="Bit Agreement", color="#4CAF50", alpha=0.8)
+        ax.bar(x + width/2, logit_sim, width, label="Logit Similarity", color="#2196F3", alpha=0.8)
 
         ax.set_ylabel("Score", fontsize=11)
         ax.set_xticks(x)
@@ -230,7 +228,7 @@ def visualize_faithfulness_intervention_effects(
         # Adapt y-axis based on distribution type
         # OOD may have lower scores, so auto-scale with some padding
         if distribution_type == "out_distribution":
-            all_scores = bit_sim + logit_sim + best_sim
+            all_scores = bit_sim + logit_sim
             y_min = min(0, min(all_scores) - 0.1) if all_scores else -0.15
             y_max = max(1.0, max(all_scores) + 0.1) if all_scores else 1.15
             ax.set_ylim(y_min, y_max)
@@ -245,7 +243,7 @@ def visualize_faithfulness_intervention_effects(
 
         # Sample counts above bars
         for i, (xi, n) in enumerate(zip(x, n_samples)):
-            y_pos = max(bit_sim[i], logit_sim[i], best_sim[i]) + 0.03
+            y_pos = max(bit_sim[i], logit_sim[i]) + 0.03
             ax.text(xi, y_pos, f"n={n}", ha="center", va="bottom", fontsize=7, color="#666666")
 
         # Title
@@ -313,28 +311,26 @@ def visualize_faithfulness_intervention_effects(
 
         bit_sim = [p[2].mean.bit for p in all_patches]
         logit_sim = [p[2].mean.logit for p in all_patches]
-        best_sim = [p[2].mean.best for p in all_patches]
         n_samples = [p[2].n_samples for p in all_patches]
         is_in_circuit = [p[0] == "in" for p in all_patches]
 
         fig, ax = plt.subplots(1, 1, figsize=(max(14, n_patches * 1.5), 7))
 
         x = np.arange(n_patches)
-        width = 0.25
+        width = 0.35
 
-        ax.bar(x - width, bit_sim, width, label="Bit Agreement", color="#4CAF50", alpha=0.8)
-        ax.bar(x, logit_sim, width, label="Logit Similarity", color="#2196F3", alpha=0.8)
-        ax.bar(x + width, best_sim, width, label="Best Similarity", color="#FF9800", alpha=0.8)
+        ax.bar(x - width/2, bit_sim, width, label="Bit Agreement", color="#4CAF50", alpha=0.8)
+        ax.bar(x + width/2, logit_sim, width, label="Logit Similarity", color="#2196F3", alpha=0.8)
 
         for i, is_in in enumerate(is_in_circuit):
-            marker = "^" if is_in else "v"
-            color = "#77DD77" if is_in else "#6495ED"  # Pastel green/blue
-            ax.text(x[i], -0.08, marker, ha="center", va="top", fontsize=10, color=color)
+            marker = "▲" if is_in else "▼"  # Use larger Unicode triangles
+            color = "#228B22" if is_in else "#4169E1"  # Darker green/blue for visibility
+            ax.text(x[i], -0.12, marker, ha="center", va="top", fontsize=24, color=color, fontweight="bold")
 
         ax.set_ylabel("Score", fontsize=11)
         ax.set_xticks(x)
         ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
-        ax.set_ylim(-0.15, 1.15)
+        ax.set_ylim(-0.25, 1.15)  # Extended lower limit for larger arrows
         ax.axhline(y=0, color="#888888", linestyle="-", alpha=0.3)
         ax.axhline(y=0.5, color="#888888", linestyle="--", alpha=0.3)
         ax.axhline(y=1.0, color="#888888", linestyle="-", alpha=0.3)
@@ -344,7 +340,7 @@ def visualize_faithfulness_intervention_effects(
         for i, (xi, n) in enumerate(zip(x, n_samples)):
             ax.text(xi, 1.05, f"n={n}", ha="center", va="bottom", fontsize=7, color="#666666")
 
-        ax.set_title(f"{prefix}{title_suffix}\n(^=in-circuit, v=out-circuit)",
+        ax.set_title(f"{prefix}{title_suffix}\n(▲=in-circuit, ▼=out-circuit)",
                      fontsize=13, fontweight="bold")
 
         plt.tight_layout()
