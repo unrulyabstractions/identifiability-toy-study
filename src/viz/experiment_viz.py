@@ -746,22 +746,25 @@ def visualize_experiment(
 
             bests_faith = trial.metrics.per_gate_bests_faith.get(gname, [])
 
-            # Sort by faithfulness (not accuracy) for visualization
-            # This ensures we visualize the most faithful subcircuits
-            key_faith_pairs = []
+            # Group subcircuits by node_mask_idx, keeping best faithfulness per node
+            # ALWAYS visualize the best edge variant for EACH node pattern that passes epsilon
+            node_to_best: dict[int, tuple[int, float, int]] = {}  # node_idx -> (key, faith, orig_idx)
             for i, key in enumerate(best_keys):
                 faith = bests_faith[i] if i < len(bests_faith) else None
                 faith_score = faith.overall_faithfulness if faith else 0
-                key_faith_pairs.append((key, faith_score, i))
+                node_mask_idx, _ = parse_subcircuit_key(key, width, depth)
 
-            # Sort by faithfulness descending
-            key_faith_pairs.sort(key=lambda x: x[1], reverse=True)
+                # Keep best faithfulness per node mask
+                if node_mask_idx not in node_to_best or faith_score > node_to_best[node_mask_idx][1]:
+                    node_to_best[node_mask_idx] = (key, faith_score, i)
 
-            # Limit subcircuits based on viz level
-            max_sc = viz_config.max_subcircuits_per_gate
-            selected_pairs = key_faith_pairs[:max_sc]
+            # Sort nodes by their best faithfulness descending (for consistent ordering)
+            sorted_nodes = sorted(node_to_best.items(), key=lambda x: x[1][1], reverse=True)
 
-            print(f"[VIZ] Gate {gname}: {len(selected_pairs)} best subcircuits to visualize (max: {max_sc}, ranked by faithfulness)")
+            # Visualize best edge variant for ALL node masks (not limited by viz level)
+            selected_pairs = [(key, faith, orig_idx) for _, (key, faith, orig_idx) in sorted_nodes]
+
+            print(f"[VIZ] Gate {gname}: {len(selected_pairs)} node masks to visualize (best edge variant per node)")
 
             # Get the actual edge variant circuits (not just base node patterns)
             per_gate_circuits = trial.metrics.per_gate_circuits.get(gname, {})
