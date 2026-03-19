@@ -397,6 +397,9 @@ def save_per_gate_data(
                     (edge_variant_rank, i, faith)
                 )
 
+            # Get circuits for this gate
+            per_gate_circuits = trial.metrics.per_gate_circuits.get(gname, {})
+
             # Save per-subcircuit data
             for i, sc_key in enumerate(best_keys):
                 node_mask_idx, edge_variant_rank = parse_subcircuit_key(sc_key, width, depth)
@@ -407,6 +410,17 @@ def save_per_gate_data(
                 )
                 os.makedirs(folder, exist_ok=True)
                 saved_paths[trial_id][gname][sc_key] = {}
+
+                # Generate circuit.png for every subcircuit folder
+                if sc_key in per_gate_circuits:
+                    circuit_dict = per_gate_circuits[sc_key]
+                    circuit = Circuit.from_dict(circuit_dict)
+                    circuit_path = os.path.join(folder, "circuit.png")
+                    try:
+                        circuit.visualize(file_path=circuit_path, node_size="small")
+                        saved_paths[trial_id][gname][sc_key]["circuit"] = circuit_path
+                    except Exception as e:
+                        print(f"[DATA] Warning: Failed to generate circuit.png for {sc_key}: {e}")
 
                 has_faith = i < len(bests_faith)
                 faithfulness_data = bests_faith[i] if has_faith else None
@@ -780,19 +794,17 @@ def visualize_experiment(
                     # Fallback to base circuit (all edges active for node pattern)
                     circuit = subcircuits[node_mask_idx]
 
-                # Build folder path using node{X}/{rank}_{sc_key}/ structure
+                # Build folder path using node{X}/{orig_idx}_{sc_key}/ structure
+                # Use orig_idx (not rank_idx) to match folder created by save_per_gate_data
                 folder = os.path.join(
-                    trial_dir, gname, f"node{node_mask_idx}", f"{rank_idx}_{sc_key}"
+                    trial_dir, gname, f"node{node_mask_idx}", f"{orig_idx}_{sc_key}"
                 )
                 sc_label = f"{gname} (Node#{node_mask_idx}/SC#{sc_key})"
 
                 os.makedirs(folder, exist_ok=True)
                 viz_paths[trial_id].setdefault(gname, {})[sc_key] = viz_paths[trial_id].get(gname, {}).get(sc_key, {})
 
-                # Static circuit structure
-                path = os.path.join(folder, "circuit.png")
-                circuit.visualize(file_path=path, node_size="small")
-                viz_paths[trial_id][gname][sc_key]["circuit"] = path
+                # Note: circuit.png is generated in save_per_gate_data for ALL subcircuits
 
                 # Circuit activations
                 act_path = visualize_circuit_activations_from_data(
