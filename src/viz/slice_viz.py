@@ -201,14 +201,14 @@ def visualize_node_pattern_comparison(
     ax.set_xticks(x)
     ax.set_xticklabels(patterns, rotation=45, ha='right', fontsize=10)
 
-    # Zoom y-axis to 0.75-1.0 range
-    ax.set_ylim(0.75, 1.0)
+    # Full y-axis range 0-1
+    ax.set_ylim(0, 1.0)
 
-    # Finer grid
-    ax.set_yticks(np.arange(0.75, 1.01, 0.05))
+    # Grid
+    ax.set_yticks(np.arange(0, 1.01, 0.2))
     ax.grid(True, alpha=0.4, axis='y', linestyle='-', linewidth=0.5)
     ax.grid(True, alpha=0.2, axis='y', linestyle='--', linewidth=0.3, which='minor')
-    ax.set_yticks(np.arange(0.75, 1.01, 0.025), minor=True)
+    ax.set_yticks(np.arange(0, 1.01, 0.1), minor=True)
 
     plt.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
