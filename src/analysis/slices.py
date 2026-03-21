@@ -175,22 +175,14 @@ class ObservationalSlice:
                     # Use bit similarity as the noise score
                     noise_score = obs.noise.similarity.bit if obs.noise.similarity else 0.0
 
-                # OOD score from transformations
+                # OOD score from multiplicative transformations only
                 if obs.ood:
-                    # Average all OOD agreement scores
+                    # Only use multiplicative OOD (positive and negative scaling)
                     ood_scores = []
                     if obs.ood.multiply_positive_n_samples > 0:
                         ood_scores.append(obs.ood.multiply_positive_agreement)
                     if obs.ood.multiply_negative_n_samples > 0:
                         ood_scores.append(obs.ood.multiply_negative_agreement)
-                    if obs.ood.add_n_samples > 0:
-                        ood_scores.append(obs.ood.add_agreement)
-                    if obs.ood.subtract_n_samples > 0:
-                        ood_scores.append(obs.ood.subtract_agreement)
-                    if obs.ood.bimodal_n_samples > 0:
-                        ood_scores.append(obs.ood.bimodal_agreement)
-                    if obs.ood.bimodal_inv_n_samples > 0:
-                        ood_scores.append(obs.ood.bimodal_inv_agreement)
                     ood_score = sum(ood_scores) / len(ood_scores) if ood_scores else 0.0
 
             subcircuit_data.append({
@@ -214,7 +206,7 @@ class ObservationalSlice:
         )
         rank_ood = cls._build_ranking(
             subcircuit_data, "ood_score", "out_distribution_transformations",
-            "Ranking by agreement under OOD transformations (add, subtract, multiply, bimodal)"
+            "Ranking by agreement under multiplicative OOD (positive and negative scaling)"
         )
 
         return cls(

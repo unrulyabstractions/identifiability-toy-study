@@ -50,7 +50,7 @@ def get_default_train_n_samples():
 def get_default_train_noise():
     if _FAST_TEST_MODE:
         return 0.00001
-    return 0.01  # Low noise for cleaner learning
+    return 0.01
 
 
 def get_default_logic_gates():
@@ -70,7 +70,7 @@ def get_default_logic_gates():
             return ["XOR", "MAJORITY"]
 
     ALL_GATES = ["XOR", "OR", "AND", "IMP"]
-    ALL_GATES = ["XOR"]  # XOR requires 2 neurons
+    ALL_GATES = ["XOR"] 
 
     return ALL_GATES
 
@@ -90,8 +90,7 @@ def get_default_max_edge_variations_per_subcircuits():
 def get_default_epsilon():
     if _FAST_TEST_MODE:
         return 0.01
-    return 0.001  # Only select 100% accurate subcircuits
-
+    return 0.1
 
 def get_default_faith_n_samples():
     if _FAST_TEST_MODE:
@@ -107,7 +106,7 @@ def get_default_num_gates_per_run():
 
 def get_default_activations():
     if _FAST_TEST_MODE:
-        return ["leaky_relu"]
+        return ["tanh"]
     return ["tanh"]
 
 
@@ -134,7 +133,8 @@ class ModelParams(SchemaClass):
     logic_gates: list[str] = field(default_factory=lambda: get_default_logic_gates())
     width: int = 3
     depth: int = 2
-    activation: str = field(default_factory=lambda: get_default_activations()[0])
+    # Note: activation is set from ExperimentConfig.activations during trial generation
+    activation: str = "tanh"
 
 
 @dataclass
@@ -223,7 +223,6 @@ class ExperimentConfig(SchemaClass):
 
     base_trial: TrialSetup = field(default_factory=TrialSetup)
 
-    # Architecture is defined in base_trial.model_params.width/depth
     # Sweep over activations/learning_rates only
 
     activations: list[str] = field(default_factory=get_default_activations)

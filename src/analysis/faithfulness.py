@@ -316,7 +316,9 @@ def calculate_faithfulness_metrics(
         return effects
 
     # ===== Interventional Analysis (random value patching) =====
-    in_distribution_value_range = [-1, 1]
+    # In-distribution: small perturbations within training data range
+    in_distribution_value_range = [-0.25, 0.25]
+    # Out-of-distribution: large values far outside training range
     out_distribution_value_range = [[-1000, -2], [2, 1000]]
 
     in_circuit_effects = CircuitInterventionEffects()

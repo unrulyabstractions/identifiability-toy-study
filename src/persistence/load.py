@@ -479,6 +479,19 @@ def load_results(run_dir: str | Path, device: str = "cpu"):
                             gate_accuracy=ood_data.get("gate_accuracy", 0),
                             subcircuit_accuracy=ood_data.get("subcircuit_accuracy", 0),
                             similarity=similarity,
+                            # Per-type agreement metrics
+                            multiply_positive_agreement=ood_data.get("multiply_positive_agreement", 0),
+                            multiply_positive_n_samples=ood_data.get("multiply_positive_n_samples", 0),
+                            multiply_negative_agreement=ood_data.get("multiply_negative_agreement", 0),
+                            multiply_negative_n_samples=ood_data.get("multiply_negative_n_samples", 0),
+                            add_agreement=ood_data.get("add_agreement", 0),
+                            add_n_samples=ood_data.get("add_n_samples", 0),
+                            subtract_agreement=ood_data.get("subtract_agreement", 0),
+                            subtract_n_samples=ood_data.get("subtract_n_samples", 0),
+                            bimodal_agreement=ood_data.get("bimodal_agreement", 0),
+                            bimodal_n_samples=ood_data.get("bimodal_n_samples", 0),
+                            bimodal_inv_agreement=ood_data.get("bimodal_inv_agreement", 0),
+                            bimodal_inv_n_samples=ood_data.get("bimodal_inv_n_samples", 0),
                         )
                     observational = ObservationalMetrics(
                         noise=noise_metrics,
