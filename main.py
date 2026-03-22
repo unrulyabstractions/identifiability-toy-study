@@ -13,6 +13,7 @@ from src.persistence import get_all_runs, load_results
 from src.pipeline import (
     do_spd_on_experiment,
     do_viz_on_experiment,
+    regenerate_from_models,
     run_iteratively,
     run_monolith,
 )
@@ -120,6 +121,13 @@ def get_args() -> Any:
         action="store_true",
         help="Run only counterfactual faithfulness analysis (skip observational and interventional)",
     )
+    parser.add_argument(
+        "--load-mlp",
+        type=str,
+        default=None,
+        metavar="RUN_DIR",
+        help="Regenerate faithfulness analysis from saved models in RUN_DIR (e.g., runs/counter)",
+    )
     args = parser.parse_args()
 
     # args.spd_only should turn on args.spd
@@ -224,9 +232,26 @@ def rerun_all(
 
 
 def rerun_pipeline(output_dir: Path, args: Any) -> bool:
-    """Handle --viz-only and --spd-only modes."""
+    """Handle --viz-only, --spd-only, and --load-mlp modes."""
     did_rerun_pipeline = False
     viz_config = VizConfig.from_int(args.viz)
+
+    if args.load_mlp:
+        # Regenerate faithfulness analysis from saved models
+        from src.experiment_config import FaithfulnessConfig
+        faith_config = FaithfulnessConfig(
+            skip_observational=args.skip_observational,
+            skip_interventional=args.skip_interventional,
+            skip_counterfactual=args.skip_counterfactual,
+        )
+        regenerate_from_models(
+            run_dir=args.load_mlp,
+            device=args.device,
+            faith_config=faith_config,
+            viz_config=viz_config,
+            trial_filter=args.trial,
+        )
+        did_rerun_pipeline = True
 
     if args.spd_only:
         do_fx = lambda result, run_dir: do_spd_on_experiment(
