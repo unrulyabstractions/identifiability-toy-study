@@ -210,3 +210,154 @@ def run_trial(
     update_status("SUCCESSFUL_TRIAL")
     trace("run_trial complete", trial_id=trial_result.trial_id)
     return trial_result
+
+
+def run_trial_from_saved_model(
+    model,
+    setup: TrialSetup,
+    data: TrialData,
+    device: str,
+    logger: Any = None,
+    debug: bool = False,
+    precomputed_circuits: tuple = None,
+) -> TrialResult:
+    """Run analysis on a pre-trained model (skip training).
+
+    Same as run_trial but uses provided model instead of training.
+    Used by --load-mlp to regenerate analysis from saved models.
+
+    Args:
+        model: Pre-trained MLP model
+        setup: Trial configuration
+        data: Training, validation, and test data
+        device: Main compute device
+        logger: Optional logger
+        debug: Enable debug output
+        precomputed_circuits: Optional pre-computed circuits
+
+    Returns:
+        TrialResult containing metrics and analysis results
+    """
+    set_seeds(setup.seed)
+    parallel_config = ParallelConfig()
+
+    trial_result = TrialResult(setup=setup)
+    trial_metrics = trial_result.metrics
+    update_status = update_status_fx(trial_result, logger, device=device)
+
+    gate_names = setup.model_params.logic_gates
+    input_size = model.input_size
+    output_size = len(gate_names)
+
+    trace("run_trial_from_saved_model starting", gates=gate_names, device=device)
+
+    # Use provided model (skip training)
+    trial_result.model = model
+    gate_models = model.separate_into_k_mlps()
+
+    # ===== Compute Activations =====
+    act_data = compute_activations_phase(model, data, device, input_size)
+    x = act_data["x"]
+    y_gt = act_data["y_gt"]
+    y_pred = act_data["y_pred"]
+    activations = act_data["activations"]
+
+    trial_result.test_x = x
+    trial_result.test_y = y_gt
+    trial_result.test_y_pred = y_pred.detach().clone()
+    trial_result.activations = activations
+    trial_result.canonical_activations = act_data["canonical_activations"]
+    trial_result.mean_activations_by_range = act_data["mean_activations_by_range"]
+    trial_result.layer_weights = act_data["layer_weights"]
+    trial_result.layer_biases = act_data["layer_biases"]
+
+    bit_gt = y_gt.float()
+    bit_pred = logits_to_binary(y_pred)
+
+    trial_metrics.test_acc = calculate_match_rate(bit_gt, bit_pred).item()
+
+    # ===== Circuit Finding =====
+    update_status("STARTED_CIRCUITS")
+    if precomputed_circuits is not None:
+        subcircuits, subcircuit_structures = precomputed_circuits
+    else:
+        subcircuits, subcircuit_structures = enumerate_circuits_phase(
+            model, parallel_config
+        )
+    update_status("FINISHED_CIRCUITS")
+
+    trial_result.subcircuits = [
+        {"idx": idx, **s.to_dict()} for idx, s in enumerate(subcircuits)
+    ]
+    trial_result.subcircuit_structure_analysis = [
+        {"node_mask_idx": idx, **s.to_dict()}
+        for idx, s in enumerate(subcircuit_structures)
+    ]
+
+    # Determine evaluation device
+    eval_device = get_eval_device(parallel_config, device)
+
+    # Precompute circuit masks
+    gate_n_inputs_list = [resolve_gate(name).n_inputs for name in gate_names]
+    precomputed_masks_per_gate = {}
+    if parallel_config.precompute_masks:
+        precomputed_masks_per_gate = precompute_masks_phase(
+            subcircuits,
+            model,
+            gate_names,
+            eval_device,
+            output_size,
+            gate_n_inputs_list=gate_n_inputs_list,
+        )
+
+    # ===== Gate Analysis =====
+    update_status("STARTED_GATE_ANALYSIS")
+    trace("gate_analysis starting", n_gates=len(gate_models), gates=gate_names)
+
+    for gate_idx in range(len(gate_models)):
+        gate_name = gate_names[gate_idx]
+        gate_model = gate_models[gate_idx]
+
+        with traced("analyze_gate", gate_idx=gate_idx, gate_name=gate_name):
+            analyze_gate(
+                gate_idx=gate_idx,
+                gate_name=gate_name,
+                gate_model=gate_model,
+                gate_models=gate_models,
+                model=model,
+                y_pred=y_pred,
+                bit_gt=bit_gt,
+                bit_pred=bit_pred,
+                x=x,
+                activations=activations,
+                subcircuits=subcircuits,
+                subcircuit_structures=subcircuit_structures,
+                precomputed_masks_per_gate=precomputed_masks_per_gate,
+                parallel_config=parallel_config,
+                setup=setup,
+                device=device,
+                eval_device=eval_device,
+                update_status=update_status,
+                trial_metrics=trial_metrics,
+            )
+
+    update_status("FINISHED_GATE_ANALYSIS")
+
+    # ===== Decision Boundary Data =====
+    update_status("STARTED_DECISION_BOUNDARY")
+    db_data, subcircuit_db_data = decision_boundary_phase(
+        model=model,
+        gate_models=gate_models,
+        gate_names=gate_names,
+        subcircuits=subcircuits,
+        trial_metrics=trial_metrics,
+        device=device,
+        setup=setup,
+    )
+    trial_result.decision_boundary_data = db_data
+    trial_result.subcircuit_decision_boundary_data = subcircuit_db_data
+    update_status("FINISHED_DECISION_BOUNDARY")
+
+    update_status("SUCCESSFUL_TRIAL")
+    trace("run_trial_from_saved_model complete", trial_id=trial_result.trial_id)
+    return trial_result
