@@ -925,6 +925,7 @@ def _generate_faithfulness_circuit_figure(args):
         weights,
         biases,
         intervened_nodes,
+        subcircuit_nodes,  # Always the in-circuit nodes (for blue borders)
         output_path,
         fig_type,
         index,
@@ -947,9 +948,9 @@ def _generate_faithfulness_circuit_figure(args):
     # Use slightly taller figure to avoid title occlusion
     fig, axes = plt.subplots(1, 3, figsize=(15, 5.5))
 
-    # The intervened_nodes represent the subcircuit - show them in all panels
-    # so users can see which nodes are in vs out of circuit
-    subcircuit_nodes = intervened_nodes
+    # subcircuit_nodes (in-circuit) is passed separately from intervened_nodes
+    # For in-circuit counterfactuals: intervened_nodes == subcircuit_nodes
+    # For out-circuit counterfactuals: intervened_nodes != subcircuit_nodes
 
     # Simplified panel labels
     # Panel 1: Clean (show subcircuit membership with blue borders)
@@ -1085,7 +1086,7 @@ def visualize_faithfulness_circuit_samples(
     tasks = []
 
     # Helper to add counterfactual effects to tasks
-    def _add_counterfactual_tasks(effects, score_type, target_nodes):
+    def _add_counterfactual_tasks(effects, score_type, intervened_nodes):
         """Add counterfactual visualization tasks."""
         if not effects:
             return
@@ -1119,7 +1120,8 @@ def visualize_faithfulness_circuit_samples(
                     circuit_dict,
                     weights,
                     biases,  # Include biases for edge labels
-                    target_nodes,
+                    intervened_nodes,  # Nodes being patched (in or out of circuit)
+                    in_circuit_nodes,  # Always the subcircuit nodes for blue borders
                     output_path,
                     score_type,  # Just the score type, title built in worker
                     i,
