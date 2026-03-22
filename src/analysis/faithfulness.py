@@ -41,6 +41,7 @@ def calculate_statistics(
     in_circuit_effects: CircuitInterventionEffects,
     out_circuit_effects: CircuitInterventionEffects,
     counterfactual_effects: list[CounterfactualEffect],
+    x: torch.Tensor = None,
 ) -> InterventionStatistics:
     """
     Compute statistics from intervention effects.
@@ -49,17 +50,18 @@ def calculate_statistics(
         in_circuit_effects: Effects from in-circuit interventions
         out_circuit_effects: Effects from out-circuit interventions
         counterfactual_effects: List of CounterfactualEffect
+        x: Input tensor [N, input_dim] - used to track base_input per sample
 
     Returns:
         InterventionStatistics with all computed statistics including sample counts
     """
-    in_stats, in_sims = _compute_patch_statistics(in_circuit_effects.in_distribution)
+    in_stats, in_sims = _compute_patch_statistics(in_circuit_effects.in_distribution, x=x)
     in_stats_ood, in_sims_ood = _compute_patch_statistics(
-        in_circuit_effects.out_distribution
+        in_circuit_effects.out_distribution, x=x
     )
-    out_stats, out_sims = _compute_patch_statistics(out_circuit_effects.in_distribution)
+    out_stats, out_sims = _compute_patch_statistics(out_circuit_effects.in_distribution, x=x)
     out_stats_ood, out_sims_ood = _compute_patch_statistics(
-        out_circuit_effects.out_distribution
+        out_circuit_effects.out_distribution, x=x
     )
 
     mean_in_sim = float(np.mean(in_sims)) if in_sims else 0.0
@@ -218,7 +220,7 @@ def calculate_faithfulness_metrics(
 
     # ===== BATCHED NOISING: Run clean inputs, patch with corrupted activations =====
     def compute_noising_effects_batched(
-        patch: PatchShape,
+        patches: list[PatchShape],
         pairs: list[CleanCorruptedPair],
         score_type: str,  # "necessity" (in-circuit) or "independence" (out-circuit)
     ) -> list[CounterfactualEffect]:
@@ -229,7 +231,7 @@ def calculate_faithfulness_metrics(
 
         Uses batched forward pass for ~10x speedup over sequential execution.
         """
-        if not pairs or patch is None:
+        if not pairs or not patches:
             return []
 
         n_pairs = len(pairs)
@@ -245,7 +247,7 @@ def calculate_faithfulness_metrics(
         ]
 
         # Create batched intervention with per-sample values
-        iv = create_batched_patch_intervention(patch, batched_corrupted_acts)
+        iv = create_batched_patch_intervention(patches, batched_corrupted_acts)
 
         # Single batched forward pass
         with torch.inference_mode():
@@ -270,7 +272,7 @@ def calculate_faithfulness_metrics(
 
     # ===== BATCHED DENOISING: Run corrupted inputs, patch with clean activations =====
     def compute_denoising_effects_batched(
-        patch: PatchShape,
+        patches: list[PatchShape],
         pairs: list[CleanCorruptedPair],
         score_type: str,  # "sufficiency" (in-circuit) or "completeness" (out-circuit)
     ) -> list[CounterfactualEffect]:
@@ -281,7 +283,7 @@ def calculate_faithfulness_metrics(
 
         Uses batched forward pass for ~10x speedup over sequential execution.
         """
-        if not pairs or patch is None:
+        if not pairs or not patches:
             return []
 
         n_pairs = len(pairs)
@@ -297,7 +299,7 @@ def calculate_faithfulness_metrics(
         ]
 
         # Create batched intervention with per-sample values
-        iv = create_batched_patch_intervention(patch, batched_clean_acts)
+        iv = create_batched_patch_intervention(patches, batched_clean_acts)
 
         # Single batched forward pass
         with torch.inference_mode():
@@ -414,7 +416,7 @@ def calculate_faithfulness_metrics(
     )
 
     stats = calculate_statistics(
-        in_circuit_effects, out_circuit_effects, all_counterfactual_effects
+        in_circuit_effects, out_circuit_effects, all_counterfactual_effects, x=x
     )
 
     # Compute mean scores for each experiment type

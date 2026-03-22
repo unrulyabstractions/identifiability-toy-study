@@ -14,6 +14,20 @@ from .enumeration import (
 )
 
 
+def _parse_circuit_patches(data) -> list[PatchShape]:
+    """Parse in_circuit/out_circuit from dict, handling both old and new formats.
+
+    Old format: single dict or None
+    New format: list of dicts
+    """
+    if data is None:
+        return []
+    if isinstance(data, list):
+        return [PatchShape.from_dict(p) for p in data]
+    # Old format: single PatchShape dict
+    return [PatchShape.from_dict(data)]
+
+
 @dataclass
 class CircuitStructure:
     """Structure analysis of a circuit.
@@ -38,8 +52,8 @@ class CircuitStructure:
     # Intervention patches
     in_patches: list[PatchShape]
     out_patches: list[PatchShape]
-    in_circuit: PatchShape
-    out_circuit: PatchShape
+    in_circuit: list[PatchShape]  # All in-circuit nodes (one PatchShape per layer)
+    out_circuit: list[PatchShape]  # All out-circuit nodes (one PatchShape per layer)
 
     # Architecture info
     input_size: int
@@ -74,8 +88,8 @@ class CircuitStructure:
             "connectivity_density": self.connectivity_density,
             "in_patches": [p.to_dict() for p in self.in_patches],
             "out_patches": [p.to_dict() for p in self.out_patches],
-            "in_circuit": self.in_circuit.to_dict() if self.in_circuit else None,
-            "out_circuit": self.out_circuit.to_dict() if self.out_circuit else None,
+            "in_circuit": [p.to_dict() for p in self.in_circuit] if self.in_circuit else [],
+            "out_circuit": [p.to_dict() for p in self.out_circuit] if self.out_circuit else [],
             "input_size": self.input_size,
             "output_size": self.output_size,
             "width": self.width,
@@ -102,12 +116,8 @@ class CircuitStructure:
             connectivity_density=data.get("connectivity_density", 0.0),
             in_patches=[PatchShape.from_dict(p) for p in data["in_patches"]],
             out_patches=[PatchShape.from_dict(p) for p in data["out_patches"]],
-            in_circuit=PatchShape.from_dict(data["in_circuit"])
-            if data["in_circuit"]
-            else None,
-            out_circuit=PatchShape.from_dict(data["out_circuit"])
-            if data["out_circuit"]
-            else None,
+            in_circuit=_parse_circuit_patches(data.get("in_circuit")),
+            out_circuit=_parse_circuit_patches(data.get("out_circuit")),
             input_size=data["input_size"],
             output_size=data["output_size"],
             width=data["width"],
@@ -329,8 +339,45 @@ class Circuit:
 
         return True
 
+    def node_overlap_metrics(self, other: "Circuit") -> dict:
+        """Compute overlap metrics based on NODE MASKS ONLY (ignoring edges).
+
+        Use this for comparing node patterns to determine if one is a subset of another.
+        This is independent of edge configurations.
+
+        Args:
+            other: Another Circuit to compare with
+
+        Returns:
+            Dict with jaccard, intersection_size, union_size, self_size, other_size,
+            is_subset, is_superset (all based on node masks only)
+        """
+        # Combine node masks (excluding input and output layers)
+        self_nodes = np.concatenate(self.node_masks[1:-1])
+        other_nodes = np.concatenate(other.node_masks[1:-1])
+
+        self_active = self_nodes == 1
+        other_active = other_nodes == 1
+
+        intersection = int(np.sum(self_active & other_active))
+        union = int(np.sum(self_active | other_active))
+        self_size = int(np.sum(self_active))
+        other_size = int(np.sum(other_active))
+
+        jaccard = intersection / union if union > 0 else 1.0
+
+        return {
+            "jaccard": round(jaccard, 4),
+            "intersection_size": intersection,
+            "union_size": union,
+            "self_size": self_size,
+            "other_size": other_size,
+            "is_subset": intersection == self_size,  # All of self's nodes are in other
+            "is_superset": intersection == other_size,  # All of other's nodes are in self
+        }
+
     def overlap_metrics(self, other: "Circuit") -> dict:
-        """Compute detailed overlap metrics between two circuits.
+        """Compute detailed overlap metrics between two circuits (nodes AND edges).
 
         Args:
             other: Another Circuit to compare with
@@ -435,12 +482,8 @@ class Circuit:
                     PatchShape(layers=(layer_idx,), indices=out_idx, axis="neuron")
                 )
 
-        # in_circuit and out_circuit as combined PatchShape (using first layer as representative)
-        # or None if empty
-        in_circuit = in_circuit_patches[0] if in_circuit_patches else None
-        out_circuit = out_circuit_patches[0] if out_circuit_patches else None
-
-        return in_patches, out_patches, in_circuit, out_circuit
+        # in_circuit and out_circuit as lists of PatchShape (one per layer with in-circuit nodes)
+        return in_patches, out_patches, in_circuit_patches, out_circuit_patches
 
     def analyze_structure(self) -> CircuitStructure:
         node_sparsity, edge_sparsity, _ = self.sparsity()

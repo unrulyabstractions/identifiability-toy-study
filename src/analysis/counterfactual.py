@@ -93,6 +93,75 @@ def create_clean_corrupted_data(
     return pairs
 
 
+def create_canonical_counterfactual_pairs(
+    model,
+    gate_idx: int,
+    n_inputs: int,
+    ground_truth_fn,
+    device: str = "cpu",
+) -> list[CleanCorruptedPair]:
+    """
+    Create counterfactual pairs from canonical inputs ONLY.
+
+    For a 2-input gate, uses the 4 canonical inputs: (0,0), (0,1), (1,0), (1,1).
+    Creates pairs where the gate output differs.
+
+    Args:
+        model: The full model (or gate model)
+        gate_idx: Which gate output to compare
+        n_inputs: Number of input bits (2 or 3)
+        ground_truth_fn: Function(input_tensor) -> expected output
+        device: Compute device
+
+    Returns:
+        List of CleanCorruptedPair objects for all pairs with differing outputs
+    """
+    pairs = []
+
+    # Generate all canonical inputs
+    canonical_inputs = []
+    canonical_outputs = []
+
+    for i in range(2**n_inputs):
+        bits = [(i >> j) & 1 for j in range(n_inputs)]
+        inp = torch.tensor([bits], dtype=torch.float32, device=device)
+        canonical_inputs.append(inp)
+        canonical_outputs.append(ground_truth_fn(inp))
+
+    # Stack for batch processing
+    x_all = torch.cat(canonical_inputs, dim=0)  # [4 or 8, n_inputs]
+
+    # Get model outputs and activations for all canonical inputs
+    with torch.inference_mode():
+        y_all = model(x_all)  # [4 or 8, n_gates]
+        activations_all = model(x_all, return_activations=True)  # list of [4 or 8, hidden]
+
+    # Get the gate-specific outputs
+    y_gate = y_all[..., gate_idx : gate_idx + 1]  # [4 or 8, 1]
+    y_binary = logits_to_binary(y_gate)  # [4 or 8, 1]
+
+    # Create pairs where outputs differ
+    n_canonical = 2**n_inputs
+    for i in range(n_canonical):
+        for j in range(n_canonical):
+            if i == j:
+                continue
+            # Check if outputs differ
+            if not torch.equal(y_binary[i], y_binary[j]):
+                pairs.append(
+                    CleanCorruptedPair(
+                        x_clean=x_all[i : i + 1],
+                        x_corrupted=x_all[j : j + 1],
+                        y_clean=y_gate[i : i + 1],
+                        y_corrupted=y_gate[j : j + 1],
+                        act_clean=[a[i : i + 1] for a in activations_all],
+                        act_corrupted=[a[j : j + 1] for a in activations_all],
+                    )
+                )
+
+    return pairs
+
+
 def create_patch_intervention(
     patch: PatchShape, source_activations: list[torch.Tensor]
 ) -> Intervention:
@@ -130,7 +199,7 @@ def create_patch_intervention(
 
 
 def create_batched_patch_intervention(
-    patch: PatchShape, batched_activations: list[torch.Tensor]
+    patches: list[PatchShape], batched_activations: list[torch.Tensor]
 ) -> Intervention:
     """
     Create a batched intervention for multiple samples at once.
@@ -142,28 +211,29 @@ def create_batched_patch_intervention(
     where B is batch size and k is the number of neurons being patched.
 
     Args:
-        patch: PatchShape specifying which neurons to patch (same for all samples).
-               Can span multiple layers (e.g., layers=(0,1) for all hidden layers).
+        patches: List of PatchShape objects, one per layer with layer-specific indices.
+                 Each PatchShape specifies which neurons to patch in that layer.
         batched_activations: List of activation tensors [N, hidden] per layer,
-                            where N is batch size. Length must cover all layers in patch.
+                            where N is batch size. Length must cover all layers in patches.
 
     Returns:
-        Intervention with per-sample values [N, k] where k = len(patch.indices)
+        Intervention with per-sample values [N, k] where k = number of neurons patched per layer
     """
-    if patch is None:
+    if not patches:
         return Intervention(patches={})
 
     patches_dict = {}
-    for layer in patch.single_layers():
-        if layer < len(batched_activations):
-            layer_acts = batched_activations[layer]  # [N, hidden]
-            if patch.indices:
-                vals = layer_acts[:, list(patch.indices)]  # [N, k]
-            else:
-                vals = layer_acts  # [N, hidden]
-            single_ps = PatchShape(
-                layers=(layer,), indices=patch.indices, axis="neuron"
-            )
-            patches_dict[single_ps] = ("set", vals)
+    for patch in patches:
+        for layer in patch.single_layers():
+            if layer < len(batched_activations):
+                layer_acts = batched_activations[layer]  # [N, hidden]
+                if patch.indices:
+                    vals = layer_acts[:, list(patch.indices)]  # [N, k]
+                else:
+                    vals = layer_acts  # [N, hidden]
+                single_ps = PatchShape(
+                    layers=(layer,), indices=patch.indices, axis="neuron"
+                )
+                patches_dict[single_ps] = ("set", vals)
 
     return Intervention(patches=patches_dict)
