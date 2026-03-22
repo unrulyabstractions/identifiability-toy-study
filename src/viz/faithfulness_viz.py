@@ -666,6 +666,250 @@ def visualize_faithfulness_intervention_effects(
         )
         paths["counterfactual/noising_per_input"] = path
 
+    # === 5. Per-Node Intervention Grid (matches OOD observational format) ===
+    # Create intervention grid plots showing outputs vs intervention values
+    # One plot per node, rows per input, columns: Subcircuit | Full Gate | Agreement
+    def _create_intervention_grid_per_node(patch_stats_dict, circuit_type, distribution_type, base_dir):
+        """Create OOD-style grid plots for interventional data, one plot per node.
+
+        Format matches observational OOD plots:
+        - Rows: input combinations (skip 0,0 for XOR since output is 0)
+        - Columns: Subcircuit | Full Gate | Agreement
+        - X-axis: intervention value
+        """
+        if not patch_stats_dict:
+            return {}
+
+        grid_paths = {}
+        input_keys = ["0_1", "1_0", "1_1"]  # Skip 0_0 for XOR
+        n_rows = 3
+
+        # Sort patches by layer and node index
+        def sort_key(item):
+            pk = item[0]
+            layer_match = re.search(r"layers=\((\d+)", pk)
+            idx_match = re.search(r"indices=\((\d+)", pk)
+            return (int(layer_match.group(1)) if layer_match else 0,
+                    int(idx_match.group(1)) if idx_match else 0)
+
+        sorted_patches = sorted(patch_stats_dict.items(), key=sort_key)
+
+        # Create output directory
+        out_dir = os.path.join(base_dir, circuit_type, f"{distribution_type}_grids")
+        os.makedirs(out_dir, exist_ok=True)
+
+        for patch_key, patch_stats in sorted_patches:
+            samples = patch_stats.samples
+            if not samples:
+                continue
+
+            # Group samples by base_input
+            def get_input_key(sample):
+                base = sample.base_input
+                if hasattr(base[0], 'item'):
+                    return f"{int(base[0].item())}_{int(base[1].item())}"
+                return f"{int(base[0])}_{int(base[1])}"
+
+            samples_by_input = {k: [] for k in input_keys}
+            for sample in samples:
+                key = get_input_key(sample)
+                if key in samples_by_input:
+                    samples_by_input[key].append(sample)
+
+            # Skip if no relevant samples
+            total_relevant = sum(len(s) for s in samples_by_input.values())
+            if total_relevant == 0:
+                continue
+
+            def get_intervention_x(sample):
+                """Get mean intervention value, handling tensors and lists."""
+                vals = sample.intervention_values
+                if vals is None or (hasattr(vals, '__len__') and len(vals) == 0):
+                    return 0.0
+                if hasattr(vals, 'mean'):  # torch.Tensor
+                    return float(vals.mean().item())
+                return float(np.mean(vals))
+
+            # Compute global axis ranges
+            all_x_vals = []
+            all_outputs = []
+            for sample in samples:
+                key = get_input_key(sample)
+                if key not in input_keys:
+                    continue
+                x_val = get_intervention_x(sample)
+                all_x_vals.append(x_val)
+                all_outputs.append(sample.gate_output)
+                all_outputs.append(sample.subcircuit_output)
+
+            if all_x_vals:
+                x_min = min(all_x_vals)
+                x_max = max(all_x_vals)
+                x_pad = (x_max - x_min) * 0.05 if x_max > x_min else 0.5
+                x_min -= x_pad
+                x_max += x_pad
+            else:
+                x_min, x_max = -1.0, 1.0
+
+            if all_outputs:
+                y_min = min(all_outputs)
+                y_max = max(all_outputs)
+                y_pad = (y_max - y_min) * 0.05 if y_max > y_min else 0.1
+                y_min -= y_pad
+                y_max += y_pad
+            else:
+                y_min, y_max = -0.2, 1.2
+
+            # Create figure
+            fig, axes = plt.subplots(n_rows, 3, figsize=(15, 4 * n_rows - 2))
+
+            for row, input_key in enumerate(input_keys):
+                row_samples = samples_by_input.get(input_key, [])
+
+                # Column 0: Subcircuit
+                ax = axes[row, 0]
+                if row_samples:
+                    x_vals = [get_intervention_x(s) for s in row_samples]
+                    sc_outputs = [s.subcircuit_output for s in row_samples]
+                    correct = [s.bit_agreement for s in row_samples]
+                    sorted_data = sorted(zip(x_vals, sc_outputs, correct), key=lambda d: d[0])
+                    sorted_x = [d[0] for d in sorted_data]
+                    sorted_out = [d[1] for d in sorted_data]
+                    sorted_correct = [d[2] for d in sorted_data]
+                    colors = ["#4CAF50" if c else "#E53935" for c in sorted_correct]
+                    ax.scatter(sorted_x, sorted_out, s=15, c=colors, alpha=0.7, edgecolors="none")
+                    ax.axhline(y=0, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+                    ax.text(0.98, 0.98, f"n={len(row_samples)}", transform=ax.transAxes,
+                            fontsize=6, ha='right', va='top', alpha=0.7)
+                ax.set_ylabel(f"({input_key.replace('_', ',')})", fontsize=10, fontweight="bold")
+                ax.set_xlim(x_min, x_max)
+                ax.set_ylim(y_min, y_max)
+                ax.grid(alpha=0.3)
+                if row == 0:
+                    ax.set_title("Subcircuit", fontsize=10, fontweight="bold", pad=8)
+                if row == n_rows - 1:
+                    ax.set_xlabel("Intervention Value", fontsize=9)
+
+                # Column 1: Full Gate
+                ax = axes[row, 1]
+                if row_samples:
+                    x_vals = [get_intervention_x(s) for s in row_samples]
+                    gate_outputs = [s.gate_output for s in row_samples]
+                    correct = [s.bit_agreement for s in row_samples]
+                    sorted_data = sorted(zip(x_vals, gate_outputs, correct), key=lambda d: d[0])
+                    sorted_x = [d[0] for d in sorted_data]
+                    sorted_out = [d[1] for d in sorted_data]
+                    sorted_correct = [d[2] for d in sorted_data]
+                    colors = ["#4CAF50" if c else "#E53935" for c in sorted_correct]
+                    ax.scatter(sorted_x, sorted_out, s=15, c=colors, alpha=0.7, edgecolors="none")
+                    ax.axhline(y=0, color="#888888", linestyle=":", linewidth=1, alpha=0.5)
+                ax.set_xlim(x_min, x_max)
+                ax.set_ylim(y_min, y_max)
+                ax.grid(alpha=0.3)
+                if row == 0:
+                    ax.set_title("Full Gate", fontsize=10, fontweight="bold", pad=8)
+                if row == n_rows - 1:
+                    ax.set_xlabel("Intervention Value", fontsize=9)
+
+                # Column 2: Agreement (binned)
+                ax = axes[row, 2]
+                if row_samples:
+                    x_vals = [get_intervention_x(s) for s in row_samples]
+                    n_bins = 8
+
+                    x_min_bin, x_max_bin = min(x_vals), max(x_vals)
+                    if x_min_bin == x_max_bin:
+                        x_min_bin, x_max_bin = x_min_bin - 0.5, x_max_bin + 0.5
+                    bin_edges = np.linspace(x_min_bin, x_max_bin, n_bins + 1)
+                    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+                    agreement_rates = []
+                    output_diffs = []
+                    for i in range(n_bins):
+                        lo, hi = bin_edges[i], bin_edges[i + 1]
+                        bin_samples = [s for s, x in zip(row_samples, x_vals) if lo <= x < hi or (i == n_bins - 1 and x == hi)]
+                        if bin_samples:
+                            agreement_rates.append(np.mean([s.bit_agreement for s in bin_samples]))
+                            output_diffs.append(np.mean([abs(s.gate_output - s.subcircuit_output) for s in bin_samples]))
+                        else:
+                            agreement_rates.append(np.nan)
+                            output_diffs.append(np.nan)
+
+                    color1 = "#2196F3"
+                    bar_width = (x_max_bin - x_min_bin) / n_bins * 0.8
+                    ax.bar(bin_centers, agreement_rates, width=bar_width, color=color1, alpha=0.6)
+                    ax.set_ylim(0, 1.1)
+                    ax.set_ylabel("Agreement", color=color1, fontsize=8)
+                    ax.tick_params(axis="y", labelcolor=color1)
+
+                    ax2 = ax.twinx()
+                    color2 = "#FF5722"
+                    ax2.plot(bin_centers, output_diffs, "o-", color=color2, markersize=3, linewidth=1.5)
+                    max_diff = np.nanmax(output_diffs) if output_diffs and not np.all(np.isnan(output_diffs)) else 0.5
+                    ax2.set_ylim(0, max(0.5, max_diff * 1.2))
+                    ax2.set_ylabel("|Delta Output|", color=color2, fontsize=8)
+                    ax2.tick_params(axis="y", labelcolor=color2)
+
+                ax.set_xlim(x_min, x_max)
+                ax.grid(alpha=0.3, axis="y")
+                if row == 0:
+                    ax.set_title("Agreement", fontsize=10, fontweight="bold", pad=8)
+                if row == n_rows - 1:
+                    ax.set_xlabel("Intervention Value", fontsize=9)
+
+            # Add legend
+            from matplotlib.lines import Line2D
+            legend_elements = [
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='#4CAF50',
+                       markersize=8, label='Agree'),
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='#E53935',
+                       markersize=8, label='Disagree'),
+            ]
+            fig.legend(handles=legend_elements, loc='lower center', ncol=2,
+                       fontsize=9, framealpha=0.9, edgecolor="none", fancybox=False,
+                       bbox_to_anchor=(0.5, 0.01))
+
+            # Title
+            patch_label = _patch_key_to_filename(patch_key)
+            circuit_label = "In-Circuit" if circuit_type == "in_circuit" else "Out-of-Circuit"
+            dist_label = "In-Distribution" if distribution_type == "in_distribution" else "Out-of-Distribution"
+            finalize_figure(fig, f"{prefix}Intervention: {patch_label} | {circuit_label} | {dist_label}",
+                           has_legend_below=True, fontsize=13)
+
+            filename = f"{patch_label}.png"
+            path = os.path.join(out_dir, filename)
+            plt.savefig(path, dpi=get_dpi(), bbox_inches="tight")
+            plt.close(fig)
+            grid_paths[patch_label] = path
+
+        return grid_paths
+
+    # Generate intervention grid plots for all patch stat categories
+    if faithfulness.interventional:
+        if faithfulness.interventional.in_circuit_stats:
+            grid_paths = _create_intervention_grid_per_node(
+                faithfulness.interventional.in_circuit_stats, "in_circuit", "in_distribution", interventional_base)
+            if grid_paths:
+                paths["interventional/in_circuit/in_distribution_grids"] = grid_paths
+
+        if faithfulness.interventional.in_circuit_stats_ood:
+            grid_paths = _create_intervention_grid_per_node(
+                faithfulness.interventional.in_circuit_stats_ood, "in_circuit", "out_distribution", interventional_base)
+            if grid_paths:
+                paths["interventional/in_circuit/out_distribution_grids"] = grid_paths
+
+        if faithfulness.interventional.out_circuit_stats:
+            grid_paths = _create_intervention_grid_per_node(
+                faithfulness.interventional.out_circuit_stats, "out_circuit", "in_distribution", interventional_base)
+            if grid_paths:
+                paths["interventional/out_circuit/in_distribution_grids"] = grid_paths
+
+        if faithfulness.interventional.out_circuit_stats_ood:
+            grid_paths = _create_intervention_grid_per_node(
+                faithfulness.interventional.out_circuit_stats_ood, "out_circuit", "out_distribution", interventional_base)
+            if grid_paths:
+                paths["interventional/out_circuit/out_distribution_grids"] = grid_paths
+
     return paths
 
 
