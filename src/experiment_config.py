@@ -44,17 +44,17 @@ def set_test_mode_global(val: bool, test_gates_idx: int = 0):
 def get_default_train_n_samples():
     if _FAST_TEST_MODE:
         return 2**8
-    return 2**14
+    return 2**8
 
 
 def get_default_train_noise():
     if _FAST_TEST_MODE:
         return 0.00001
-    return 0.01
+    return 0.001
 
 
 def get_default_logic_gates():
-    ALL_GATES = ["XOR", "XOR", "AND", "OR", "IMP", "MAJORITY"]
+    ALL_GATES = ["XOR"] 
     if _FAST_TEST_MODE:
         if _FAST_TEST_GATES_IDX == 0:
             return ["XOR"]
@@ -68,34 +68,30 @@ def get_default_logic_gates():
             return ["ID", "MAJORITY"]
         if _FAST_TEST_GATES_IDX == 5:
             return ["XOR", "MAJORITY"]
-
-    ALL_GATES = ["XOR", "OR", "AND", "IMP"]
-    ALL_GATES = ["XOR"] 
-
     return ALL_GATES
 
 
 def get_default_max_subcircuits_per_gate():
     if _FAST_TEST_MODE:
         return 1
-    return 20  # Analyze more subcircuits to find non-subset pairs
+    return 5
 
 
 def get_default_max_edge_variations_per_subcircuits():
     if _FAST_TEST_MODE:
         return 1
-    return 2
+    return 5
 
 
 def get_default_epsilon():
     if _FAST_TEST_MODE:
         return 0.01
-    return 0.1
+    return 0.8
 
 def get_default_faith_n_samples():
     if _FAST_TEST_MODE:
-        return 200
-    return 200
+        return 100
+    return 100
 
 
 def get_default_num_gates_per_run():
@@ -133,7 +129,6 @@ class ModelParams(SchemaClass):
     logic_gates: list[str] = field(default_factory=lambda: get_default_logic_gates())
     width: int = 3
     depth: int = 2
-    # Note: activation is set from ExperimentConfig.activations during trial generation
     activation: str = "tanh"
 
 
@@ -141,8 +136,8 @@ class ModelParams(SchemaClass):
 class TrainParams(SchemaClass):
     learning_rate: float = 1e-2
     batch_size: int = field(default_factory=lambda: get_default_train_n_samples() // 8)
-    epochs: int = 4000
-    val_frequency: int = 10
+    epochs: int = 2000
+    val_frequency: int = 20
 
 
 @dataclass
@@ -164,6 +159,11 @@ class FaithfulnessConfig(SchemaClass):
     )
     n_interventions_per_patch: int = field(default_factory=get_default_faith_n_samples)
     n_counterfactual_pairs: int = field(default_factory=get_default_faith_n_samples)
+
+    # Skip flags for faithfulness pillars
+    skip_observational: bool = False
+    skip_interventional: bool = False
+    skip_counterfactual: bool = False
 
     def __post_init__(self):
         super().__post_init__()

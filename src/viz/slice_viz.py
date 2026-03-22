@@ -47,7 +47,7 @@ def visualize_accuracy_vs_sparsity(
         if len(subcircuits) < 2:
             continue  # Skip if only one point
 
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(8, 5))
 
         # Sort by sparsity for consistent ordering
         subcircuits_sorted = sorted(subcircuits, key=lambda x: x.sparsity)
@@ -56,41 +56,53 @@ def visualize_accuracy_vs_sparsity(
         scores = [sc.score for sc in subcircuits_sorted]
         accuracies = [sc.accuracy for sc in subcircuits_sorted]
 
-        # Color by accuracy
+        # Color by accuracy with FIXED 0-1 range
         scatter = ax.scatter(
             sparsities, scores,
-            c=accuracies, cmap='RdYlGn', s=120, alpha=0.8,
-            edgecolors='black', linewidths=0.5
+            c=accuracies, cmap='RdYlGn', s=150, alpha=0.85,
+            edgecolors='black', linewidths=1,
+            vmin=0, vmax=1  # Fixed colorbar range
         )
 
-        # Add colorbar
+        # Add colorbar with fixed range
         cbar = plt.colorbar(scatter, ax=ax)
-        cbar.set_label("Accuracy", fontsize=10)
+        cbar.set_label("Accuracy", fontsize=11)
+        cbar.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
 
-        # Label each point with subcircuit_idx
+        # Label each point with edge variant rank (cleaner than full idx)
         for sc in subcircuits_sorted:
             ax.annotate(
-                str(sc.subcircuit_idx),
+                f"e{sc.edge_variant_rank}",
                 (sc.sparsity, sc.score),
                 textcoords="offset points",
-                xytext=(0, 8),
-                fontsize=8,
+                xytext=(0, 10),
+                fontsize=9,
                 ha='center',
-                color='darkblue'
+                fontweight='bold',
+                color='#333'
             )
+
+        # Fixed y-axis 0-1
+        ax.set_ylim(0, 1.05)
+        ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+
+        # X-axis with padding
+        x_min, x_max = min(sparsities), max(sparsities)
+        x_pad = (x_max - x_min) * 0.15 if x_max > x_min else 0.1
+        ax.set_xlim(x_min - x_pad, x_max + x_pad)
 
         # Labels and title
         ax.set_xlabel("Edge Sparsity (fraction of edges pruned)", fontsize=11)
-        ax.set_ylabel(ranking_result.metric_name, fontsize=12)
-        title = f"Node {node_pattern}: {ranking_result.metric_name} vs Edge Sparsity"
+        ax.set_ylabel(ranking_result.metric_name.replace("_", " ").title(), fontsize=11)
+        title = f"Node {node_pattern}: Score vs Edge Sparsity"
         if title_prefix:
             title = f"{title_prefix} - {title}"
         ax.set_title(title, fontsize=12, fontweight='bold')
 
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, linestyle='--')
         plt.tight_layout()
 
-        path = os.path.join(output_dir, f"{node_pattern}_accuracy.png")
+        path = os.path.join(output_dir, f"{node_pattern}_scatter.png")
         plt.savefig(path, dpi=get_dpi(), bbox_inches='tight')
         plt.close(fig)
         paths[node_pattern] = path
@@ -168,13 +180,19 @@ def visualize_node_pattern_comparison(
     ranking_result,
     output_path: str,
     title: str = "Node Pattern Comparison",
+    circuits: dict[int, Circuit] = None,
 ) -> str:
     """Create bar chart comparing node patterns (max score only).
+
+    When circuits are provided, patterns with subset relationships are shown
+    as stacked bars - the superset bar is drawn first (background), then
+    the subset bar is drawn on top with a distinct pattern.
 
     Args:
         ranking_result: RankingResult with node_patterns data
         output_path: Path to save the plot
         title: Plot title
+        circuits: Optional dict mapping node_pattern -> Circuit for subset detection
 
     Returns:
         Path to saved file
@@ -182,42 +200,158 @@ def visualize_node_pattern_comparison(
     if not ranking_result.node_patterns:
         return None
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-
     # Sort by max_score descending
     sorted_patterns = sorted(ranking_result.node_patterns, key=lambda p: p.max_score, reverse=True)
     patterns = [p.node_pattern for p in sorted_patterns]
     max_scores = [p.max_score for p in sorted_patterns]
+    score_by_pattern = {p.node_pattern: p.max_score for p in sorted_patterns}
 
-    x = np.arange(len(patterns))
-    width = 0.6
+    # Build subset groups if circuits provided
+    subset_groups = []  # List of lists, each inner list is a subset chain
+    pattern_to_group = {}  # Maps pattern -> group index
 
-    # Color bars by score using a gradient (viridis: purple->teal->yellow)
-    cmap = plt.cm.viridis
-    # Normalize scores to 0-1 range for colormap
-    score_min, score_max = min(max_scores), max(max_scores)
-    if score_max > score_min:
-        normalized = [(s - score_min) / (score_max - score_min) for s in max_scores]
-    else:
-        normalized = [0.5] * len(max_scores)
-    colors = [cmap(n) for n in normalized]
+    if circuits and len(circuits) >= 2:
+        # Build subset relationships
+        pattern_ids = list(circuits.keys())
+        n = len(pattern_ids)
 
-    bars = ax.bar(x, max_scores, width, color=colors, edgecolor='black', linewidth=0.5)
+        # Find connected components via subset relationships
+        visited = set()
+
+        def find_related(start_pattern):
+            """Find all patterns related to start_pattern via subset relationships."""
+            related = set([start_pattern])
+            queue = [start_pattern]
+            while queue:
+                current = queue.pop()
+                if current not in circuits:
+                    continue
+                for other in pattern_ids:
+                    if other in related or other not in circuits:
+                        continue
+                    metrics = circuits[current].overlap_metrics(circuits[other])
+                    if metrics["is_subset"] or metrics["is_superset"]:
+                        related.add(other)
+                        queue.append(other)
+            return related
+
+        for pattern in pattern_ids:
+            if pattern in visited:
+                continue
+            group = find_related(pattern)
+            visited.update(group)
+            if len(group) > 1:
+                # Sort group by size (smallest/most sparse first)
+                group_list = sorted(
+                    [p for p in group if p in score_by_pattern],
+                    key=lambda p: circuits[p].sparsity()[0] if p in circuits else 0,
+                    reverse=True  # Most sparse (smallest) first
+                )
+                if len(group_list) > 1:
+                    group_idx = len(subset_groups)
+                    subset_groups.append(group_list)
+                    for p in group_list:
+                        pattern_to_group[p] = group_idx
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    # Assign x positions - group related patterns together
+    x_positions = {}
+    current_x = 0
+    processed = set()
+
+    # First, place grouped patterns
+    for group in subset_groups:
+        for pattern in group:
+            if pattern in patterns:
+                x_positions[pattern] = current_x
+                processed.add(pattern)
+        current_x += 1
+
+    # Then, place ungrouped patterns
+    for pattern in patterns:
+        if pattern not in processed:
+            x_positions[pattern] = current_x
+            current_x += 1
+
+    # Draw bars
+    cmap = plt.cm.RdYlGn
+    width = 0.7
+
+    # Draw grouped patterns as stacked bars
+    for group in subset_groups:
+        group_in_ranking = [p for p in group if p in patterns]
+        if not group_in_ranking:
+            continue
+
+        x_pos = x_positions[group_in_ranking[0]]
+
+        # Sort by score descending (draw highest first as background)
+        group_sorted = sorted(group_in_ranking, key=lambda p: score_by_pattern[p], reverse=True)
+
+        for i, pattern in enumerate(group_sorted):
+            score = score_by_pattern[pattern]
+            color = cmap(score)
+
+            # First (tallest) bar is solid, others have hatching to distinguish
+            if i == 0:
+                ax.bar(x_pos, score, width, color=color, edgecolor='black', linewidth=1.5)
+            else:
+                # Subset bars are narrower and have hatching
+                subset_width = width * (1 - 0.15 * i)
+                hatch = '///' if i == 1 else ('xxx' if i == 2 else '...')
+                ax.bar(x_pos, score, subset_width, color=color, edgecolor='black',
+                       linewidth=1, hatch=hatch, alpha=0.9)
+
+    # Draw ungrouped patterns as regular bars
+    for pattern in patterns:
+        if pattern in pattern_to_group:
+            continue
+        x_pos = x_positions[pattern]
+        score = score_by_pattern[pattern]
+        color = cmap(score)
+        ax.bar(x_pos, score, width, color=color, edgecolor='black', linewidth=0.5)
+
+    # X-axis labels
+    # For grouped patterns, show all pattern IDs stacked
+    x_labels = []
+    x_ticks = []
+    for x_pos in range(current_x):
+        patterns_at_x = [p for p, pos in x_positions.items() if pos == x_pos]
+        if len(patterns_at_x) > 1:
+            # Multiple patterns at same position - show as stacked label
+            label = '\n'.join(str(p) for p in sorted(patterns_at_x, key=lambda p: score_by_pattern.get(p, 0), reverse=True))
+        elif patterns_at_x:
+            label = str(patterns_at_x[0])
+        else:
+            continue
+        x_labels.append(label)
+        x_ticks.append(x_pos)
 
     ax.set_xlabel("Node Pattern", fontsize=12)
     ax.set_ylabel("Max Score", fontsize=12)
     ax.set_title(title, fontsize=14, fontweight='bold')
-    ax.set_xticks(x)
-    ax.set_xticklabels(patterns, rotation=45, ha='right', fontsize=10)
+    ax.set_xticks(x_ticks)
+    ax.set_xticklabels(x_labels, rotation=0, ha='center', fontsize=9)
 
     # Full y-axis range 0-1
-    ax.set_ylim(0, 1.0)
+    ax.set_ylim(0, 1.05)
 
     # Grid
     ax.set_yticks(np.arange(0, 1.01, 0.2))
     ax.grid(True, alpha=0.4, axis='y', linestyle='-', linewidth=0.5)
     ax.grid(True, alpha=0.2, axis='y', linestyle='--', linewidth=0.3, which='minor')
     ax.set_yticks(np.arange(0, 1.01, 0.1), minor=True)
+
+    # Add legend if there are grouped patterns
+    if subset_groups:
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='gray', edgecolor='black', label='Superset (outer)'),
+            Patch(facecolor='gray', edgecolor='black', hatch='///', label='Subset (inner)'),
+        ]
+        ax.legend(handles=legend_elements, loc='lower right', fontsize=9)
 
     plt.tight_layout()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -428,13 +562,6 @@ def visualize_subset_relationships(
     if title_prefix:
         title = f"{title_prefix} - {title}"
     ax.set_title(title, fontsize=13, fontweight='bold', pad=15)
-
-    # Legend
-    ax.text(0.02, 0.02,
-           "Nested circles = subset relationships\nOuter = superset, Inner = subset",
-           transform=ax.transAxes, fontsize=9,
-           verticalalignment='bottom',
-           bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='gray'))
 
     plt.tight_layout()
     os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
@@ -711,6 +838,32 @@ def visualize_slice(
 
     os.makedirs(slice_dir, exist_ok=True)
 
+    # Build node representative circuits early (for subset detection in bar charts)
+    node_representatives = None
+    by_node = {}
+    if trial is not None:
+        per_gate_circuits = trial.metrics.per_gate_circuits.get(gate_name, {})
+        if per_gate_circuits:
+            from src.circuit import parse_subcircuit_idx
+            width = trial.setup.model_params.width
+            depth = trial.setup.model_params.depth
+
+            for sc_idx, circuit_dict in per_gate_circuits.items():
+                node_idx, _ = parse_subcircuit_idx(width, depth, sc_idx)
+                if node_idx not in by_node:
+                    by_node[node_idx] = {}
+                by_node[node_idx][sc_idx] = Circuit.from_dict(circuit_dict)
+
+            # Build representatives (least sparse circuit for each node pattern)
+            if len(by_node) >= 2:
+                node_representatives = {}
+                for node_pattern, circuits in by_node.items():
+                    best_circuit = min(
+                        circuits.values(),
+                        key=lambda c: c.sparsity()[1]  # edge sparsity
+                    )
+                    node_representatives[node_pattern] = best_circuit
+
     for ranking, name in rankings:
         if not ranking:
             continue
@@ -722,75 +875,58 @@ def visualize_slice(
         )
         paths[f"{name}_scatter"] = scatter_paths
 
-        # Node pattern comparison bar chart
+        # Node pattern comparison bar chart (with subset grouping if circuits available)
         comparison_path = os.path.join(slice_dir, f"{name}_comparison.png")
         visualize_node_pattern_comparison(
             ranking, comparison_path,
-            title=f"{gate_name}: {ranking.metric_name} by Node Pattern"
+            title=f"{gate_name}: {ranking.metric_name} by Node Pattern",
+            circuits=node_representatives,
         )
         paths[f"{name}_comparison"] = comparison_path
 
     # Generate subset relationship visualizations if trial data available
-    if trial is not None and hasattr(slice_obj, 'rank_accuracy'):
+    if trial is not None and hasattr(slice_obj, 'rank_accuracy') and by_node:
         # Only do this for observational slice (once per gate)
         subset_dir = os.path.join(output_dir, "observational", "viz", "subsets")
         os.makedirs(subset_dir, exist_ok=True)
 
-        per_gate_circuits = trial.metrics.per_gate_circuits.get(gate_name, {})
-        if per_gate_circuits:
-            # Group circuits by node pattern
-            from src.circuit import parse_subcircuit_idx
-            width = trial.setup.model_params.width
-            depth = trial.setup.model_params.depth
+        # Generate subset visualization for each node pattern (edge variants)
+        # Place these in the node{N}/ folder for that pattern
+        for node_pattern, circuits in by_node.items():
+            if len(circuits) >= 2:
+                # Put edge variant visualizations in the node folder
+                node_dir = os.path.join(output_dir, f"node{node_pattern}")
+                os.makedirs(node_dir, exist_ok=True)
 
-            by_node = {}
-            for sc_idx, circuit_dict in per_gate_circuits.items():
-                node_idx, _ = parse_subcircuit_idx(width, depth, sc_idx)
-                if node_idx not in by_node:
-                    by_node[node_idx] = {}
-                by_node[node_idx][sc_idx] = Circuit.from_dict(circuit_dict)
-
-            # Generate subset visualization for each node pattern (edge variants)
-            for node_pattern, circuits in by_node.items():
-                if len(circuits) >= 2:
-                    # Jaccard heatmap
-                    jaccard_path = os.path.join(subset_dir, f"{node_pattern}_jaccard.png")
-                    visualize_edge_variant_jaccard(
-                        circuits, jaccard_path, node_pattern, title_prefix=gate_name
-                    )
-                    paths[f"jaccard_{node_pattern}"] = jaccard_path
-
-                    # Subset circles
-                    subset_path = os.path.join(subset_dir, f"{node_pattern}_subsets.png")
-                    visualize_subset_relationships(
-                        circuits, subset_path, node_pattern, title_prefix=gate_name
-                    )
-                    paths[f"subsets_{node_pattern}"] = subset_path
-
-            # Generate node pattern comparison (comparing different node masks)
-            # Use the least sparse (most edges) circuit for each node pattern
-            if len(by_node) >= 2:
-                node_representatives = {}
-                for node_pattern, circuits in by_node.items():
-                    # Pick circuit with lowest edge sparsity (most edges)
-                    best_circuit = min(
-                        circuits.values(),
-                        key=lambda c: c.sparsity()[1]  # edge sparsity
-                    )
-                    node_representatives[node_pattern] = best_circuit
-
-                # Jaccard heatmap (separate plot)
-                jaccard_path = os.path.join(subset_dir, "node_patterns_jaccard.png")
-                visualize_node_pattern_jaccard(
-                    node_representatives, jaccard_path, title_prefix=gate_name
+                # Jaccard heatmap
+                jaccard_path = os.path.join(node_dir, "edge_variants_jaccard.png")
+                visualize_edge_variant_jaccard(
+                    circuits, jaccard_path, node_pattern, title_prefix=gate_name
                 )
-                paths["node_pattern_jaccard"] = jaccard_path
+                paths[f"jaccard_{node_pattern}"] = jaccard_path
 
-                # Subset circles (separate plot)
-                subset_path = os.path.join(subset_dir, "node_patterns_subsets.png")
-                visualize_node_pattern_subsets(
-                    node_representatives, subset_path, title_prefix=gate_name
+                # Subset circles
+                subset_path = os.path.join(node_dir, "edge_variants_subsets.png")
+                visualize_subset_relationships(
+                    circuits, subset_path, node_pattern, title_prefix=gate_name
                 )
-                paths["node_pattern_subsets"] = subset_path
+                paths[f"subsets_{node_pattern}"] = subset_path
+
+        # Generate node pattern comparison visualizations (already have node_representatives)
+        # Place these directly in the gate folder (e.g., XOR/)
+        if node_representatives and len(node_representatives) >= 2:
+            # Jaccard heatmap (separate plot)
+            jaccard_path = os.path.join(output_dir, "node_patterns_jaccard.png")
+            visualize_node_pattern_jaccard(
+                node_representatives, jaccard_path, title_prefix=gate_name
+            )
+            paths["node_pattern_jaccard"] = jaccard_path
+
+            # Subset circles (separate plot)
+            subset_path = os.path.join(output_dir, "node_patterns_subsets.png")
+            visualize_node_pattern_subsets(
+                node_representatives, subset_path, title_prefix=gate_name
+            )
+            paths["node_pattern_subsets"] = subset_path
 
     return paths

@@ -121,16 +121,19 @@ class GraphLayoutCache:
         return cls._instance
 
     def get_positions(self, layer_sizes: tuple) -> dict:
-        """Get or compute node positions for given layer structure."""
+        """Get or compute node positions for given layer structure.
+
+        Uses same convention as Circuit.visualize(): node 0 at bottom, higher nodes above.
+        """
         key = tuple(layer_sizes)
         if key not in self._cache:
             pos = {}
             max_width = max(layer_sizes)
             for layer_idx, n_nodes in enumerate(layer_sizes):
-                y_offset = -(max_width - n_nodes) / 2
+                y_offset = (max_width - n_nodes) / 2
                 for node_idx in range(n_nodes):
                     name = f"({layer_idx},{node_idx})"
-                    pos[name] = (layer_idx, y_offset - node_idx)
+                    pos[name] = (layer_idx, y_offset + node_idx)
             self._cache[key] = pos
         return self._cache[key]
 

@@ -25,9 +25,9 @@ def train_mlp(
     batch_size: int,
     learning_rate: float,
     epochs: int,
-    loss_target: float = 0.032,  # default for bse (eq to 1e-3 mse target)
+    loss_target: float = 0.3,  # default for tahn + bse (eq to 1e-3 mse target)
     val_frequency: int = 1,
-    early_stopping_steps: int = 10,
+    early_stopping_steps: int = 1,
     logger=None,
     record_training: bool = True,
 ) -> TrainingRecord:

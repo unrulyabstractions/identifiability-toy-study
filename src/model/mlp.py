@@ -39,6 +39,7 @@ class MLP(nn.Module):
         debug: bool = False,
         logger=None,
         gate_names: list[str] | None = None,
+        verbose: bool = False,
     ):
         """
         Initialize the MLP model.
@@ -50,6 +51,7 @@ class MLP(nn.Module):
             activation: The activation function to use
             device: The device to run the model on
             debug: Whether to enable device consistency checking
+            verbose: Whether to print initialization message (only for main training model)
         """
         super().__init__()
         self.input_size = input_size
@@ -79,6 +81,11 @@ class MLP(nn.Module):
         self.device = device
         self.debug = debug
         self.to(device)
+
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"  MLP INITIALIZED: activation = {activation.upper()}")
+            print(f"{'='*60}\n")
 
     def _init_weights(self):
         """Initialize weights with Kaiming normal for better convergence."""

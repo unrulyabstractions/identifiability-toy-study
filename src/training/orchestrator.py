@@ -50,6 +50,7 @@ def train_model(
         debug=debug,
         logger=logger,
         gate_names=list(model_params.logic_gates) if model_params.logic_gates else None,
+        verbose=True,  # Announce activation for main training model
     )
 
     training_record = train_mlp(

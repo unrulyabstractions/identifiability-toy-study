@@ -33,7 +33,8 @@ import numpy as np
 
 from src.infra import profile, profile_fn
 
-from .analysis import analyze_all_clusters, estimate_spd_subcircuits, run_spd_analysis
+from .analysis import estimate_spd_subcircuits, run_spd_analysis
+from .evaluation import analyze_all_clusters
 from .decomposition import decompose_mlp
 from .types import SPDConfig, SpdResults, SpdTrialResult
 from .visualization import (

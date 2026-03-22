@@ -648,9 +648,12 @@ def _find_top_variants(
     end_idx: int,
     min_variants: int = 1,
     max_variants: int = 1,
+    min_non_subset: int = 2,
 ) -> EdgeVariantStats:
     """
     Find the top N edge variants in a range based on accuracy, bit similarity, and sparsity.
+
+    Ensures at least min_non_subset variants that are not subsets of each other.
 
     Args:
         edge_variants: List of edge variant circuits
@@ -661,6 +664,7 @@ def _find_top_variants(
         end_idx: End index in the metrics arrays
         min_variants: Minimum number of variants to return (if available)
         max_variants: Maximum number of top variants to return
+        min_non_subset: Minimum number of non-subset variants to select
 
     Returns:
         EdgeVariantStats with top variants and worst metrics
@@ -683,15 +687,82 @@ def _find_top_variants(
     # Sort by score (ascending, so best = lowest negated values = first)
     scored_variants.sort(key=lambda x: x[0])
 
+    def is_non_subset(candidate: "Circuit", existing: list["Circuit"]) -> bool:
+        """Check if candidate has no subset relationship with existing circuits."""
+        if not existing:
+            return True
+        for other in existing:
+            metrics = candidate.overlap_metrics(other)
+            if metrics["is_subset"] or metrics["is_superset"]:
+                return False
+        return True
+
+    def count_subset_relations(local_idx: int) -> int:
+        """Count how many other variants this one has subset relations with."""
+        count = 0
+        circuit = edge_variants[local_idx]
+        for other_local_idx in range(len(edge_variants)):
+            if other_local_idx == local_idx:
+                continue
+            metrics = circuit.overlap_metrics(edge_variants[other_local_idx])
+            if metrics["is_subset"] or metrics["is_superset"]:
+                count += 1
+        return count
+
     # Get top N variants (between min and max, respecting available count)
-    effective_min = max(1, min_variants)
+    effective_min = max(1, min_variants, min_non_subset)
     effective_max = max(effective_min, max_variants)
-    # Take up to max_variants, but at least min_variants (if available)
-    top_n = min(effective_max, len(scored_variants))
-    top_n = max(top_n, min(effective_min, len(scored_variants)))
+
+    # If we need to ensure non-subset diversity, pre-compute subset relations
+    if min_non_subset > 1 and len(scored_variants) >= min_non_subset:
+        # Score variants by: (quality, -subset_relations) to prefer independent ones
+        subset_counts = {sv[2]: count_subset_relations(sv[2]) for sv in scored_variants[:effective_max * 2]}
+
+        # Re-sort top candidates by (quality, independence)
+        top_candidates = scored_variants[:min(len(scored_variants), effective_max * 2)]
+        top_candidates.sort(key=lambda sv: (sv[0], subset_counts.get(sv[2], 0)))
+
+        # Greedily select non-subset variants
+        selected_circuits = []
+        selected_variants = []
+
+        for score, global_idx, local_idx in top_candidates:
+            if len(selected_variants) >= effective_max:
+                break
+
+            circuit = edge_variants[local_idx]
+
+            if not selected_circuits:
+                selected_circuits.append(circuit)
+                selected_variants.append((score, global_idx, local_idx))
+                continue
+
+            if is_non_subset(circuit, selected_circuits):
+                selected_circuits.append(circuit)
+                selected_variants.append((score, global_idx, local_idx))
+                if len(selected_variants) >= min_non_subset:
+                    # We have enough non-subset variants, can fill rest more freely
+                    break
+
+        # Fill remaining slots if needed
+        if len(selected_variants) < effective_max:
+            for score, global_idx, local_idx in scored_variants:
+                if (score, global_idx, local_idx) in selected_variants:
+                    continue
+                if len(selected_variants) >= effective_max:
+                    break
+                selected_variants.append((score, global_idx, local_idx))
+
+        scored_variants_to_use = selected_variants
+    else:
+        # Simple case: just take top N
+        top_n = min(effective_max, len(scored_variants))
+        top_n = max(top_n, min(effective_min, len(scored_variants)))
+        scored_variants_to_use = scored_variants[:top_n]
+
+    # Build result
     top_variants = []
-    for i in range(top_n):
-        _, global_idx, local_idx = scored_variants[i]
+    for score, global_idx, local_idx in scored_variants_to_use:
         top_variants.append(EdgeVariantResult(
             circuit=edge_variants[local_idx],
             local_idx=local_idx,
@@ -700,7 +771,7 @@ def _find_top_variants(
             bit_sim=float(bit_sims[global_idx]),
         ))
 
-    # Get worst variant (last in sorted list)
+    # Get worst variant (last in original sorted list)
     _, worst_global_idx, _ = scored_variants[-1]
 
     return EdgeVariantStats(

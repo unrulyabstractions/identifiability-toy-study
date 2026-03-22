@@ -32,6 +32,7 @@ def filter_subcircuits(
     subcircuit_structures: list["CircuitStructure"],
     min_subcircuits: int = 1,
     max_subcircuits: int = 1,
+    min_non_subset: int = 2,
 ) -> FilterResult:
     """Filter subcircuits by epsilon thresholds, then select diverse top-k.
 
@@ -39,7 +40,8 @@ def filter_subcircuits(
     1. Filter by bit_similarity and accuracy using epsilon threshold
     2. Sort by (accuracy DESC, bit_similarity DESC, node_sparsity DESC)
     3. Select between min_subcircuits and max_subcircuits, diversifying by jaccard distance
-    4. If fewer than min pass threshold, include best non-passing ones
+    4. Ensure at least min_non_subset subcircuits that are not subsets of each other
+    5. If fewer than min pass threshold, include best non-passing ones
 
     Note: Edge masks are not directly filtered here since circuits with
     the same node pattern but different edges are functionally equivalent
@@ -52,6 +54,7 @@ def filter_subcircuits(
         subcircuit_structures: Circuit structure info (for sparsity)
         min_subcircuits: Minimum number of subcircuits to return (if available)
         max_subcircuits: Maximum number of subcircuits to return
+        min_non_subset: Minimum number of non-subset subcircuits to select (default 2)
 
     Returns:
         FilterResult with selected indices and metadata
@@ -60,7 +63,8 @@ def filter_subcircuits(
         return FilterResult(indices=[], n_passing=0, n_total=0, best_metrics=None, best_failing=None)
 
     # Ensure at least min_subcircuits (default 1) and respect max
-    effective_min = max(1, min_subcircuits)
+    # Also ensure we try to get min_non_subset diverse subcircuits
+    effective_min = max(1, min_subcircuits, min_non_subset)
     effective_max = max(effective_min, max_subcircuits)
 
     metrics_by_idx = {m.idx: m for m in subcircuit_metrics}
@@ -112,9 +116,58 @@ def filter_subcircuits(
         reverse=True,
     )
 
-    # Greedy selection from passing indices
+    # Greedy selection from passing indices, ensuring diversity
     selected = []
-    for candidate_idx in sorted_passing:
+
+    def is_non_subset(candidate_idx: int, existing: list[int]) -> bool:
+        """Check if candidate has no subset relationship with any existing subcircuit.
+
+        Returns False if:
+        - candidate is a subset of any existing circuit, OR
+        - any existing circuit is a subset of candidate
+        This ensures we pick structurally independent circuits.
+        """
+        if not existing:
+            return True
+        candidate = subcircuits[candidate_idx]
+        for s in existing:
+            other = subcircuits[s]
+            metrics = candidate.overlap_metrics(other)
+            # Reject if either is a subset of the other
+            if metrics["is_subset"] or metrics["is_superset"]:
+                return False
+        return True
+
+    def count_subset_relations(idx: int) -> int:
+        """Count how many other passing circuits this one has subset relations with."""
+        count = 0
+        circuit = subcircuits[idx]
+        for other_idx in sorted_passing:
+            if other_idx == idx:
+                continue
+            metrics = circuit.overlap_metrics(subcircuits[other_idx])
+            if metrics["is_subset"] or metrics["is_superset"]:
+                count += 1
+        return count
+
+    # Pre-compute subset relation counts to prefer "independent" circuits
+    # Circuits that are subsets of many others make poor first picks
+    subset_counts = {idx: count_subset_relations(idx) for idx in sorted_passing}
+
+    # Sort by: (quality DESC, subset_count ASC) - prefer high quality with few relations
+    # This way we pick circuits that don't block other good choices
+    sorted_by_independence = sorted(
+        sorted_passing,
+        key=lambda idx: (
+            -metrics_by_idx[idx].accuracy,  # Higher accuracy first
+            -metrics_by_idx[idx].bit_similarity,  # Higher similarity first
+            subset_counts[idx],  # Fewer subset relations first (independent circuits)
+            -subcircuit_structures[idx].node_sparsity,  # Less sparse first (larger circuits)
+        ),
+    )
+
+    # Select non-subset subcircuits until we have min_non_subset
+    for candidate_idx in sorted_by_independence:
         if len(selected) >= effective_max:
             break
 
@@ -122,25 +175,19 @@ def filter_subcircuits(
             selected.append(candidate_idx)
             continue
 
-        # Calculate max overlap with any already-selected subcircuit
-        max_overlap = max(
-            subcircuits[candidate_idx].overlap_jaccard(subcircuits[s]) for s in selected
-        )
+        # Only add if it's NOT a subset of existing selections
+        if is_non_subset(candidate_idx, selected):
+            selected.append(candidate_idx)
+            if len(selected) >= min_non_subset:
+                break
 
-        # Check if this candidate is a quality tie with the last selected
-        candidate = metrics_by_idx[candidate_idx]
-        last = metrics_by_idx[selected[-1]]
-        is_tie = (
-            abs(candidate.accuracy - last.accuracy) < 1e-6
-            and abs(candidate.bit_similarity - last.bit_similarity) < 1e-6
-        )
-
-        if is_tie:
-            # For ties, only add if sufficiently different (jaccard < 0.8)
-            if max_overlap < 0.8:
-                selected.append(candidate_idx)
-        else:
-            # Not a tie - just add (it's lower quality but still passes)
+    # Second pass: if we need more subcircuits (up to effective_max), add remaining passing ones
+    if len(selected) < effective_max:
+        for candidate_idx in sorted_passing:
+            if candidate_idx in selected:
+                continue
+            if len(selected) >= effective_max:
+                break
             selected.append(candidate_idx)
 
     # If we have fewer than effective_min, add best non-passing ones

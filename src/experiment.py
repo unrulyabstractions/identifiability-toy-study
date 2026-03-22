@@ -120,6 +120,7 @@ def build_trial_settings(
                     model_params=model_params,
                     train_params=train_params,
                     constraints=constraints,
+                    faithfulness_config=copy.deepcopy(cfg.base_trial.faithfulness_config),
                 )
 
                 trial_settings.append(

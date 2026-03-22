@@ -28,42 +28,6 @@ The analysis pipeline:
 
 Key insight: A cluster that activates on exactly the inputs where XOR=1
 is likely implementing XOR. This lets us identify functional subcircuits.
-
-This package provides the orchestration layer. The actual implementations are in:
-- importance.py: compute_importance_matrix, compute_coactivation_matrix
-- clustering.py: detect_dead_components, cluster_components_hierarchical, map_clusters_to_functions
-- evaluation.py: analyze_cluster_robustness, analyze_cluster_faithfulness, analyze_all_clusters
 """
 
-# Orchestration functions (this package)
 from .orchestration import estimate_spd_subcircuits, run_spd_analysis
-
-# Re-export from sibling modules for backward compatibility
-from ..clustering import (
-    cluster_components_hierarchical,
-    detect_dead_components,
-    map_clusters_to_functions,
-)
-from ..evaluation import (
-    analyze_all_clusters,
-    analyze_cluster_faithfulness,
-    analyze_cluster_robustness,
-)
-from ..importance import compute_coactivation_matrix, compute_importance_matrix
-
-__all__ = [
-    # Importance (from importance.py)
-    "compute_importance_matrix",
-    "compute_coactivation_matrix",
-    # Clustering (from clustering.py)
-    "detect_dead_components",
-    "cluster_components_hierarchical",
-    "map_clusters_to_functions",
-    # Evaluation (from evaluation.py)
-    "analyze_cluster_robustness",
-    "analyze_cluster_faithfulness",
-    "analyze_all_clusters",
-    # Orchestration (this package)
-    "run_spd_analysis",
-    "estimate_spd_subcircuits",
-]

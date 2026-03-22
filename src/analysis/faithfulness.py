@@ -22,6 +22,7 @@ from src.schemas import (
     FaithfulnessMetrics,
     InterventionalMetrics,
     InterventionStatistics,
+    ObservationalMetrics,
 )
 from src.math import logits_to_binary
 
@@ -141,13 +142,17 @@ def calculate_faithfulness_metrics(
     n_interventions_per_patch = config.n_interventions_per_patch
 
     # ===== OBSERVATIONAL: Input perturbation analysis =====
-    with traced("observational_metrics"):
-        observational = calculate_observational_metrics(
-            subcircuit=subcircuit,
-            full_model=model,
-            n_samples_per_base=200,
-            device=device,
-        )
+    observational = None
+    if not config.skip_observational:
+        with traced("observational_metrics"):
+            observational = calculate_observational_metrics(
+                subcircuit=subcircuit,
+                full_model=model,
+                n_samples_per_base=200,
+                device=device,
+            )
+    else:
+        print("[SKIP] Observational analysis")
 
     # ===== Helper: Build CounterfactualEffect from intervention =====
     def _build_effect(
@@ -316,78 +321,89 @@ def calculate_faithfulness_metrics(
         return effects
 
     # ===== Interventional Analysis (random value patching) =====
-    # In-distribution: small perturbations within training data range
-    in_distribution_value_range = [-0.25, 0.25]
-    # Out-of-distribution: large values far outside training range
-    out_distribution_value_range = [[-1000, -2], [2, 1000]]
-
     in_circuit_effects = CircuitInterventionEffects()
     out_circuit_effects = CircuitInterventionEffects()
 
-    # Interventional analysis (sequential for GPU safety)
-    with traced("interventional_in_circuit", n_patches=len(structure.in_patches) if structure.in_patches else 0):
-        if structure.in_patches:
-            in_circuit_effects.in_distribution = calculate_patches_causal_effect(
-                structure.in_patches,
-                x,
-                model,
-                subcircuit,
-                n_interventions_per_patch,
-                False,
-                device,
-                in_distribution_value_range,
-            )
-            in_circuit_effects.out_distribution = calculate_patches_causal_effect(
-                structure.in_patches,
-                x,
-                model,
-                subcircuit,
-                n_interventions_per_patch,
-                False,
-                device,
-                out_distribution_value_range,
-            )
+    if not config.skip_interventional:
+        # In-distribution: small perturbations within training data range
+        in_distribution_value_range = [-0.25, 0.25]
+        # Out-of-distribution: large values far outside training range
+        out_distribution_value_range = [[-1000, -2], [2, 1000]]
 
-    with traced("interventional_out_circuit", n_patches=len(structure.out_patches) if structure.out_patches else 0):
-        if structure.out_patches:
-            out_circuit_effects.in_distribution = calculate_patches_causal_effect(
-                structure.out_patches,
-                x,
-                model,
-                subcircuit,
-                n_interventions_per_patch,
-                True,
-                device,
-                in_distribution_value_range,
-            )
-            out_circuit_effects.out_distribution = calculate_patches_causal_effect(
-                structure.out_patches,
-                x,
-                model,
-                subcircuit,
-                n_interventions_per_patch,
-                True,
-                device,
-                out_distribution_value_range,
-            )
+        # Interventional analysis (sequential for GPU safety)
+        with traced("interventional_in_circuit", n_patches=len(structure.in_patches) if structure.in_patches else 0):
+            if structure.in_patches:
+                in_circuit_effects.in_distribution = calculate_patches_causal_effect(
+                    structure.in_patches,
+                    x,
+                    model,
+                    subcircuit,
+                    n_interventions_per_patch,
+                    False,
+                    device,
+                    in_distribution_value_range,
+                )
+                in_circuit_effects.out_distribution = calculate_patches_causal_effect(
+                    structure.in_patches,
+                    x,
+                    model,
+                    subcircuit,
+                    n_interventions_per_patch,
+                    False,
+                    device,
+                    out_distribution_value_range,
+                )
+
+        with traced("interventional_out_circuit", n_patches=len(structure.out_patches) if structure.out_patches else 0):
+            if structure.out_patches:
+                out_circuit_effects.in_distribution = calculate_patches_causal_effect(
+                    structure.out_patches,
+                    x,
+                    model,
+                    subcircuit,
+                    n_interventions_per_patch,
+                    True,
+                    device,
+                    in_distribution_value_range,
+                )
+                out_circuit_effects.out_distribution = calculate_patches_causal_effect(
+                    structure.out_patches,
+                    x,
+                    model,
+                    subcircuit,
+                    n_interventions_per_patch,
+                    True,
+                    device,
+                    out_distribution_value_range,
+                )
+    else:
+        print("[SKIP] Interventional analysis")
 
     # ===== 2x2 Counterfactual Analysis (BATCHED) =====
-    with traced("counterfactual_2x2_batched", n_pairs=len(counterfactual_pairs)):
-        # Denoising experiments (run corrupted, patch with clean)
-        sufficiency_effects = compute_denoising_effects_batched(
-            structure.in_circuit, counterfactual_pairs, "sufficiency"
-        )
-        completeness_effects = compute_denoising_effects_batched(
-            structure.out_circuit, counterfactual_pairs, "completeness"
-        )
+    sufficiency_effects = []
+    completeness_effects = []
+    necessity_effects = []
+    independence_effects = []
 
-        # Noising experiments (run clean, patch with corrupted)
-        necessity_effects = compute_noising_effects_batched(
-            structure.in_circuit, counterfactual_pairs, "necessity"
-        )
-        independence_effects = compute_noising_effects_batched(
-            structure.out_circuit, counterfactual_pairs, "independence"
-        )
+    if not config.skip_counterfactual:
+        with traced("counterfactual_2x2_batched", n_pairs=len(counterfactual_pairs)):
+            # Denoising experiments (run corrupted, patch with clean)
+            sufficiency_effects = compute_denoising_effects_batched(
+                structure.in_circuit, counterfactual_pairs, "sufficiency"
+            )
+            completeness_effects = compute_denoising_effects_batched(
+                structure.out_circuit, counterfactual_pairs, "completeness"
+            )
+
+            # Noising experiments (run clean, patch with corrupted)
+            necessity_effects = compute_noising_effects_batched(
+                structure.in_circuit, counterfactual_pairs, "necessity"
+            )
+            independence_effects = compute_noising_effects_batched(
+                structure.out_circuit, counterfactual_pairs, "independence"
+            )
+    else:
+        print("[SKIP] Counterfactual analysis")
 
     # ===== Calculate Statistics =====
     all_counterfactual_effects = (
@@ -466,12 +482,20 @@ def calculate_faithfulness_metrics(
         overall_counterfactual=overall_counterfactual,
     )
 
-    # Overall faithfulness: average of observational, interventional, and counterfactual
-    overall_faithfulness = (
-        observational.overall_observational
-        + interventional.overall_interventional
-        + overall_counterfactual
-    ) / 3.0
+    # Overall faithfulness: average of non-skipped pillars only
+    pillar_scores = []
+    if not config.skip_observational and observational is not None:
+        pillar_scores.append(observational.overall_observational)
+    if not config.skip_interventional:
+        pillar_scores.append(interventional.overall_interventional)
+    if not config.skip_counterfactual:
+        pillar_scores.append(overall_counterfactual)
+
+    overall_faithfulness = float(np.mean(pillar_scores)) if pillar_scores else 0.0
+
+    # Create default observational if skipped (for consistent return structure)
+    if observational is None:
+        observational = ObservationalMetrics()
 
     return FaithfulnessMetrics(
         observational=observational,

@@ -222,8 +222,16 @@ class ObservationalSlice:
         score_key: str,
         metric_name: str,
         description: str,
-    ) -> RankingResult:
-        """Build a ranking from subcircuit data."""
+    ) -> RankingResult | None:
+        """Build a ranking from subcircuit data.
+
+        Returns None if all scores are 0 (e.g., when the pillar was skipped).
+        """
+        # Check if there's any meaningful data (at least one non-zero score)
+        all_scores = [d.get(score_key, 0) for d in subcircuit_data]
+        if not all_scores or all(s == 0 for s in all_scores):
+            return None
+
         # Build subcircuit stats
         subcircuits = []
         for d in subcircuit_data:

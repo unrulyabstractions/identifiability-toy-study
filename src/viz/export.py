@@ -271,10 +271,15 @@ def save_faithfulness_json(
     obs_overall = 0.0
     int_overall = 0.0
     cf_overall = 0.0
+    obs_metrics = None
+    int_metrics = None
+    cf_metrics = None
 
     # Observational summary.json (from faithfulness.observational)
     observational = faithfulness.observational if faithfulness else None
-    if observational_dir and observational:
+    # Check if observational has actual data (not just a default empty object)
+    has_observational_data = observational and (observational.noise is not None or observational.ood is not None)
+    if observational_dir and has_observational_data:
         obs_metrics = compute_observational_metrics(observational)
         obs_overall = obs_metrics.get("overall_score", 0.0)
         path = os.path.join(observational_dir, "summary.json")
@@ -360,17 +365,17 @@ def save_faithfulness_json(
         "observational": {
             "score": obs_overall,
             "epsilon": obs_epsilon,
-            "details": obs_metrics if observational else None,
+            "details": obs_metrics,  # Will be None if observational was skipped
         },
         "interventional": {
             "score": int_overall,
             "epsilon": int_epsilon,
-            "details": int_metrics if faithfulness and faithfulness.interventional else None,
+            "details": int_metrics,  # Will be None if interventional was skipped
         },
         "counterfactual": {
             "score": cf_overall,
             "epsilon": cf_epsilon,
-            "details": cf_metrics if faithfulness and faithfulness.counterfactual else None,
+            "details": cf_metrics,  # Will be None if counterfactual was skipped
         },
         "overall": overall_score,
     }

@@ -1,7 +1,7 @@
 """Visualization configuration.
 
 Controls visualization levels to reduce output size and improve performance.
-Default is NONE (no PNGs, only JSON/TXT summaries).
+Default is ALL (full visualization). Use --viz 0 for no PNGs.
 """
 
 from dataclasses import dataclass

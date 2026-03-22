@@ -62,9 +62,9 @@ def get_args() -> Any:
         "--viz",
         type=int,
         default=None,
-        choices=[0, 1, 2, 3],
+        choices=[0, 1, 2, 3, 4],
         metavar="LEVEL",
-        help="Visualization level: 0=none (default), 1=summary only, 2=+top subcircuit, 3=+top 5",
+        help="Visualization level: 0=none, 1=summary, 2=+top subcircuit, 3=+top 5, 4=all (default)",
     )
     parser.add_argument(
         "--spd",
@@ -90,18 +90,63 @@ def get_args() -> Any:
         metavar="DIR_NAME",
         help="Custom name for run directory (instead of timestamp)",
     )
+    parser.add_argument(
+        "--skip-observational",
+        action="store_true",
+        help="Skip observational faithfulness analysis",
+    )
+    parser.add_argument(
+        "--skip-interventional",
+        action="store_true",
+        help="Skip interventional faithfulness analysis",
+    )
+    parser.add_argument(
+        "--skip-counterfactual",
+        action="store_true",
+        help="Skip counterfactual faithfulness analysis",
+    )
+    parser.add_argument(
+        "--only-observational",
+        action="store_true",
+        help="Run only observational faithfulness analysis (skip interventional and counterfactual)",
+    )
+    parser.add_argument(
+        "--only-interventional",
+        action="store_true",
+        help="Run only interventional faithfulness analysis (skip observational and counterfactual)",
+    )
+    parser.add_argument(
+        "--only-counterfactual",
+        action="store_true",
+        help="Run only counterfactual faithfulness analysis (skip observational and interventional)",
+    )
     args = parser.parse_args()
 
     # args.spd_only should turn on args.spd
     args.spd = args.spd or args.spd_only
 
+    # Handle --only-* flags (mutually exclusive with each other)
+    only_count = sum([args.only_observational, args.only_interventional, args.only_counterfactual])
+    if only_count > 1:
+        parser.error("Cannot specify multiple --only-* flags")
+
+    if args.only_observational:
+        args.skip_interventional = True
+        args.skip_counterfactual = True
+    elif args.only_interventional:
+        args.skip_observational = True
+        args.skip_counterfactual = True
+    elif args.only_counterfactual:
+        args.skip_observational = True
+        args.skip_interventional = True
+
     # Handle --no-viz (deprecated) and --viz
     # --no-viz is equivalent to --viz 0
-    # If neither specified, default to --viz 0 (no viz)
+    # If neither specified, default to --viz 4 (all)
     if args.no_viz and args.viz is None:
         args.viz = 0
     elif args.viz is None:
-        args.viz = 0  # Default to no visualization
+        args.viz = 4  # Default to full visualization
 
     return args
 
@@ -214,7 +259,11 @@ def run_single_experiment(args: Any, output_dir: Path) -> None:
     if args.rename:
         run_dir = os.path.join(output_dir, args.rename)
         if os.path.exists(run_dir):
-            raise ValueError(f"Run directory already exists: {run_dir}")
+            # Rename old folder to {name}_old_{SHORT_TIMESTAMP}
+            short_timestamp = datetime.datetime.now().strftime("%H%M%S")
+            old_dir = os.path.join(output_dir, f"{args.rename}_old_{short_timestamp}")
+            os.rename(run_dir, old_dir)
+            print(f"Renamed existing '{args.rename}' to '{args.rename}_old_{short_timestamp}'")
     else:
         timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         run_dir = os.path.join(output_dir, f"run_{timestamp}")
@@ -231,6 +280,11 @@ def run_single_experiment(args: Any, output_dir: Path) -> None:
         debug=args.debug,
         device=args.device,
     )
+
+    # Apply skip flags to faithfulness config
+    cfg.base_trial.faithfulness_config.skip_observational = args.skip_observational
+    cfg.base_trial.faithfulness_config.skip_interventional = args.skip_interventional
+    cfg.base_trial.faithfulness_config.skip_counterfactual = args.skip_counterfactual
 
     # Visualization config
     viz_config = VizConfig.from_int(args.viz)

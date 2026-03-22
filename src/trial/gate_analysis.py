@@ -1,16 +1,19 @@
 """Gate analysis - per-gate metric computation, edge optimization, and faithfulness."""
 
-import torch
-
-from src.analysis import FilterResult, create_clean_corrupted_data, filter_subcircuits
-from src.circuit import batch_compute_metrics, batch_compute_canonical_accuracy, batch_evaluate_edge_variants, make_subcircuit_idx
+from src.analysis import create_clean_corrupted_data, filter_subcircuits
+from src.circuit import (
+    batch_compute_canonical_accuracy,
+    batch_compute_metrics,
+    batch_evaluate_edge_variants,
+    make_subcircuit_idx,
+)
 from src.domain import resolve_gate
 from src.infra.logging import (
     log_filtering_result,
     log_gate_faithfulness_summary,
 )
-from src.schemas import GateMetrics, SubcircuitMetrics
 from src.math import calculate_match_rate
+from src.schemas import GateMetrics, SubcircuitMetrics
 
 from .phases import faithfulness_phase
 
@@ -89,6 +92,25 @@ def analyze_gate(
         bit_gate_gt.to(eval_device) if eval_device != device else bit_gate_gt
     )
 
+    # Compute canonical accuracy FIRST - this is the primary filter criterion
+    # (accuracy on the 4/8 canonical inputs for 2/3-input gates)
+    logic_gate = resolve_gate(gate_name)
+    n_inputs = logic_gate.n_inputs
+
+    def ground_truth_fn(inp):
+        """Compute ground truth for a single canonical input."""
+        inp_np = inp.cpu().numpy()
+        return float(logic_gate.gate_fn(inp_np)[0])
+
+    canonical_accuracies = batch_compute_canonical_accuracy(
+        model=model,
+        circuits=subcircuits,
+        gate_idx=gate_idx,
+        n_inputs=n_inputs,
+        ground_truth_fn=ground_truth_fn,
+        eval_device=eval_device,
+    )
+
     precomputed = (
         precomputed_masks_per_gate.get(gate_idx)
         if parallel_config.precompute_masks
@@ -104,24 +126,6 @@ def analyze_gate(
         y_pred=y_gate_eval,
         gate_idx=gate_idx,
         precomputed_masks=precomputed,
-        eval_device=eval_device,
-    )
-
-    # Compute accuracy on canonical inputs (4 inputs for 2-input gates)
-    logic_gate = resolve_gate(gate_name)
-    n_inputs = logic_gate.n_inputs
-
-    def ground_truth_fn(inp):
-        """Compute ground truth for a single canonical input."""
-        inp_np = inp.cpu().numpy()
-        return float(logic_gate.gate_fn(inp_np)[0])
-
-    canonical_accuracies = batch_compute_canonical_accuracy(
-        model=model,
-        circuits=subcircuits,
-        gate_idx=gate_idx,
-        n_inputs=n_inputs,
-        ground_truth_fn=ground_truth_fn,
         eval_device=eval_device,
     )
 
@@ -189,7 +193,9 @@ def analyze_gate(
         node_mask_idx = best_node_indices[orig_idx]
         for edge_variant_rank, variant in enumerate(top_variants):
             # edge_variant_rank is the OPTIMIZATION RANK (0=best), not enumeration index
-            subcircuit_idx = make_subcircuit_idx(width, depth, node_mask_idx, edge_variant_rank)
+            subcircuit_idx = make_subcircuit_idx(
+                width, depth, node_mask_idx, edge_variant_rank
+            )
             all_subcircuit_keys.append(subcircuit_idx)
             all_circuits[subcircuit_idx] = variant.circuit
             # Use the node pattern's structure (edge variations share the same structure)
@@ -200,12 +206,15 @@ def analyze_gate(
 
     # Store edge-masked circuits for decision boundary visualization
     trial_metrics.per_gate_circuits[gate_name] = {
-        subcircuit_idx: circuit.to_dict() for subcircuit_idx, circuit in all_circuits.items()
+        subcircuit_idx: circuit.to_dict()
+        for subcircuit_idx, circuit in all_circuits.items()
     }
 
     # Create subcircuit models for all variations
     best_subcircuit_models = {
-        subcircuit_idx: gate_model.separate_subcircuit(all_circuits[subcircuit_idx], gate_idx=gate_idx)
+        subcircuit_idx: gate_model.separate_subcircuit(
+            all_circuits[subcircuit_idx], gate_idx=gate_idx
+        )
         for subcircuit_idx in all_subcircuit_keys
     }
 
@@ -234,6 +243,8 @@ def analyze_gate(
     update_status(f"FINISHED_FAITH:{gate_idx}")
 
     # Log faithfulness results for this gate
-    log_gate_faithfulness_summary(gate_name, all_subcircuit_keys, faithfulness_results, width, depth)
+    log_gate_faithfulness_summary(
+        gate_name, all_subcircuit_keys, faithfulness_results, width, depth
+    )
 
     per_gate_bests_faith[gate_name].extend(faithfulness_results)

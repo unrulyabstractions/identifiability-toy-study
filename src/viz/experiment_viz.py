@@ -427,7 +427,11 @@ def save_per_gate_data(
                 observational_data = (
                     faithfulness_data.observational if faithfulness_data else None
                 )
-                has_observational = observational_data is not None
+                # Check if observational has actual data (noise or OOD samples)
+                has_observational = (
+                    observational_data is not None
+                    and (observational_data.noise is not None or observational_data.ood is not None)
+                )
 
                 # Create faithfulness directory structure
                 faithfulness_dir = os.path.join(folder, "faithfulness")
@@ -481,6 +485,42 @@ def save_per_gate_data(
                     (edge_variant_rank, faith) for edge_variant_rank, _, faith in edge_list
                 ]
                 save_node_pattern_summary(node_mask_idx, node_dir, edge_variations)
+
+        # --- Slice analysis (always generates JSON) ---
+        # Load subcircuits from trial, or regenerate from architecture
+        if trial.subcircuits:
+            subcircuits = [Circuit.from_dict(s) for s in trial.subcircuits]
+        else:
+            layer_weights = trial.layer_weights or []
+            if layer_weights:
+                layer_sizes = [layer_weights[0].shape[1]] + [w.shape[0] for w in layer_weights]
+                from src.circuit import enumerate_circuits_for_architecture
+                subcircuits = enumerate_circuits_for_architecture(layer_sizes, use_tqdm=False)
+            else:
+                subcircuits = []
+
+        # Determine input size
+        layer_weights = trial.layer_weights or []
+        if layer_weights:
+            input_size = layer_weights[0].shape[1]
+        else:
+            input_size = 2
+
+        for gate_idx, gname in enumerate(gate_names):
+            best_keys = trial.metrics.per_gate_bests.get(gname, [])
+            if not best_keys:
+                continue
+
+            gate_dir = os.path.join(trial_dir, gname)
+
+            # Generate and save all three slices
+            obs_slice = ObservationalSlice.from_trial(trial, gname, width, depth, subcircuits, input_size)
+            int_slice = InterventionalSlice.from_trial(trial, gname, width, depth, subcircuits, input_size)
+            cf_slice = CounterfactualSlice.from_trial(trial, gname, width, depth, subcircuits, input_size)
+
+            obs_slice.save(gate_dir)
+            int_slice.save(gate_dir)
+            cf_slice.save(gate_dir)
 
     print("[DATA] Per-gate JSON data saved.")
     return saved_paths
@@ -870,7 +910,11 @@ def visualize_experiment(
                 observational_data = (
                     faithfulness_data.observational if faithfulness_data else None
                 )
-                has_observational = observational_data is not None
+                # Check if observational has actual data (noise or OOD samples)
+                has_observational = (
+                    observational_data is not None
+                    and (observational_data.noise is not None or observational_data.ood is not None)
+                )
 
                 # Faithfulness directory already created by save_per_gate_data
                 faithfulness_dir = os.path.join(folder, "faithfulness")

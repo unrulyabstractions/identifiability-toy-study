@@ -187,6 +187,10 @@ def visualize_observational_circuits(
         layer_biases: Optional bias vectors. If provided, edge labels show
             (weight + bias) to reveal bias contribution when edges are patched.
     """
+    # Early return if no observational data (e.g., when --skip-observational was used)
+    if observational is None or (observational.noise is None and observational.ood is None):
+        return {}
+
     circuit_viz_dir = os.path.join(output_dir, "circuit_viz")
     paths = {}
 
@@ -391,6 +395,11 @@ def visualize_observational_curves(
 ) -> dict[str, str]:
     """Visualize observational showing raw output values colored by correctness."""
     paths = {}
+
+    # Early return if no observational data (e.g., when --skip-observational was used)
+    if observational is None or (observational.noise is None and observational.ood is None):
+        return paths
+
     prefix = f"{gate_name} - " if gate_name else ""
 
     def _compute_perturbation_effect(sample):

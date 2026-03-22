@@ -5,12 +5,6 @@ Each phase is a distinct step in the trial pipeline:
 - Enumerating circuits
 - Precomputing masks
 - Faithfulness analysis (includes observational, interventional, counterfactual)
-
-Note: SPD decomposition is now run separately via src.spd.run_spd()
-
-Note: Some phases like train_model, batch_compute_metrics, and
-batch_evaluate_edge_variants are now decorated with @profile_fn directly
-in their source modules (helpers.py and batched_eval.py).
 """
 
 import torch
@@ -18,8 +12,6 @@ import torch
 from src.analysis import calculate_faithfulness_metrics
 from src.circuit import (
     adapt_masks_for_gate,
-    batch_compute_metrics,
-    batch_evaluate_edge_variants,
     enumerate_circuits_for_architecture,
     parse_subcircuit_idx,
     precompute_circuit_masks_base,
@@ -27,20 +19,6 @@ from src.circuit import (
 from src.domain import generate_canonical_inputs
 from src.infra import ParallelTasks, profile, profile_fn
 from src.infra.profiler import trace, trace_progress, traced
-from src.training import train_model
-
-# Re-export functions that have @profile_fn directly on them
-# These are called from gate_analysis.py and trial_executor.py
-__all__ = [
-    "batch_compute_metrics",
-    "batch_evaluate_edge_variants",
-    "compute_activations_phase",
-    "decision_boundary_phase",
-    "enumerate_circuits_phase",
-    "faithfulness_phase",
-    "precompute_masks_phase",
-    "train_model",
-]
 
 
 @profile_fn("Compute Activations")
