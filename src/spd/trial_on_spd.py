@@ -212,7 +212,7 @@ def create_full_circuit_structure(model: MLP) -> CircuitStructure:
         edge_masks.append(torch.ones(layer_sizes[i+1], layer_sizes[i]))
 
     return CircuitStructure(
-        layer_sizes=layer_sizes,
+        layer_widths=layer_sizes,
         n_active_nodes=[int(m.sum().item()) for m in node_masks],
         n_total_nodes=sum(layer_sizes),
         n_active_edges=[int(m.sum().item()) for m in edge_masks],
@@ -382,7 +382,6 @@ def analyze_spd_trial(
                 counterfactual_pairs=counterfactual_pairs,
                 config=FaithfulnessConfig(
                     n_interventions_per_patch=5,
-                    n_counterfactual_pairs=5,
                 ),
                 device=device,
             )

@@ -40,6 +40,8 @@ def run_spd_analysis(
     gate_names: list[str] = None,
     n_clusters: int = None,
     device: str = "cpu",
+    n_noisy_samples: int = 50,
+    noise_std: float = 0.15,
 ) -> SPDAnalysisResult:
     """Run complete SPD analysis: clustering, function mapping, and metrics.
 
@@ -57,6 +59,8 @@ def run_spd_analysis(
         gate_names: Names of gates in the model
         n_clusters: Target number of clusters (None = auto)
         device: Compute device
+        n_noisy_samples: Number of noisy samples per canonical input for coactivation
+        noise_std: Standard deviation of noise to add to inputs
 
     Returns:
         SPDAnalysisResult with all analysis data
@@ -78,9 +82,11 @@ def run_spd_analysis(
     result.n_dead_components = len(dead_labels)
     result.dead_component_labels = dead_labels
 
-    # Importance matrix
+    # Importance matrix (with noisy samples for better coactivation detection)
     importance_matrix, component_labels = compute_importance_matrix(
-        decomposed_model, n_inputs, device
+        decomposed_model, n_inputs, device,
+        n_noisy_samples=n_noisy_samples,
+        noise_std=noise_std,
     )
 
     if importance_matrix.size == 0:
@@ -135,6 +141,8 @@ def estimate_spd_subcircuits(
     n_inputs: int = 2,
     gate_names: list[str] = None,
     device: str = "cpu",
+    n_noisy_samples: int = 50,
+    noise_std: float = 0.15,
 ) -> SPDSubcircuitEstimate | None:
     """Estimate subcircuits from SPD decomposition using component clustering.
 
@@ -147,6 +155,8 @@ def estimate_spd_subcircuits(
         n_inputs: Number of input bits (2 for boolean gates)
         gate_names: Names of gates to match against
         device: Compute device
+        n_noisy_samples: Number of noisy samples per canonical input
+        noise_std: Standard deviation of noise to add
 
     Returns:
         SPDSubcircuitEstimate with cluster assignments and statistics
@@ -159,7 +169,9 @@ def estimate_spd_subcircuits(
         return None
 
     importance_matrix, component_labels = compute_importance_matrix(
-        decomposed_model, n_inputs, device
+        decomposed_model, n_inputs, device,
+        n_noisy_samples=n_noisy_samples,
+        noise_std=noise_std,
     )
 
     if importance_matrix.size == 0:

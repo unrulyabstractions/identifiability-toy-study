@@ -186,13 +186,13 @@ def map_clusters_to_functions(
         If it activates on (0,1), (1,0), and (0,0), Jaccard = 2/3 = 0.67
 
     Algorithm:
-        1. For each cluster, find inputs where mean importance > 0.5
+        1. For each cluster, find inputs where mean importance > threshold
         2. For each known gate, find inputs where gate output = 1
         3. Compute Jaccard = |intersection| / |union|
         4. Assign best match if Jaccard > 0.5, else "UNKNOWN"
 
     Args:
-        importance_matrix: Shape [n_inputs, n_components]
+        importance_matrix: Shape [n_samples, n_components] - may include noisy samples
         cluster_assignments: Which cluster each component belongs to
         n_inputs: Number of input bits
         gate_names: Which gates to check (default: all known gates)
@@ -205,6 +205,21 @@ def map_clusters_to_functions(
 
     n_total_inputs = 2**n_inputs
     n_clusters = max(cluster_assignments) + 1
+    n_samples = importance_matrix.shape[0]
+
+    # If we have more samples than canonical inputs, average back to canonical
+    # The first n_total_inputs rows are canonical, rest are noisy versions
+    if n_samples > n_total_inputs:
+        # Reshape: [n_total_inputs * (1 + n_noisy), n_comp] -> average per canonical
+        n_noisy_per = n_samples // n_total_inputs
+        canonical_importance = np.zeros((n_total_inputs, importance_matrix.shape[1]))
+        for i in range(n_total_inputs):
+            # Canonical input is at index i, noisy versions at i + n_total_inputs * k
+            indices = [i + n_total_inputs * k for k in range(n_noisy_per) if i + n_total_inputs * k < n_samples]
+            canonical_importance[i] = importance_matrix[indices].mean(axis=0)
+        importance_for_mapping = canonical_importance
+    else:
+        importance_for_mapping = importance_matrix
 
     # Generate all binary inputs
     all_inputs = []
@@ -227,9 +242,9 @@ def map_clusters_to_functions(
             cluster_functions[cluster_idx] = "EMPTY"
             continue
 
-        # Average importance for this cluster
-        cluster_importance = importance_matrix[:, component_indices].mean(axis=1)
-        active_inputs = set(np.where(cluster_importance > 0.5)[0])
+        # Average importance for this cluster (use canonical importance for function matching)
+        cluster_importance = importance_for_mapping[:, component_indices].mean(axis=1)
+        active_inputs = set(np.where(cluster_importance > 0.3)[0])  # Lowered from 0.5
 
         if not active_inputs:
             cluster_functions[cluster_idx] = "INACTIVE"
@@ -263,7 +278,7 @@ def map_clusters_to_functions(
                 best_jaccard = jaccard
                 best_match = base_gate_name
 
-        if best_jaccard > 0.5:
+        if best_jaccard >= 0.5:  # >= to catch partial matches (e.g., XOR case-analysis)
             cluster_functions[cluster_idx] = f"{best_match} ({best_jaccard:.2f})"
         else:
             cluster_functions[cluster_idx] = "UNKNOWN"

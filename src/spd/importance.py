@@ -28,6 +28,8 @@ def compute_importance_matrix(
     decomposed_model: "DecomposedMLP",
     n_inputs: int = 2,
     device: str = "cpu",
+    n_noisy_samples: int = 0,
+    noise_std: float = 0.1,
 ) -> tuple[np.ndarray, list[str]]:
     """Compute causal importance (CI) for each component on each input.
 
@@ -43,9 +45,11 @@ def compute_importance_matrix(
         decomposed_model: Trained SPD decomposition
         n_inputs: Number of input bits (2 for boolean gates)
         device: Compute device
+        n_noisy_samples: Number of noisy samples per canonical input (0 = clean only)
+        noise_std: Standard deviation of noise to add
 
     Returns:
-        importance_matrix: Shape [4, n_components] for 2 inputs
+        importance_matrix: Shape [n_samples, n_components]
             Each row is an input pattern, each column is a component
         component_labels: Labels like "layers.0.0:3" (layer 0, component 3)
     """
@@ -56,10 +60,21 @@ def compute_importance_matrix(
 
     # Generate all binary input combinations
     n_total_inputs = 2**n_inputs
-    all_inputs = torch.zeros(n_total_inputs, n_inputs, device=device)
+    canonical_inputs = torch.zeros(n_total_inputs, n_inputs, device=device)
     for i in range(n_total_inputs):
         for j in range(n_inputs):
-            all_inputs[i, j] = (i >> j) & 1
+            canonical_inputs[i, j] = (i >> j) & 1
+
+    # Add noisy versions if requested
+    if n_noisy_samples > 0:
+        all_inputs_list = [canonical_inputs]
+        for _ in range(n_noisy_samples):
+            noisy = canonical_inputs + torch.randn_like(canonical_inputs) * noise_std
+            noisy = noisy.clamp(0, 1)  # Keep in valid range
+            all_inputs_list.append(noisy)
+        all_inputs = torch.cat(all_inputs_list, dim=0)
+    else:
+        all_inputs = canonical_inputs
 
     # Get causal importances
     with torch.inference_mode():
@@ -96,7 +111,7 @@ def compute_importance_matrix(
 
 def compute_coactivation_matrix(
     importance_matrix: np.ndarray,
-    threshold: float = 0.5,
+    threshold: float = 0.3,  # Lowered from 0.5 to better capture sparse activations in small models
 ) -> np.ndarray:
     """Compute how often component pairs activate together.
 

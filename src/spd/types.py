@@ -86,7 +86,7 @@ class SPDConfig(SchemaClass):
     recon_coeff: float = 1.0        # Weight on reconstruction loss
 
     # Post-training analysis
-    activation_threshold: float = 0.5  # Component "active" if importance > this
+    activation_threshold: float = 0.3  # Component "active" if importance > this (0.3 works better for small models)
     n_clusters: Optional[int] = None   # Auto-detect if None
 
     def get_config_id(self) -> str:
