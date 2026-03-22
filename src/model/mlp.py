@@ -178,12 +178,13 @@ class MLP(nn.Module):
             z = F.linear(x, Weff, lin.bias)
             x = act(z) if i < (self.num_layers - 1) else z
 
-            if return_activations:
-                activations.append(x.detach())
-
             # Apply new Intervention neuron patches at h^{(i+1)}
             if (i + 1) in neuron_by_layer:
                 x = self._apply_neuron_patches_inplace(x, neuron_by_layer[i + 1])
+
+            # Store activations AFTER patches are applied (so viz shows patched values)
+            if return_activations:
+                activations.append(x.detach())
 
         if return_activations:
             return activations
